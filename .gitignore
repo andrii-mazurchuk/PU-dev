@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+
+# written by the gateway before this process starts -- read, never edit, never commit
+peers.json
+cost_policy.json
+delivery_policy.json
+
+# this unit's private storage
+state/
+
+.codegraph/

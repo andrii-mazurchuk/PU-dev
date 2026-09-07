@@ -1,0 +1,57 @@
+"""Entrypoint. `python -m pu.main`.
+
+Config comes from `os.environ`, which the gateway assembles from
+`units.yaml` and injects at process start. There is deliberately no
+config-file convention here.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+from pu import bodies, server, taskstore
+
+# Matches this unit's registered base_url. Keeping the default equal to the
+# registered port is deliberate: a sibling unit ships a main.py defaulting
+# to a port its own units.yaml entry does not use, and nothing catches it.
+DEFAULT_PORT = 9001
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="PU -- the processing unit")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PU_PORT", DEFAULT_PORT)))
+    parser.add_argument(
+        "--taskdata",
+        default=os.environ.get("PU_TASKDATA", "~/.pu-taskdata"),
+        help="Taskwarrior data location. When the binary is reached through "
+             "WSL this is a path on the WSL side, not a Windows path.",
+    )
+    parser.add_argument(
+        "--state-dir",
+        default=os.environ.get("PU_STATE_DIR", "state"),
+        help="this unit's private storage; nothing outside this repo reads it",
+    )
+    parser.add_argument("--prompts-dir", default="prompts")
+    args = parser.parse_args()
+
+    store = taskstore.TaskStore(data_location=args.taskdata)
+    body_store = bodies.BodyStore(Path(args.state_dir) / "bodies")
+
+    httpd = server.build_server(
+        args.host, args.port, store, body_store, Path(args.prompts_dir)
+    )
+    print(f"pu listening on http://{args.host}:{args.port} "
+          f"(task: {' '.join(store.base_cmd)}, data: {args.taskdata})")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.shutdown()
+
+
+if __name__ == "__main__":
+    main()

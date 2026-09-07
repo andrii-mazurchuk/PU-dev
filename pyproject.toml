@@ -1,0 +1,16 @@
+[project]
+name = "pu-unit"
+version = "0.1.0"
+description = "PU: the processing unit for a holonic-node harness. Runs claude -p sessions against a Taskwarrior-backed queue of universal task records."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["pu*"]
