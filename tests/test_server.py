@@ -253,6 +253,60 @@ def test_projects_are_derived_and_nest(base_url):
     assert len(nested["tasks"]) == 2
 
 
+def post_text(url, text, content_type="text/markdown"):
+    req = Request(url, data=text.encode("utf-8"),
+                  headers={"Content-Type": content_type}, method="POST")
+    with urlopen(req) as resp:
+        return resp.status, json.loads(resp.read().decode("utf-8"))
+
+
+def test_a_body_round_trips_as_raw_markdown(base_url):
+    """The path a session outside this unit uses: one curl out, one curl
+    in, no JSON escaping and no jq."""
+    _, created = post(f"{base_url}/maps", {"destination": "somewhere"})
+    uuid = created["uuid"]
+
+    body = (
+        '## Destination\n\n'
+        'A spec with "quotes", `backticks`, $(echo NOPE) and : colons.\n\n'
+        '## Decisions so far\n\n- none yet\n'
+    )
+    status, wrote = post_text(f"{base_url}/tasks/{uuid}/body", body)
+    assert status == 200 and wrote["uuid"] == uuid
+
+    status, got = get(f"{base_url}/tasks/{uuid}/body")
+    assert status == 200
+    assert got == body, "byte-identical, including everything hostile"
+
+
+def test_a_raw_body_replaces_rather_than_appends(base_url):
+    """Replace-in-place is why the body store exists at all: a map is
+    rewritten as decisions land and fog graduates."""
+    _, created = post(f"{base_url}/maps", {"destination": "somewhere",
+                                           "body": "first"})
+    uuid = created["uuid"]
+    post_text(f"{base_url}/tasks/{uuid}/body", "second")
+    _, got = get(f"{base_url}/tasks/{uuid}/body")
+    assert got == "second"
+
+
+def test_the_json_body_form_still_works(base_url):
+    """An absent or unrecognised content type must fall through to JSON,
+    so no existing caller is silently reinterpreted."""
+    _, created = post(f"{base_url}/maps", {"destination": "somewhere"})
+    uuid = created["uuid"]
+    post(f"{base_url}/tasks/{uuid}/body", {"body": "via json"})
+    _, got = get(f"{base_url}/tasks/{uuid}/body")
+    assert got == "via json"
+
+
+def test_a_task_with_no_body_is_404_not_empty(base_url):
+    _, created = post(f"{base_url}/maps", {"destination": "no body here"})
+    with pytest.raises(HTTPError) as excinfo:
+        get(f"{base_url}/tasks/{created['uuid']}/body")
+    assert excinfo.value.code == 404
+
+
 def test_unknown_task_is_404(base_url):
     with pytest.raises(HTTPError) as excinfo:
         get(f"{base_url}/tasks/11111111-2222-3333-4444-555555555555")

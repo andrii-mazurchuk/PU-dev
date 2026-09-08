@@ -54,6 +54,30 @@ def main() -> None:
             tracker_path=state / "repeat_tracker.json",
         ).as_dict()
 
+    # A session driving this store by hand runs bare `task`, which reads a
+    # config file -- and this unit deliberately has none, passing its whole
+    # schema as `rc.` overrides so nothing can drift. Without the UDAs
+    # declared, `kind:` and `parent_uuid:` are simply rejected for anyone
+    # but us. So the file is rendered here, from the same RC_SCHEMA the
+    # overrides come from, and refreshed on every start.
+    taskrc = state / "taskrc"
+    try:
+        taskrc.parent.mkdir(parents=True, exist_ok=True)
+        # newline="\n" is not cosmetic. This file is written by whatever
+        # platform runs the unit and read by the binary, which under the
+        # WSL arrangement is Linux. Python would otherwise translate to
+        # CRLF here, and Taskwarrior reads the trailing carriage return as
+        # part of the value -- so `data.location=/tmp/x` silently becomes a
+        # different directory and a session writes somewhere the unit
+        # never looks.
+        taskrc.write_text(
+            taskstore.render_taskrc(args.taskdata),
+            encoding="utf-8",
+            newline="\n",
+        )
+    except OSError:
+        taskrc = None  # degrade: our own writes never needed it
+
     # The store may live behind WSL, whose first call after idle pays to
     # boot the distro. Warm it off the request path.
     threading.Thread(target=store.warm, daemon=True).start()
@@ -62,8 +86,18 @@ def main() -> None:
         args.host, args.port, store, body_store, Path(args.prompts_dir),
         unit_root=unit_root, session_store=session_store, tick=tick,
     )
+    # flush: stdout is a pipe whenever the gateway or a shell redirects it,
+    # and a startup banner nobody sees is a path nobody can point a session
+    # at.
     print(f"pu listening on http://{args.host}:{args.port} "
-          f"(task: {' '.join(store.base_cmd)}, data: {args.taskdata})")
+          f"(task: {' '.join(store.base_cmd)}, data: {args.taskdata})",
+          flush=True)
+    if taskrc:
+        # Printed as the *binary* will read it. Under the WSL arrangement
+        # that is not the path this process wrote to, and handing a session
+        # the Windows one gives it a file it cannot open.
+        readable = taskstore.path_for_binary(taskrc, store.base_cmd)
+        print(f"  sessions: task rc:{readable} ...", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

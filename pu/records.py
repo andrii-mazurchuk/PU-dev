@@ -14,10 +14,17 @@ stores:
   tags         which SOPs apply (union, all mandatory) + the `afk` marker
   depends      blocking, native, works across sources
 
-`kind` is a Taskwarrior UDA with a closed `values` list, which means the
-*binary* rejects an unknown kind (exit 2, nothing written) rather than this
-module coercing one. Validate-and-raise, never coerce -- and here we get it
-for free from the store rather than reimplementing it.
+`kind` is a Taskwarrior UDA with a closed `values` list. That list is the
+guard on the **`task` command** path -- the binary rejects an unknown kind
+with exit 2 and writes nothing, which is what protects a session driving
+the store by hand.
+
+It is **not** a guard on the import path: `task import` writes whatever
+JSON it is handed and validates no UDA value (measured). Since this unit
+creates every task through `import`, `check_kind` below is the real guard
+for our own writes, not a convenience wrapper around the binary's. Both
+still read `KINDS`, so there is one vocabulary and two enforcement points,
+not two vocabularies.
 
 Identity is `uuid`, never `id`. Taskwarrior renumbers `id` as tasks
 complete, so an `id` held across two calls silently addresses a different
@@ -178,10 +185,15 @@ def from_export(raw: dict[str, Any]) -> Task:
 def check_kind(kind: str | None) -> str | None:
     """Reject an unknown kind before it reaches the store.
 
-    The store rejects it too -- that is what `uda.kind.values` is for, and
-    it is the authority. This exists so a caller of the HTTP API gets a
-    400 naming the allowed values instead of a subprocess error, not as a
-    second source of truth: both read `KINDS`."""
+    Load-bearing, not decorative. Tasks are created through `task import`,
+    which validates no UDA value -- hand it `kind: "nonsense"` and it
+    writes exactly that. So for this unit's own writes, this function is
+    the only thing standing between a typo and a task no session type can
+    ever run.
+
+    The binary still enforces the same list on the `task add` path, which
+    is what guards a person or a session writing by hand. One vocabulary,
+    two enforcement points."""
     if kind is None:
         return None
     if kind not in KINDS:

@@ -165,6 +165,17 @@ TOOLS = [
         },
     },
     {
+        "name": "get_body",
+        "description": "A task's long-form markdown body as raw text, not wrapped in JSON. This is what a session outside this unit reads to load a wayfinder map or a ticket's question: `curl -s <pu>/tasks/<uuid>/body > map.md`. Returns 404 when the task has no body.",
+        "method": "GET",
+        "path": "/tasks/{uuid}/body",
+        "input_schema": {
+            "type": "object",
+            "properties": {"uuid": {"type": "string"}},
+            "required": ["uuid"],
+        },
+    },
+    {
         "name": "set_body",
         "description": "Replace a task's long-form markdown body. Used to rewrite a map after a decision lands.",
         "method": "POST",
@@ -221,10 +232,11 @@ def make_handler(
             self.end_headers()
             self.wfile.write(raw)
 
-        def _text(self, status: int, text: str) -> None:
+        def _text(self, status: int, text: str,
+                  content_type: str = "text/plain; charset=utf-8") -> None:
             raw = text.encode("utf-8")
             self.send_response(status)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
@@ -243,6 +255,21 @@ def make_handler(
             if not isinstance(parsed, dict):
                 raise service.ServiceError("body must be a JSON object")
             return parsed
+
+        def _raw_if_text(self) -> str | None:
+            """The request body as text when it was not sent as JSON.
+
+            Returns None for a JSON request, which is what tells the
+            handlers to parse it normally. Only `text/*` is accepted -- an
+            absent or unrecognised content type falls through to JSON, so
+            an existing caller cannot be silently reinterpreted."""
+            content_type = (self.headers.get("Content-Type") or "").lower()
+            if not content_type.startswith("text/"):
+                return None
+            length = int(self.headers.get("Content-Length") or 0)
+            if not length:
+                return ""
+            return self.rfile.read(length).decode("utf-8", errors="replace")
 
         def _path_parts(self) -> tuple[list[str], dict[str, list[str]]]:
             parsed = urlparse(self.path)
@@ -299,6 +326,17 @@ def make_handler(
                     found = service.get_task(store, body_store, parts[1])
                     return self._json(200, found) if found else self._not_found()
 
+                if len(parts) == 3 and parts[0] == "tasks" and parts[2] == "body":
+                    # Raw markdown, not JSON. A caller outside this unit
+                    # reads a map with one curl and no jq -- which is not
+                    # a nicety: jq is not present by default on Windows,
+                    # and piping JSON through a shell to extract a field
+                    # is where the quoting bugs live.
+                    body = body_store.get(parts[1])
+                    if body is None:
+                        return self._not_found()
+                    return self._text(200, body, "text/markdown; charset=utf-8")
+
                 if parts == ["sops"]:
                     return self._json(200, {
                         "sops": sops.catalogue(unit_root),
@@ -329,7 +367,12 @@ def make_handler(
             parts, _ = self._path_parts()
 
             try:
-                payload = self._body()
+                # A body posted as raw markdown skips JSON entirely, so a
+                # 5KB map with quotes and backticks in it needs no escaping
+                # from whoever is sending it:
+                #   curl -X POST --data-binary @map.md                 #        -H "Content-Type: text/markdown" <pu>/tasks/<id>/body
+                raw_body = self._raw_if_text()
+                payload = {} if raw_body is not None else self._body()
 
                 if parts == ["maps"]:
                     return self._json(201, service.create_map(
@@ -383,7 +426,9 @@ def make_handler(
                         ))
                     if action == "body":
                         return self._json(200, service.set_body(
-                            store, body_store, uuid, payload.get("body") or ""
+                            store, body_store, uuid,
+                            raw_body if raw_body is not None
+                            else (payload.get("body") or ""),
                         ))
 
                 return self._not_found()

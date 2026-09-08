@@ -33,13 +33,56 @@ def test_unknown_kind_is_refused_and_writes_nothing(store):
     assert store.count("status:pending") == before
 
 
-def test_unknown_kind_is_refused_by_the_binary_too(store):
-    """The closed `uda.kind.values` list is the authority, not our check.
-    Bypassing the Python guard must still fail."""
+def test_the_binary_still_guards_the_add_command_path(store):
+    """`uda.kind.values` is what protects a person or a session writing by
+    hand with `task add`."""
     with pytest.raises(taskstore.TaskError) as excinfo:
         store.run(["add", "kind:nonsense", "--", "bad"])
     assert "kind" in str(excinfo.value)
     assert store.count("status:pending") == 0
+
+
+def test_import_does_not_validate_so_our_own_check_is_the_guard(store):
+    """Pinning a real asymmetry rather than assuming symmetry: `task
+    import` writes whatever JSON it is given and validates no UDA value.
+    Since this unit creates every task through import, records.check_kind
+    is the only guard on our own writes -- if that ever gets removed as
+    'redundant', this test says why it is not."""
+    import json
+    import uuid as uuidlib
+
+    store.run(["import"], stdin=json.dumps([{
+        "uuid": str(uuidlib.uuid4()), "status": "pending",
+        "description": "smuggled", "entry": "20260908T120000Z",
+        "kind": "nonsense",
+    }]))
+    smuggled = store.export("status:pending")[0]
+    assert smuggled.kind == "nonsense", "import accepted it, as measured"
+    # ...and the record is inert: no session type, so nothing can run it.
+    assert smuggled.session_type is None
+    assert smuggled.runnable is False
+
+    # The guard that actually applies to us:
+    with pytest.raises(records.RecordError):
+        store.add("via add", kind="nonsense")
+
+
+def test_a_multi_line_attribute_is_refused(store):
+    """A multi-line key:value exits 0, drops the value, and overwrites the
+    description. Refused rather than attempted."""
+    uuid = store.add("a task", kind="research")
+    with pytest.raises(taskstore.TaskError) as excinfo:
+        store.modify(uuid, project="two\nlines")
+    assert "multi-line" in str(excinfo.value)
+    assert store.get(uuid).description == "a task"
+
+
+def test_a_created_task_keeps_hostile_text_verbatim(store):
+    """Creation goes through stdin, so nothing in the description is
+    exposed to a command line."""
+    text = "backticks `x`, $(echo NOPE), ${HOME}, colons: and\nnewlines"
+    uuid = store.add(text, kind="research")
+    assert store.get(uuid).description == text
 
 
 def test_empty_store_exports_empty_not_error(store):
@@ -145,3 +188,16 @@ def test_rendered_taskrc_declares_every_kind():
     # The human's own rc must not disable hooks -- the on-add hook is the
     # guard on the by-hand write path.
     assert "hooks=" not in rendered
+
+
+def test_a_path_is_translated_for_a_binary_behind_wsl():
+    """The config file this process writes lives on the Windows side; the
+    binary reading it lives in WSL. Handing a session the path we wrote to
+    gives it a file it cannot open."""
+    wsl = ("wsl", "-d", "Ubuntu", "-e", "task")
+    assert taskstore.path_for_binary(
+        r"C:\agents\units\pu\state\taskrc", wsl
+    ) == "/mnt/c/agents/units/pu/state/taskrc"
+
+    # Natively there is no boundary and nothing is translated.
+    assert taskstore.path_for_binary("/home/u/.taskrc", ("task",)) == "/home/u/.taskrc"

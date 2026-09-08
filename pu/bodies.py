@@ -51,7 +51,10 @@ class BodyStore:
         normal -- most tasks are one line."""
         path = self._path(uuid)
         try:
-            return path.read_text(encoding="utf-8")
+            # newline="" to match the write: what was stored comes back
+            # byte for byte, with no platform translation in either
+            # direction.
+            return path.read_text(encoding="utf-8", newline="")
         except OSError:
             return None
 
@@ -62,7 +65,11 @@ class BodyStore:
         # observes a half-written map. os.replace is atomic within a
         # filesystem.
         tmp = path.with_suffix(".md.tmp")
-        tmp.write_text(text, encoding="utf-8")
+        # newline="" stores exactly what was sent. Without it Python
+        # rewrites every \n to \r\n on Windows, so a body posted by one
+        # tool and read by another comes back subtly different -- and a
+        # map that round-trips through git would churn on line endings.
+        tmp.write_text(text, encoding="utf-8", newline="")
         tmp.replace(path)
 
     def delete(self, uuid: str) -> bool:
