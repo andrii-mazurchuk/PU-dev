@@ -16,7 +16,7 @@ file and that one disagree, that one is right and this one is the bug.
   that launches `claude -p`.
 - **Its store is Taskwarrior, and there is no native Windows build.** The
   binary is reached through `PU_TASK_CMD`, which on a Windows host is
-  `wsl -d Ubuntu -- task`. Nothing outside `taskstore.py` knows this.
+  `wsl -d Ubuntu -e task`. Nothing outside `taskstore.py` knows this.
 - **One store, one record shape, every source.** A wayfinder ticket, a
   mirrored GitHub issue and an inbox message are the same record differing
   by field. There is no per-source partition and no priority ladder;

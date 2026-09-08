@@ -109,7 +109,7 @@ gates apply.
 ## Verifying it
 
 ```bash
-pytest                                     # 80 tests, against the real binary
+pytest                                     # 128 tests, against the real binary
 python scripts/tag_sop_lookup.py --validate-all
 python scripts/smoke.py --base-url http://127.0.0.1:9001
 curl -X POST http://127.0.0.1:9001/trigger # spends a real session
@@ -117,6 +117,13 @@ curl -X POST http://127.0.0.1:9001/trigger # spends a real session
 
 `scripts/smoke.py` exercises the HTTP surface a peer sees and writes a
 throwaway map — point it at a scratch `--taskdata`.
+
+## Documentation
+
+Detailed internal documentation lives in `docs/` -- architecture, the data
+model, the full HTTP reference, control flows traced across modules,
+operations, and the register of load-bearing decisions. Start at
+`docs/README.md`.
 
 ## Modules
 
