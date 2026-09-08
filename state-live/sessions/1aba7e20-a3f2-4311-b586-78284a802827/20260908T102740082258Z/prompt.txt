@@ -1,0 +1,14 @@
+# Task 1aba7e20-a3f2-4311-b586-78284a802827
+
+**intake from andrey: The pu unit has no GitHub mirror yet. Build something that reads open issues from a repo and creates one matching task p**
+
+- kind: `intake`
+- project: `(none)`
+
+## Detail
+
+The pu unit has no GitHub mirror yet. Build something that reads open issues from a repo and creates one matching task per issue, one-way only - GitHub stays the source of truth for the issue body, so the task should just carry the issue URL. It must be re-runnable without creating duplicates. Once that works I want to look over the first mirrored batch myself before we let anything run against it.
+
+## Available procedures
+
+There are no SOPs defined yet. Propose tasks without procedure tags.

@@ -1,0 +1,17 @@
+{
+ "task_uuid": "1aba7e20-a3f2-4311-b586-78284a802827",
+ "session_type": "intake",
+ "recorded_at": "2026-09-08T10:27:40.086430+00:00",
+ "outcome": "converted",
+ "detail": "2 task(s) created",
+ "exit_code": 0,
+ "is_error": false,
+ "cost_usd": 0.2540525,
+ "duration_ms": 13716,
+ "num_turns": 1,
+ "tool_calls": [],
+ "models_used": [
+  "claude-opus-5[1m]"
+ ],
+ "permission_denials": []
+}

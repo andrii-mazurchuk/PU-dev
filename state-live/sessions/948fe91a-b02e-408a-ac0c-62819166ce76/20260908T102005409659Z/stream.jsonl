@@ -1,0 +1,6 @@
+No message content reached this session — the prompt is a bare task ID (`948fe91a-b02e-408a-ac0c-62819166ce76`) with no body, and the intake working directory contains only `CLAUDE.md` (`.claude/` is empty). Nothing to transcribe, so nothing may be proposed.
+
+```json
+{"bounce": {"condition": "no_stateable_outcome",
+            "reason": "The session received only the task id 948fe91a-b02e-408a-ac0c-62819166ce76 and no message text. There is no sentence any task could trace to, and no readable payload in the intake working directory (only CLAUDE.md; .claude/ is empty). To make this answerable, deliver the sender's message body with the task — even one sentence stating what should be true once the work is done."}}
+```

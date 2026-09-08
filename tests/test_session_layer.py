@@ -108,23 +108,45 @@ def test_a_directory_without_claude_md_is_not_a_session_type(tmp_path):
 
 
 def test_argv_always_asks_for_the_stream():
-    argv = runner.build_argv("do the thing", allowed_tools="Read")
-    assert argv[:3] == ["claude", "-p", "do the thing"]
+    argv = runner.build_argv(allowed_tools="Read")
+    assert argv[:2] == ["claude", "-p"]
     # --verbose is not optional: the CLI refuses stream-json without it.
     assert argv[-3:] == ["--output-format", "stream-json", "--verbose"]
     assert "--allowedTools" in argv and "Read" in argv
 
 
-def test_argv_carries_append_system_prompt_and_model():
-    argv = runner.build_argv("x", model="m", append_system_prompt="rules")
+def test_nothing_multi_line_ever_reaches_argv():
+    """A newline in a command line is truncated by the npm batch shim on
+    Windows -- silently, taking every flag after it too. Measured: the
+    model saw only line one AND the output-format flags were lost, so the
+    session both misunderstood its task and reported in plain text."""
+    argv = runner.build_argv(allowed_tools="Read", model="m",
+                             mcp_bridge_url="http://h/mcp")
+    assert not any("\n" in part for part in argv), argv
+
+
+def test_the_prompt_goes_on_stdin_not_argv():
+    seen = {}
+    multi_line = "line one\n\nline two"
+
+    def fake(argv, cwd, stdin):
+        seen.update(argv=argv, stdin=stdin)
+        return runner.CompletedRun(0, "", "")
+
+    runner.run_session(multi_line, cwd=None, runner=fake)
+    assert seen["stdin"] == multi_line
+    assert "line one" not in " ".join(seen["argv"])
+
+
+def test_argv_carries_the_model():
+    argv = runner.build_argv(model="m")
     assert argv[argv.index("--model") + 1] == "m"
-    assert argv[argv.index("--append-system-prompt") + 1] == "rules"
 
 
 def test_bridge_grant_is_added_only_with_a_bridge():
-    plain = runner.build_argv("x", allowed_tools="Read")
+    plain = runner.build_argv(allowed_tools="Read")
     assert "--mcp-config" not in plain
-    bridged = runner.build_argv("x", allowed_tools="Read", mcp_bridge_url="http://h/mcp")
+    bridged = runner.build_argv(allowed_tools="Read", mcp_bridge_url="http://h/mcp")
     assert "mcp__mcp-bridge__*" in bridged[bridged.index("--allowedTools") + 1]
 
 
@@ -157,10 +179,26 @@ def test_parse_stream_of_a_killed_process_degrades():
     assert parsed.cost_usd is None and parsed.text == ""
 
 
+def test_the_claude_command_resolves_to_something_that_can_start():
+    """On Windows the CLI is an npm shim whose real name is `claude.cmd`;
+    CreateProcess cannot run the bare name, so a plain ["claude", ...]
+    fails with "the system cannot find the file specified". Resolved
+    rather than assumed."""
+    import os
+    import shutil
+    resolved = runner.claude_command()
+    assert resolved
+    if shutil.which("claude"):
+        assert os.path.exists(resolved[0]), resolved
+    assert runner.claude_command({"PU_CLAUDE_CMD": "wsl -e claude"}) == (
+        "wsl", "-e", "claude",
+    )
+
+
 def test_exit_code_comes_from_the_process_not_the_stream():
     result = runner.run_session(
         "x", cwd=None,
-        runner=lambda argv, cwd: runner.CompletedRun(2, "", "boom"),
+        runner=lambda argv, cwd, stdin: runner.CompletedRun(2, "", "boom"),
     )
     assert result.exit_code == 2 and result.ok is False
 
@@ -431,9 +469,8 @@ def test_a_research_tick_claims_runs_and_resolves(store, body_store, tmp_path):
     uuid = store.add("what does it cost", tags=["afk"], kind="research")
     seen = {}
 
-    def fake_session(prompt, cwd, allowed_tools, model, append_system_prompt):
-        seen.update(prompt=prompt, cwd=cwd, allowed_tools=allowed_tools,
-                    append_system_prompt=append_system_prompt)
+    def fake_session(prompt, cwd, allowed_tools, model):
+        seen.update(prompt=prompt, cwd=cwd, allowed_tools=allowed_tools)
         # The claim must already be in place before any work happens.
         assert store.get(uuid).active is True
         return runner.SessionResult(0, text="It costs nothing.", cost_usd=0.2,
@@ -446,7 +483,6 @@ def test_a_research_tick_claims_runs_and_resolves(store, body_store, tmp_path):
     )
     assert result.ran and result.outcome == "resolved"
     assert seen["cwd"].name == "research"
-    assert seen["append_system_prompt"] is None
     assert "what does it cost" in seen["prompt"]
 
     done = store.get(uuid)
@@ -503,9 +539,8 @@ def test_an_execution_tick_runs_in_the_repo_with_injected_instructions(
     store.add("build it", tags=["afk"], kind="execution", repo=str(repo))
     seen = {}
 
-    def fake_session(prompt, cwd, allowed_tools, model, append_system_prompt):
-        seen.update(cwd=cwd, append_system_prompt=append_system_prompt,
-                    allowed_tools=allowed_tools)
+    def fake_session(prompt, cwd, allowed_tools, model):
+        seen.update(cwd=cwd, prompt=prompt, allowed_tools=allowed_tools)
         return runner.SessionResult(0, text="changed one file", is_error=False)
 
     result = pipeline.tick(
@@ -516,8 +551,8 @@ def test_an_execution_tick_runs_in_the_repo_with_injected_instructions(
     assert result.ran
     # cwd is the repo, so its own CLAUDE.md and hooks apply...
     assert seen["cwd"] == repo
-    # ...which is exactly why ours has to be injected instead.
-    assert "Execution session" in seen["append_system_prompt"]
+    # ...which is exactly why ours is folded into the prompt instead.
+    assert "Execution session" in seen["prompt"]
     assert "Write" in seen["allowed_tools"]
 
 
@@ -531,7 +566,7 @@ def test_an_intake_tick_creates_the_proposed_tasks(store, body_store, tmp_path):
         "traces_to": "please fix the deploy",
     }]})
 
-    def fake_session(prompt, cwd, allowed_tools, model, append_system_prompt):
+    def fake_session(prompt, cwd, allowed_tools, model):
         # The catalogue is handed to intake up front: it cannot choose tags
         # from a set it does not know exists.
         assert "Available procedures" in prompt

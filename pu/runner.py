@@ -10,15 +10,49 @@ optional in two senses: the CLI refuses `--print --output-format
 stream-json` without `--verbose`, and the stream is the only place cost,
 duration, the ordered tool-call sequence and permission denials are
 reported at all.
+
+**Nothing multi-line ever goes in argv.** On Windows the CLI is an npm
+batch shim, and a command line containing a newline is truncated there --
+silently, at the newline. Measured: a prompt passed as an argument reached
+the model as its first line only, *and* took the trailing
+`--output-format stream-json --verbose` down with it, so the session both
+misunderstood its task and reported in plain text. The prompt goes on
+stdin, and session-type instructions are folded into it rather than passed
+as `--append-system-prompt`, which would have exactly the same problem.
+
+That leaves argv holding only short single-line flags, which is the shape
+that survives every launcher.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import json
+import os
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable, Sequence
+
+
+def claude_command(environ: dict[str, str] | None = None) -> tuple[str, ...]:
+    """The command that actually launches Claude Code on this machine.
+
+    Resolved rather than assumed. On Windows the CLI is an npm shim -- the
+    real file is `claude.cmd`, and `CreateProcess` cannot run a bare
+    extensionless name, so a plain `["claude", ...]` fails with "the system
+    cannot find the file specified". `shutil.which` applies `PATHEXT` and
+    returns the name that will actually start.
+
+    `PU_CLAUDE_CMD` overrides, for the same reason `PU_TASK_CMD` exists:
+    where a binary lives is deployment config, not an assumption to bake
+    into the code."""
+    env = os.environ if environ is None else environ
+    override = env.get("PU_CLAUDE_CMD", "").strip()
+    if override:
+        return tuple(shlex.split(override))
+    return (shutil.which("claude") or "claude",)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,13 +94,14 @@ class CompletedRun:
     stderr: str
 
 
-Runner = Callable[[Sequence[str], "Path | None"], CompletedRun]
+Runner = Callable[[Sequence[str], "Path | None", str], CompletedRun]
 
 
-def subprocess_runner(argv: Sequence[str], cwd: Path | None) -> CompletedRun:
+def subprocess_runner(argv: Sequence[str], cwd: Path | None, stdin: str) -> CompletedRun:
     proc = subprocess.run(
         list(argv),
         cwd=str(cwd) if cwd else None,
+        input=stdin,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -76,11 +111,10 @@ def subprocess_runner(argv: Sequence[str], cwd: Path | None) -> CompletedRun:
 
 
 def build_argv(
-    prompt: str,
     allowed_tools: str | None = None,
     model: str | None = None,
-    append_system_prompt: str | None = None,
     mcp_bridge_url: str | None = None,
+    command: Sequence[str] = ("claude",),
 ) -> list[str]:
     """The command, exactly.
 
@@ -93,11 +127,10 @@ def build_argv(
     so a session's tool surface is a property of how it was launched and
     cannot leak into anyone else's. `--strict-mcp-config` is deliberately
     not passed."""
-    argv = ["claude", "-p", prompt]
+    # `-p` with no prompt argument: the prompt arrives on stdin.
+    argv = [*command, "-p"]
     if model:
         argv += ["--model", model]
-    if append_system_prompt:
-        argv += ["--append-system-prompt", append_system_prompt]
 
     grants = [allowed_tools] if allowed_tools else []
     if mcp_bridge_url:
@@ -174,11 +207,13 @@ def run_session(
     cwd: Path | None,
     allowed_tools: str | None = None,
     model: str | None = None,
-    append_system_prompt: str | None = None,
     mcp_bridge_url: str | None = None,
     runner: Runner = subprocess_runner,
+    command: Sequence[str] | None = None,
 ) -> SessionResult:
-    argv = build_argv(prompt, allowed_tools, model, append_system_prompt, mcp_bridge_url)
-    completed = runner(argv, cwd)
+    argv = build_argv(
+        allowed_tools, model, mcp_bridge_url, command or claude_command()
+    )
+    completed = runner(argv, cwd, prompt)
     parsed = parse_stream(completed.stdout)
     return dataclasses.replace(parsed, exit_code=completed.returncode)

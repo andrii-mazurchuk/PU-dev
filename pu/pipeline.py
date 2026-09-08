@@ -332,14 +332,18 @@ def _tick(
                 store.annotate(candidate.uuid, f"skipped: {exc}")
                 continue
             cwd = Path(report.repo)
-            append_system_prompt = stype.instructions()
+            # cwd is the repo, so this type's own CLAUDE.md no longer loads
+            # from it. Folded into the prompt rather than passed as
+            # --append-system-prompt: it is multi-line, and a multi-line
+            # argv value is truncated by a batch shim. See runner.py.
+            instructions = stype.instructions()
         else:
             cwd = stype.dir
-            append_system_prompt = None
+            instructions = ""
 
         return _run(
             store, body_store, session_store, unit_root, peers_path,
-            candidate, stype, cwd, append_system_prompt, session_runner,
+            candidate, stype, cwd, instructions, session_runner,
         )
 
     return TickResult(ran=False, reason="nothing runnable")
@@ -347,12 +351,14 @@ def _tick(
 
 def _run(
     store, body_store, session_store, unit_root, peers_path,
-    task, stype, cwd, append_system_prompt, session_runner,
+    task, stype, cwd, instructions, session_runner,
 ) -> TickResult:
     store.claim(task.uuid)
 
     extra = intake_context(unit_root) if stype.name == "intake" else ""
     prompt = build_prompt(task, body_store.get(task.uuid), unit_root, extra)
+    if instructions:
+        prompt = "\n\n---\n\n".join([instructions, prompt])
 
     try:
         result = session_runner(
@@ -360,7 +366,6 @@ def _run(
             cwd=cwd,
             allowed_tools=stype.allowed_tools,
             model=stype.model,
-            append_system_prompt=append_system_prompt,
         )
     except Exception as exc:  # a launch failure must not strand the claim
         store.release(task.uuid)

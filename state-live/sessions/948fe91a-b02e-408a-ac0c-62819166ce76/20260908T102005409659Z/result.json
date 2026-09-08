@@ -1,0 +1,15 @@
+{
+ "task_uuid": "948fe91a-b02e-408a-ac0c-62819166ce76",
+ "session_type": "intake",
+ "recorded_at": "2026-09-08T10:20:05.414572+00:00",
+ "outcome": "invalid_proposal",
+ "detail": "session returned no output",
+ "exit_code": 0,
+ "is_error": null,
+ "cost_usd": null,
+ "duration_ms": null,
+ "num_turns": null,
+ "tool_calls": [],
+ "models_used": [],
+ "permission_denials": []
+}
