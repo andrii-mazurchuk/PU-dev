@@ -1,6 +1,0 @@
-# Task 1863e2fd-73d2-4024-9afe-4bc452c26ab5
-
-**how long do competitors retain**
-
-- kind: `research`
-- project: `muspec.behaviour`

@@ -1,4 +1,4 @@
-__pycache__/
+﻿__pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
@@ -11,10 +11,11 @@ peers.json
 cost_policy.json
 delivery_policy.json
 
-# this unit's private storage
-state/
+# this unit's private storage -- any state dir, including scratch ones
+state*/
 
 .codegraph/
 
 # a WSL path mangled by a Windows shell lands here -- see README
 /C*/
+
