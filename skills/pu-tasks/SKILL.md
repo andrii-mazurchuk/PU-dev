@@ -1,13 +1,16 @@
 ---
 name: pu-tasks
-description: Read and write the shared task queue held by the pu processing unit — wayfinder maps and their decision tickets, mirrored issues, and work waiting for an agent. Use when asked what is on the queue, what is next, what a map has decided so far, or when creating or resolving a ticket. Also use before starting substantial work, to check whether a ticket already covers it.
+description: Read and write the shared task queue held by the pu processing unit — wayfinder maps and their decision tickets, mirrored issues, and work waiting for an agent. Use when asked what is on the queue, what is next, what a map has decided so far, or when creating, claiming or resolving a ticket. Use as the issue-tracker reference when a skill asks for one, including wayfinding operations. Also worth consulting before starting substantial work, to see whether a ticket already covers it.
 ---
 
 # The pu task queue
 
-Every task in this system — a wayfinder decision ticket, a mirrored GitHub
-issue, a request someone pushed at the unit — is the same record, held in
-Taskwarrior by the **pu** processing unit.
+There is **one** queue for everything: wayfinder maps and their decision
+tickets, mirrored issues, requests pushed at the unit. All of it is the
+same record, held in Taskwarrior by the **pu** processing unit.
+
+One queue is why this document is installed once rather than copied into
+each repository — there is no per-repo tracker to describe.
 
 ## Two interfaces, and which to use
 
@@ -15,77 +18,132 @@ Taskwarrior by the **pu** processing unit.
 blocking, the frontier, claiming, resolving, reading. Works whether or not
 pu is running.
 
-**pu's HTTP API**, for long-form bodies only — a map's five sections, a
-ticket's question. Those are documents; Taskwarrior holds one-line
-descriptions and annotations.
+**pu's HTTP API**, for long-form bodies only — a map's sections, a
+ticket's question. Those are documents; Taskwarrior holds a one-line
+description and append-only annotations.
 
-The full operation reference lives in this repo's issue-tracker doc
-(`docs/agents/issue-tracker.md`). Read it before writing anything.
+The rule: **`task` for the task graph, HTTP for prose.**
 
-## First, the schema
+## Setup
 
-Bare `task` does not know this unit's fields. pu writes a config file and
-prints its path on start:
+Every command needs pu's schema, or `kind:` and `parent_uuid:` do not
+exist and your writes are rejected. pu writes the file and prints the path
+on start — as the *binary* reads it, which under WSL is not the path the
+unit wrote to:
 
 ```bash
-export TASKRC=<pu>/state/taskrc
+export TASKRC=/mnt/c/.../state/taskrc      # whatever pu printed
 export PU=http://127.0.0.1:9001
 ```
 
-Without it, `kind:` and `parent_uuid:` are rejected and your writes fail.
+Check it: `task rc:$TASKRC _unique kind` should not error.
 
 ## The record
 
 | field | meaning |
 |---|---|
 | `kind` | `map`, `research`, `prototype`, `grilling`, `task`, `execution`, `intake` |
-| `project` | the effort, dotted and hierarchical; filtering matches nested scopes |
+| `project` | the effort, dotted; filtering matches nested scopes |
 | `parent_uuid` | the map a ticket belongs to |
 | `depends` | blocking; a blocked task leaves the frontier |
 | `+afk` | an agent may resolve this alone |
-| tags | each names a **mandatory procedure**; see `curl -s $PU/sops` |
+| other tags | each names a **mandatory procedure**: `curl -s $PU/sops` |
 
 Address tasks by **uuid**, never the short id — ids are renumbered as work
-completes.
+completes, so one held across two commands points somewhere else.
 
-## Reading
+## Conventions
+
+- **Create**: `task add kind:<kind> project:<scope> +tag -- "title"`.
+  Always put the description after `--`, or a title containing `:` or a
+  leading `+` is reparsed as an attribute or a tag.
+- **Read**: `task <uuid> export`, `task status:pending export`.
+- **Comment**: `task <uuid> annotate -- "text"`. Annotations hold
+  multi-line text and are the record of *what happened* to a task.
+- **Close**: `task <uuid> done`.
+- **Never** put multi-line text in a `key:value` argument. It exits 0,
+  discards the value, and overwrites the description.
+
+## Bodies
+
+A body is the *statement* of a thing — a map's sections, a ticket's
+question. An annotation is *what happened* to it. Keep them apart.
 
 ```bash
-task status:pending export                       # everything open
-task +READY -ACTIVE export                       # takeable now
-task +READY -ACTIVE parent_uuid:<map> export     # one map's frontier
-task <uuid> export                               # one task, with its answers
-curl -s $PU/tasks/<uuid>/body                    # its long form
+curl -s $PU/tasks/<uuid>/body > map.md
+curl -s -X POST --data-binary @map.md \
+     -H "Content-Type: text/markdown" $PU/tasks/<uuid>/body
 ```
 
-A closed ticket's answer is an **annotation** on it, whether a person or
-an agent wrote it. `task <uuid> export` is all you need to read a
-resolution.
+Raw markdown both ways: no JSON, no escaping, no `jq`. A body is replaced,
+not appended.
 
-## Writing
+## Wayfinding operations
 
-```bash
-task add kind:research parent_uuid:<map> project:<effort> +afk -- "the question"
-task <uuid> modify depends:<blocker-uuid>
-task <uuid> start                                # claim, before any work
-task <uuid> annotate -- "the answer"
-task <uuid> done
-```
+Used by `/wayfinder`. The **map** is a single task; its tickets are tasks
+pointing at it. Both are ordinary records — a map is not a special object.
 
-Put the description after `--`, always: a title containing `:` or a
-leading `+` is otherwise reparsed as an attribute or a tag.
+- **Map**: a task with `kind:map`, whose body holds Destination, Notes,
+  Decisions-so-far, Not-yet-specified and Out-of-scope.
+  ```bash
+  task add kind:map project:<effort> -- "<destination>"
+  task +LATEST export                      # take the uuid
+  curl -s -X POST --data-binary @map.md \
+       -H "Content-Type: text/markdown" $PU/tasks/<map-uuid>/body
+  ```
 
-**Never put multi-line text in a `key:value` argument.** It exits 0,
-discards the value, and overwrites the description. Long text goes in an
-annotation or a body.
+- **Child ticket**: a task carrying `parent_uuid:<map-uuid>` and a `kind:`
+  of `research`, `prototype`, `grilling` or `task`. The question goes in
+  the body. Consult `curl -s $PU/sops` before choosing tags — an invented
+  tag carries no procedure and nobody finds out.
+  ```bash
+  task add kind:research parent_uuid:<map-uuid> project:<effort> +afk \
+       -- "what does it cost"
+  ```
+
+- **Blocking**: Taskwarrior's native dependencies, wired in a second pass
+  once the tickets have uuids.
+  ```bash
+  task <uuid> modify depends:<blocker-uuid>,<blocker-uuid>
+  ```
+
+- **Frontier query**: open, unblocked, unclaimed children of the map, most
+  urgent first.
+  ```bash
+  task +READY -ACTIVE parent_uuid:<map-uuid> export
+  ```
+  This deliberately includes human-in-the-loop tickets: you need to see
+  that the next thing is a grilling ticket, or the map looks finished when
+  it is not.
+
+- **Claim**: `task <uuid> start` — the session's first write, before any
+  work, so a concurrent session skips it. `stop` releases it.
+
+- **Resolve**: post the answer, close, then append a one-line gist to the
+  map's Decisions-so-far and POST the map body back.
+  ```bash
+  task <uuid> annotate -- "$(cat answer.md)"
+  task <uuid> done
+  ```
+
+### Tickets an agent resolves for you
+
+A ticket tagged `+afk` whose kind is `research` may be picked up by pu and
+resolved unattended, between your sessions. Nothing is different for you:
+it writes the answer as an **annotation** and closes the ticket, exactly
+where you would have. Next time you work the map, `task <uuid> export` has
+the answer.
+
+So a closed ticket reads the same whether you resolved it or pu did — and
+reading one needs only `task`, not pu.
 
 ## Two things to be careful about
 
 **`+afk` on a `kind:execution` task means pu will run a coding session
-against that repository, unattended.** Do not add it casually; leave it
-off and let a person decide.
+against that repository, unattended.** Leave it off and let a person
+decide.
 
-**`grilling` and `prototype` tickets are human-in-the-loop by definition**
-— an agent must never resolve one, and must never mark one `+afk`. If the
-next thing on a map is a grilling ticket, say so and stop; that is the
-signal a person is needed, not an obstacle to route around.
+**`grilling` and `prototype` are human-in-the-loop by definition** — an
+agent must never resolve one, and must never mark one `+afk`. If the next
+thing on a map is a grilling ticket, say so and stop. That is the signal a
+person is needed, not an obstacle to route around.
