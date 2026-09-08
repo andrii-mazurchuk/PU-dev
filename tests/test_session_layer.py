@@ -321,6 +321,30 @@ def test_prepare_copies_skills_but_never_overwrites(tmp_path):
     assert (existing / "SKILL.md").read_text(encoding="utf-8") == "theirs"
 
 
+def test_the_skills_this_unit_actually_ships_reach_a_target_repo(tmp_path):
+    """The other two tests here check the copy's semantics against synthetic
+    files. This one checks what really ships: an execution session runs in
+    the target repo, so a skill that is not copied there does not load at
+    all, and the failure is silent -- the session simply builds without it.
+
+    Its licence is asserted on too, because that copy is a redistribution
+    and MIT asks for the notice to travel with it."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    stype = Path(__file__).resolve().parent.parent / "session_types" / "execution"
+
+    report = repo_setup.prepare(repo, stype)
+
+    assert "ponytail/SKILL.md" in report.copied
+    assert "ponytail/LICENSE" in report.copied
+    assert (repo / ".claude" / "skills" / "ponytail" / "SKILL.md").exists()
+
+    # NOTICE.md sits outside `.claude/skills/` on purpose: it is this unit's
+    # own reasoning, and a repo pu works in has no business knowing pu exists.
+    assert not (repo / ".claude" / "NOTICE.md").exists()
+    assert not (repo / ".claude" / "skills" / "NOTICE.md").exists()
+
+
 def test_prepare_never_writes_a_settings_file(tmp_path):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)

@@ -109,7 +109,7 @@ gates apply.
 ## Verifying it
 
 ```bash
-pytest                                     # 128 tests, against the real binary
+pytest                                     # 129 tests, against the real binary
 python scripts/tag_sop_lookup.py --validate-all
 python scripts/smoke.py --base-url http://127.0.0.1:9001
 curl -X POST http://127.0.0.1:9001/trigger # spends a real session

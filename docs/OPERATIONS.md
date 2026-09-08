@@ -106,7 +106,7 @@ process ever sees them. Drive pu from PowerShell, or set
 ## Verifying it
 
 ```bash
-pytest                                          # 128 tests
+pytest                                          # 129 tests
 python scripts/tag_sop_lookup.py --validate-all # every SOP directory usable
 python scripts/smoke.py --base-url http://127.0.0.1:9001
 curl -X POST http://127.0.0.1:9001/trigger      # spends a real session
@@ -130,6 +130,13 @@ by default**, to `~/.claude/skills/`, because there is one queue and one
 set of efforts — a per-repo copy would be N copies of one fact.
 `--repo <path>` exists for a repository that genuinely needs its own. It
 never overwrites, and it writes no pointer into anyone's `CLAUDE.md`.
+
+Skills for **execution sessions are a separate, project-scoped set** and
+that script does not touch them. They live in
+`session_types/execution/.claude/skills/` and are copied into each target
+repo by `repo_setup.prepare` on every tick, because an execution session's
+cwd is that repo and nothing in this unit's tree loads there. See
+`session_types/execution/.claude/NOTICE.md`.
 
 ## What degrades, and what does not
 

@@ -343,7 +343,15 @@ to a stranger's files".
 
 `session_types/execution/.claude/skills/` is copied to
 `<repo>/.claude/skills/`, because cwd is now the repo and those skills no
-longer load from it.
+longer load from it. **This is the only way an execution session gets a
+skill at all**, and the failure mode if it is skipped is silent: the
+session simply builds without it.
+
+What ships today is `ponytail` — vendored byte-identical, with its MIT
+`LICENSE` beside it inside the skill directory so the notice travels with
+every copy. `session_types/execution/.claude/NOTICE.md` records why, and
+sits deliberately *outside* `skills/` so it does not travel: a repository
+pu works in has no business knowing this unit exists.
 
 Two rules, both about not being destructive in someone else's repository:
 

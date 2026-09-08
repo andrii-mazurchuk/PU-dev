@@ -209,6 +209,13 @@ the sentence telling it not to is a courtesy on top of that.
 resolving a mandatory procedure is always possible and reading the
 filesystem generally is not.
 
+Skills are **project-scoped for `execution`**, and have to be: that
+session's cwd is the target repo, so a skill in this unit's own tree does
+not load. `session_types/execution/.claude/skills/` is copied in on every
+tick (`FLOWS.md` §4); `ponytail` is what ships there today. The `Skill`
+tool itself is not permission-gated — measured — so the grant above needs
+no entry for it.
+
 `execution` runs with the **target repository as cwd** so that repo's own
 `CLAUDE.md`, conventions and gate hooks apply — a per-repo verification
 gate is the strongest safety property available, and it is wired there,

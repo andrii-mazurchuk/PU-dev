@@ -247,6 +247,42 @@ The cost is accepted: the session type's own `CLAUDE.md` no longer loads
 from cwd, so it is read and folded in; and its skills are copied in
 non-destructively (`FLOWS.md` §4).
 
+### Execution skills are project-scoped, and only `ponytail` ships
+
+An execution session's cwd is the target repository, so a skill living in
+this unit's tree **does not load at all** — and the failure is silent, the
+session just builds without it. The only route is
+`session_types/execution/.claude/skills/`, copied in by
+`repo_setup.prepare` on every tick.
+
+`ponytail` is what ships: an execution session has `Bash`, `Read`, `Write`
+and `Edit` in a repository it does not own, working from a one line task
+with nobody watching, and the two things that costs are building more than
+was asked and shrinking a change before understanding it.
+
+**One of upstream's six, not all six.** `ponytail-audit`, `-debt`,
+`-gain`, `-help` and `-review` are user-invoked one-shot commands an AFK
+session never calls — copying them into someone else's repository would be
+five files of permanent dead weight.
+
+The skill is vendored byte-identical with its `LICENSE` **inside the skill
+directory**, so the notice travels with every copy, which is what MIT
+asks. The reasoning lives in `session_types/execution/.claude/NOTICE.md`,
+deliberately *outside* `skills/` so it does not travel — a repository pu
+works in has no business knowing this unit exists.
+
+### The `Skill` tool is not permission-gated — **measured**
+
+A session run with `--allowedTools "Bash,Read,Write,Edit"` invoked a
+project skill and returned `tool_calls=('Skill',)` with **no permission
+denial and no stall**. Repeated with `Skill` added to the grant: identical
+result.
+
+Recorded because the opposite would have been the expected failure — a
+headless session with no grant for a tool does not fail loudly, it stalls
+(see §`--allowedTools` above). `ALLOWED_TOOLS` in `pu/session_types.py:51`
+therefore needs no entry for `Skill`, and adding one would be cargo.
+
 ### Context is assembled going in, and the result parsed coming out
 
 Deterministic retrieval before the run, rather than handing an agent a
