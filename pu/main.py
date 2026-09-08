@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import threading
 from pathlib import Path
 
 from pu import bodies, pipeline, server, sessions, taskstore
@@ -51,6 +52,10 @@ def main() -> None:
             peers_path=unit_root / "peers.json",
             cost_policy_path=unit_root / "cost_policy.json",
         ).as_dict()
+
+    # The store may live behind WSL, whose first call after idle pays to
+    # boot the distro. Warm it off the request path.
+    threading.Thread(target=store.warm, daemon=True).start()
 
     httpd = server.build_server(
         args.host, args.port, store, body_store, Path(args.prompts_dir),

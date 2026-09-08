@@ -1,0 +1,4 @@
+{"description":"smoke check map","entry":"20260908T084504Z","kind":"map","modified":"20260908T084504Z","project":"smoke","status":"pending","uuid":"afd12e77-8fa8-4164-8f59-cde11483be40"}
+{"description":"talk it over","entry":"20260908T084506Z","kind":"grilling","modified":"20260908T084506Z","parent_uuid":"afd12e77-8fa8-4164-8f59-cde11483be40","status":"pending","uuid":"ea23527c-819d-4fb8-88fc-ec501f716b8d","tags":["afk"]}
+{"description":"find the fact","entry":"20260908T084510Z","kind":"research","modified":"20260908T084510Z","parent_uuid":"afd12e77-8fa8-4164-8f59-cde11483be40","status":"pending","uuid":"3ce646f8-6847-4dd6-a044-6adb2be2b30c","tags":["afk"]}
+{"description":"intake from smoke: have a look at the thing","entry":"20260908T084513Z","kind":"intake","modified":"20260908T084513Z","status":"pending","uuid":"29c40e50-b071-44e0-9ad9-53ca9a96969a","tags":["afk"]}

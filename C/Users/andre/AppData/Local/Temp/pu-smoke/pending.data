@@ -1,0 +1,4 @@
+[description:"smoke check map" entry:"1788857104" kind:"map" modified:"1788857104" project:"smoke" status:"pending" uuid:"afd12e77-8fa8-4164-8f59-cde11483be40"]
+[description:"talk it over" entry:"1788857106" kind:"grilling" modified:"1788857106" parent_uuid:"afd12e77-8fa8-4164-8f59-cde11483be40" status:"pending" tags:"afk" tags_afk:"x" uuid:"ea23527c-819d-4fb8-88fc-ec501f716b8d"]
+[description:"find the fact" entry:"1788857110" kind:"research" modified:"1788857110" parent_uuid:"afd12e77-8fa8-4164-8f59-cde11483be40" status:"pending" tags:"afk" tags_afk:"x" uuid:"3ce646f8-6847-4dd6-a044-6adb2be2b30c"]
+[description:"intake from smoke: have a look at the thing" entry:"1788857113" kind:"intake" modified:"1788857113" status:"pending" tags:"afk" tags_afk:"x" uuid:"29c40e50-b071-44e0-9ad9-53ca9a96969a"]

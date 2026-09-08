@@ -192,6 +192,19 @@ class TaskStore:
         argv += list(args)
         return argv
 
+    def warm(self) -> bool:
+        """Wake the binary, ignoring the result.
+
+        When `task` lives inside WSL, the first call after the distro has
+        gone idle pays for booting it -- measured at ~9s here against ~0.3s
+        warm. That is long enough to time out the first real request after
+        a quiet period, so a caller pays for something that has nothing to
+        do with their request. Called in the background at startup."""
+        try:
+            return self._runner(list(self.base_cmd) + ["--version"]).returncode == 0
+        except OSError:
+            return False
+
     def run(self, args: Iterable[str]) -> CommandResult:
         argv = self._argv(args)
         result = self._runner(argv)
