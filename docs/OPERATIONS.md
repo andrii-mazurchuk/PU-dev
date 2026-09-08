@@ -106,7 +106,7 @@ process ever sees them. Drive pu from PowerShell, or set
 ## Verifying it
 
 ```bash
-pytest                                          # 129 tests
+pytest                                          # 130 tests
 python scripts/tag_sop_lookup.py --validate-all # every SOP directory usable
 python scripts/smoke.py --base-url http://127.0.0.1:9001
 curl -X POST http://127.0.0.1:9001/trigger      # spends a real session
@@ -226,8 +226,10 @@ Stated so nobody has to rediscover them:
 - **No MCP bridge.** `runner.build_argv` accepts an `mcp_bridge_url` and
   wires `--mcp-config` plus the `mcp__mcp-bridge__*` grant, but nothing
   passes one. Sessions cannot reach any peer unit's tools.
-- **No GitHub mirror.** The `url` and `repo` fields exist and nothing
-  populates them, so the source that feeds `execution` is not connected.
+- **No GitHub mirror.** Nothing populates `url`, so a task is always its
+  own authority and no external issue is tracked. `repo` is set by hand
+  (`task add ... repo:<path>`) or by an intake proposal; that is the
+  designed path, not a gap.
 - **`MODELS` is empty** (`pu/session_types.py:59`). Every session type
   uses whatever the CLI defaults to.
 - **`delivery_policy.json` is written and never read.**

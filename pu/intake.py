@@ -135,6 +135,15 @@ def validate(proposal: dict[str, Any]) -> dict[str, Any]:
             "title": title,
             "kind": kind,
             "project": task.get("project") or None,
+            # Only `execution` is ever run in a repo, but this is accepted on
+            # any kind rather than conditioned on one: a repository named for
+            # a `task` is still a true fact about it, and making the session
+            # infer which kinds we happen to run elsewhere would be coupling
+            # it to our internals. Without this field an intake-created
+            # execution task can never run -- the tick skips it for having no
+            # repo -- while the session's own instructions tell it to bounce
+            # `no_placeable_target` when it cannot identify one.
+            "repo": str(task.get("repo") or "").strip() or None,
             "tags": [t.strip() for t in tags if t.strip()],
             "afk": bool(task.get("afk")),
             "body": task.get("body") or None,
@@ -166,6 +175,9 @@ def apply(
                 tags=tags,
                 kind=task["kind"],
                 project=task["project"],
+                # .get rather than [] because a hand-built plan is a
+                # legitimate caller, and absent means the same as None here.
+                repo=task.get("repo"),
             )
             created.append(uuid)
             body = task["body"]

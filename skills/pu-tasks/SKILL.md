@@ -46,6 +46,8 @@ Check it: `task rc:$TASKRC _unique kind` should not error.
 | `project` | the effort, dotted; filtering matches nested scopes |
 | `parent_uuid` | the map a ticket belongs to |
 | `depends` | blocking; a blocked task leaves the frontier |
+| `repo` | **required for `kind:execution`** — the checkout pu runs the session in. A path the *unit* sees. Without it the task is skipped. |
+| `url` | optional; set when something else owns the text (a GitHub issue). Absent means this record is the authority. |
 | `+afk` | an agent may resolve this alone |
 | other tags | each names a **mandatory procedure**: `curl -s $PU/sops` |
 

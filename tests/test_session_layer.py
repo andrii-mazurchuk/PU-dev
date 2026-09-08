@@ -274,6 +274,24 @@ def test_apply_is_all_or_none(store, body_store):
     assert store.count("status:pending") == 0
 
 
+def test_an_intake_proposal_can_place_an_execution_task_in_a_repo(
+    store, body_store
+):
+    """Intake is told to identify the repository -- `no_placeable_target`
+    names it -- so the proposal has to be able to carry one. Without this
+    every intake-created execution task is skipped for having no repo, and
+    the miss is quiet: the tick annotates and moves on."""
+    plan = intake.validate({"tasks": [{
+        "title": "fix the thing", "kind": "execution", "repo": "/srv/app",
+        "afk": True, "traces_to": "fix the thing in /srv/app",
+    }]})
+    assert plan["tasks"][0]["repo"] == "/srv/app"
+
+    task = store.get(intake.apply(store, body_store, plan)[0])
+    assert task.repo == "/srv/app"
+    assert task.runnable is True
+
+
 def test_apply_creates_afk_and_non_afk_side_by_side(store, body_store):
     """Intake may split one message into work an agent does and a check a
     person makes. Both come from one proposal."""

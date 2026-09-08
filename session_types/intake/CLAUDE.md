@@ -77,6 +77,12 @@ afternoon; a task done unsupervised that should not have been costs more.
 
 Do not propose `intake` or `map`.
 
+**An `execution` task needs a `repo`** — the path to the checkout the work
+happens in. Without one it cannot run at all, and it is skipped rather
+than attempted. If the message does not let you identify the repository
+and no existing task points at one, that is exactly the
+`no_placeable_target` bounce; do not guess a path.
+
 ## Your output
 
 Your final message must contain **one JSON object and nothing that
@@ -89,6 +95,7 @@ contradicts it**. Either a proposal:
       "title": "one line, imperative",
       "kind": "execution",
       "project": "dotted.scope",
+      "repo": "path to the checkout, for kind execution only",
       "tags": ["procedure-tag"],
       "afk": true,
       "body": "the detail, in markdown",
