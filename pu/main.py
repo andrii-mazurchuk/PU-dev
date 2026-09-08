@@ -12,7 +12,7 @@ import os
 import threading
 from pathlib import Path
 
-from pu import bodies, pipeline, server, sessions, taskstore
+from pu import bodies, notify, pipeline, server, sessions, taskstore
 
 # Matches this unit's registered base_url. Keeping the default equal to the
 # registered port is deliberate: a sibling unit ships a main.py defaulting
@@ -52,6 +52,10 @@ def main() -> None:
             peers_path=unit_root / "peers.json",
             cost_policy_path=unit_root / "cost_policy.json",
             tracker_path=state / "repeat_tracker.json",
+            # Absent until the gateway sets it, and absent is a working
+            # state: sessions simply reach no peer tools, and nobody is
+            # notified when a task is blocked.
+            mcp_bridge_url=notify.bridge_url(),
         ).as_dict()
 
     # A session driving this store by hand runs bare `task`, which reads a

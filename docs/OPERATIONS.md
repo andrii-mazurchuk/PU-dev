@@ -14,6 +14,8 @@ overrides for the same reason (`DECISIONS.md` §no-rc-file).
 | `PU_STATE_DIR` | `state` | this unit's private storage — **a path this process sees** |
 | `PU_PORT` | `9001` | listen port; matches the registered `base_url` |
 | `PU_CLAUDE_CMD` | resolved via `shutil.which` | overrides how `claude` is launched |
+| `PU_MCP_BRIDGE_URL` | unset | the gateway's MCP bridge. Unset means sessions reach no peer tools and nobody is notified — a working state, not a broken one |
+| `PU_NOTIFY_TOOL` | `send_message` | the tool to call on whichever unit serves the `owner` role |
 
 `--host`, `--port`, `--taskdata`, `--state-dir` and `--prompts-dir` are
 also CLI flags on `python -m pu.main`; the environment supplies their
@@ -106,7 +108,7 @@ process ever sees them. Drive pu from PowerShell, or set
 ## Verifying it
 
 ```bash
-pytest                                          # 130 tests
+pytest                                          # 136 tests
 python scripts/tag_sop_lookup.py --validate-all # every SOP directory usable
 python scripts/smoke.py --base-url http://127.0.0.1:9001
 curl -X POST http://127.0.0.1:9001/trigger      # spends a real session
@@ -150,6 +152,8 @@ purpose.
 |---|---|
 | no `peers.json`, or no `log_write` peer | session logs are dropped, `record_session_run` → `False` |
 | the logs peer is unreachable or rejects | the same |
+| no `PU_MCP_BRIDGE_URL` | sessions get no peer tools; nobody is notified |
+| the bridge answers `delivered: false` (no owner configured, unknown tool) | `notify_owner` → `False`; the reason still stands on the task |
 | no `cost_policy.json`, or unparseable | `{}` — enforce nothing |
 | a missing or corrupt `repeat_tracker.json` | "nothing seen yet"; the breaker is slower to fire |
 | an unreachable or uninitialised task store, in `/stats` | zero tasks |
@@ -223,16 +227,20 @@ and it is the one failure that reports success.
 
 Stated so nobody has to rediscover them:
 
-- **No MCP bridge.** `runner.build_argv` accepts an `mcp_bridge_url` and
-  wires `--mcp-config` plus the `mcp__mcp-bridge__*` grant, but nothing
-  passes one. Sessions cannot reach any peer unit's tools.
+- **The MCP bridge is wired but unproven.** `PU_MCP_BRIDGE_URL` reaches
+  `research` and `execution` sessions (never `intake` — see
+  `DECISIONS.md`). No session has actually called a peer tool yet, because
+  no bridge has been running.
 - **No GitHub mirror.** Nothing populates `url`, so a task is always its
   own authority and no external issue is tracked. `repo` is set by hand
   (`task add ... repo:<path>`) or by an intake proposal; that is the
   designed path, not a gap.
 - **`MODELS` is empty** (`pu/session_types.py:59`). Every session type
   uses whatever the CLI defaults to.
-- **`delivery_policy.json` is written and never read.**
+- **`delivery_policy.json` is still never read here** — and now does not
+  need to be. Role resolution happens at the bridge, so pu addresses
+  `owner` and the bridge reads the policy. The file remains inert in this
+  repo by design rather than by omission.
 - **The full loop has never run with the real skills** — `/wayfinder`
   calling grilling and domain-modeling, tickets landing here, pu resolving
   the `+afk` ones. Every piece is proven individually. It needs a real

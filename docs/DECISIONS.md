@@ -133,10 +133,12 @@ trailing carriage return **as part of the value** — so
 Observed: a session and the unit wrote to different stores, both reporting
 success.
 
-The same reasoning gives the body store `newline=""` on both read and
-write (`pu/bodies.py:57`, `:72`): a body posted by one tool and read by
-another comes back byte for byte, and a map that round-trips through git
-does not churn on line endings.
+The same reasoning makes the body store read and write **bytes**
+(`pu/bodies.py`): a body posted by one tool and read by another comes back
+byte for byte, and a map that round-trips through git does not churn on
+line endings. Bytes rather than the `newline=` keyword there because
+`read_text` only accepts it from 3.13 — see §the suite is verified against
+the Python the project declares.
 
 ### Ordering is urgency coefficients, not a priority ladder
 
@@ -282,6 +284,69 @@ Recorded because the opposite would have been the expected failure — a
 headless session with no grant for a tool does not fail loudly, it stalls
 (see §`--allowedTools` above). `ALLOWED_TOOLS` in `pu/session_types.py:51`
 therefore needs no entry for `Skill`, and adding one would be cargo.
+
+### Peer tools are a per-type grant, not a deployment setting
+
+`PU_MCP_BRIDGE_URL` says where the gateway's MCP bridge is;
+`session_types.REACHES_PEERS` says who may use it. Both are required, and
+they are deliberately different kinds of thing.
+
+Passing a session a bridge URL adds `mcp__mcp-bridge__*` to its grant —
+**every tool every peer exposes**, a surface far wider than anything in
+`ALLOWED_TOOLS` and one that grows whenever somebody registers a new unit.
+That is a security decision, so it lives in code beside the other grants
+where it gets reviewed, exactly like `RUNS_IN_TARGET_REPO`.
+
+`intake` is absent from the set. Its grant is `Read` plus the lookup
+script, narrow because it is the one session that causes work to exist;
+widening it to the whole system's tool surface must not be something a
+deployment can do by filling in an environment variable.
+
+### The owner is addressed by role, through the bridge
+
+`notify.py` posts to the bridge's `/route` with `to: "owner"`. It never
+names a unit — which unit serves that role, and which thread within it, is
+resolved at the bridge from `delivery_policy.json`. So pu can tell a person
+something without knowing a communication unit exists, let alone which one
+is installed. Same principle as `logs_client` finding the logs peer by
+capability.
+
+**This is the one place pu deliberately does not go direct.** The
+standard's default is unit-to-unit HTTP to a peer's `base_url`, and
+`logs_client` follows it precisely so that recording a session never
+depends on a third unit. Here there is no `base_url` for "the owner" —
+role addressing is what `/route` exists for, so involving the bridge is the
+documented case rather than an exception to encapsulation.
+
+The cost is accepted and stated: a notification depends on the bridge being
+up. Which is why every outcome is `False` and never an exception — no
+bridge, an unreachable one, an unconfigured owner, a tool the target does
+not have. An unconfigured owner is a *valid* state; a system can genuinely
+have no owner. A notification that cannot be delivered must never turn a
+tick that did its work into a failure.
+
+`delivery_policy.json` is therefore still never read in this repo, and now
+by design rather than by omission.
+
+### The notify tool name is config, because pu cannot know it
+
+`/route` requires a `tool`, and which unit sits behind `owner` is the
+deployment's choice — so `PU_NOTIFY_TOOL` names it, defaulting to
+`send_message`. Same reason `PU_TASK_CMD` exists: what a thing is called is
+not an assumption to bake into code. A wrong name is safe and visible
+rather than silent: the bridge answers `delivered: false` with a reason.
+
+### Two things get a person told: a block, and a bounce
+
+Both were previously silent. The breaker taking a task away from agents
+*means* "this needs a person", and saying so only on the task itself made
+that true and unheard. A bounce is a finished answer that only pu had
+heard — the record closed and whoever sent the message never learned what
+was missing.
+
+Nothing else notifies. A single failed session does not: the breaker
+already covers repeated failure, and a message per failure is how a
+notification channel becomes something a person mutes.
 
 ### Context is assembled going in, and the result parsed coming out
 
@@ -459,6 +524,22 @@ The spec unit holds claims, not definitions. `CONTEXT.md` lives in the
 project repository.
 
 ---
+
+### The suite is verified against the Python the project declares
+
+`Path.read_text(newline=...)` is 3.13+. `pyproject` declares `>=3.10`, the
+dev machine runs 3.14, and CI ran 3.11 — so `bodies.get` raised `TypeError`
+on every CI run since the repo was created, and the suite could not have
+passed there. It also killed the request-handler thread mid-response, which
+surfaced as nine `RemoteDisconnected` failures in `test_server` looking
+like an unrelated fault.
+
+Two consequences, both kept:
+
+- **The body store reads and writes bytes**, which means the same thing on
+  every version.
+- **CI runs the version `pyproject` declares as the minimum**, not a newer
+  one that happens to work. A floor that is never tested is not a floor.
 
 ## Environment traps, for whoever is debugging
 

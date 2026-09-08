@@ -65,6 +65,19 @@ MODELS: dict[str, str] = {}
 # own CLAUDE.md no longer loads from cwd, so it is injected instead.
 RUNS_IN_TARGET_REPO = frozenset({"execution"})
 
+# A type that may reach other units' tools through the gateway's MCP bridge.
+#
+# This is a grant, so it belongs here beside ALLOWED_TOOLS rather than in
+# config: handing a session a bridge URL adds `mcp__mcp-bridge__*`, which is
+# every tool every peer exposes -- a far wider surface than anything in the
+# list above, and one that grows whenever somebody registers a new unit.
+#
+# `intake` is deliberately absent. Its grant is `Read` plus the lookup
+# script, deliberately narrow because it is the one session that causes work
+# to exist; widening it to the whole system's tool surface is not something
+# a deployment setting should be able to do by filling in an env var.
+REACHES_PEERS = frozenset({"research", "execution"})
+
 
 class SessionTypeError(ValueError):
     pass
@@ -86,6 +99,10 @@ class SessionType:
     @property
     def runs_in_target_repo(self) -> bool:
         return self.name in RUNS_IN_TARGET_REPO
+
+    @property
+    def reaches_peers(self) -> bool:
+        return self.name in REACHES_PEERS
 
     def instructions(self) -> str:
         """The type's own CLAUDE.md text.

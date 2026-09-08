@@ -150,9 +150,9 @@ Dependencies point downward only. Nothing below imports anything above it.
           │                                              claude -p + parsing
   ┌───────┴────────┬──────────┬───────────┐
   taskstore.py   bodies.py  sops.py   session_types.py   logs_client.py
-  the only        markdown   tag →     dir with a        best-effort
-  module that     blob per   procedure CLAUDE.md         session_run
-  runs `task`     uuid                                   entries
+  the only        markdown   tag →     dir with a        best-effort         notify.py
+  module that     blob per   procedure CLAUDE.md         session_run         a word to
+  runs `task`     uuid                                   entries             the owner
           │
   records.py      the universal record. Depends on nothing.
 ```
@@ -167,6 +167,7 @@ Dependencies point downward only. Nothing below imports anything above it.
 | `runner` | building argv, running `claude -p`, parsing the stream | know what a task is |
 | `sessions` | local run artifacts, derived aggregates | emit a verdict |
 | `logs_client` | `session_run` entries to the logs peer | raise, ever |
+| `notify` | telling the `owner` role a person is needed | name a unit, or raise |
 | `intake` | validating a proposal, writing it all-or-none | decide what the message meant |
 | `repo_setup` | preparing a target repo non-destructively | overwrite or merge anything |
 | `guards` | the repeat-dispatch breaker, the stale-claim reaper | delete or close a task |
@@ -208,6 +209,12 @@ the sentence telling it not to is a courtesy on top of that.
 (`Bash(python3 ../../scripts/tag_sop_lookup.py:*)`) rather than `Bash`, so
 resolving a mandatory procedure is always possible and reading the
 filesystem generally is not.
+
+Peer tools reach a session only through `PU_MCP_BRIDGE_URL`, and only for
+a type in `REACHES_PEERS` — `research` and `execution`, never `intake`.
+The URL is what grants `mcp__mcp-bridge__*`, every tool every peer exposes,
+so the opt-in is a frozenset in code beside the grants rather than a
+consequence of a deployment filling in a variable.
 
 Skills are **project-scoped for `execution`**, and have to be: that
 session's cwd is the target repo, so a skill in this unit's own tree does

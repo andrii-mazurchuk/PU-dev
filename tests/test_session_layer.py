@@ -8,8 +8,10 @@ from pathlib import Path
 import pytest
 
 from pu import (
+    guards,
     intake,
     logs_client,
+    notify,
     pipeline,
     records,
     repo_setup,
@@ -434,6 +436,105 @@ def test_the_entry_matches_the_logs_unit_contract(tmp_path):
     assert captured["body"]["payload"]["cost"] == 0.31
 
 
+# -- notifying the owner ---------------------------------------------------
+
+
+def _route_opener(payload, captured):
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps(payload).encode("utf-8")
+
+    def opener(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return Resp()
+    return opener
+
+
+def test_the_owner_is_addressed_by_role_never_by_unit_name():
+    """Which unit is the owner, and which thread within it, is resolved at
+    the bridge from delivery_policy.json. A unit name here would make that
+    unit un-swappable -- the same rule logs_client follows by capability."""
+    captured = {}
+    assert notify.notify_owner(
+        "http://bridge:9005/", "a task needs you", source_unit="pu",
+        opener=_route_opener({"delivered": True}, captured)) is True
+
+    assert captured["url"] == "http://bridge:9005/route"
+    assert captured["body"]["to"] == "owner"
+    assert captured["body"]["from"] == "pu"
+    assert captured["body"]["tool"] == notify.DEFAULT_TOOL
+    assert captured["body"]["args"]["text"] == "a task needs you"
+    # No unit name anywhere in what we send.
+    assert "cu" not in json.dumps(captured["body"])
+
+
+def test_no_bridge_configured_is_a_normal_state():
+    """The ordinary condition before registration: nobody is told, and
+    nothing fails."""
+    assert notify.bridge_url({}) is None
+    assert notify.notify_owner(
+        None, "nobody hears this", source_unit="pu",
+        opener=lambda *a, **k: pytest.fail("must not call without a bridge"),
+    ) is False
+
+
+def test_an_undeliverable_notification_is_false_not_an_exception():
+    """`delivered: false` is a documented answer from /route -- an
+    unconfigured owner is valid, a system can genuinely have no owner. So
+    is an unreachable bridge. Neither may reach the caller as an error."""
+    captured = {}
+    assert notify.notify_owner(
+        "http://bridge:9005", "x", source_unit="pu",
+        opener=_route_opener({"delivered": False, "reason": "no owner configured"},
+                             captured)) is False
+
+    def explode(*a, **k):
+        raise OSError("refused")
+
+    assert notify.notify_owner(
+        "http://bridge:9005", "x", source_unit="pu", opener=explode) is False
+
+
+def test_the_notify_tool_is_configurable_because_pu_cannot_know_it():
+    """/route requires a tool name, and the unit behind `owner` is the
+    deployment's choice. Config, for the same reason PU_TASK_CMD is."""
+    assert notify.notify_tool({}) == notify.DEFAULT_TOOL
+    assert notify.notify_tool({"PU_NOTIFY_TOOL": "post_to_thread"}) == "post_to_thread"
+
+
+def test_blocking_a_task_tells_a_person(store, body_store, tmp_path):
+    """Blocking *means* "this needs a person". Saying so only on the task
+    makes that true and unheard."""
+    store.add("cannot be resolved", tags=["afk"], kind="research")
+    sent = []
+
+    def fake_notify(url, text, source_unit, **kw):
+        sent.append((url, text))
+        return True
+
+    original = pipeline.notify.notify_owner
+    pipeline.notify.notify_owner = fake_notify
+    try:
+        for _ in range(guards.DEFAULT_REPEAT_THRESHOLD):
+            result = pipeline.tick(
+                store, body_store, _session_store(tmp_path), UNIT_ROOT,
+                tmp_path / "peers.json", tmp_path / "cost_policy.json",
+                session_runner=lambda **k: runner.SessionResult(1, text=""),
+                tracker_path=tmp_path / "tracker.json",
+                mcp_bridge_url="http://bridge:9005",
+            )
+    finally:
+        pipeline.notify.notify_owner = original
+
+    assert result.outcome == "auto_blocked"
+    assert len(sent) == 1
+    assert sent[0][0] == "http://bridge:9005"
+    assert "needs a person" in sent[0][1]
+    assert "cannot be resolved" in sent[0][1]
+
+
 # -- session artifacts and aggregates --------------------------------------
 
 
@@ -511,8 +612,9 @@ def test_a_research_tick_claims_runs_and_resolves(store, body_store, tmp_path):
     uuid = store.add("what does it cost", tags=["afk"], kind="research")
     seen = {}
 
-    def fake_session(prompt, cwd, allowed_tools, model):
-        seen.update(prompt=prompt, cwd=cwd, allowed_tools=allowed_tools)
+    def fake_session(prompt, cwd, allowed_tools, model, mcp_bridge_url):
+        seen.update(prompt=prompt, cwd=cwd, allowed_tools=allowed_tools,
+                    mcp_bridge_url=mcp_bridge_url)
         # The claim must already be in place before any work happens.
         assert store.get(uuid).active is True
         return runner.SessionResult(0, text="It costs nothing.", cost_usd=0.2,
@@ -521,7 +623,7 @@ def test_a_research_tick_claims_runs_and_resolves(store, body_store, tmp_path):
     result = pipeline.tick(
         store, body_store, _session_store(tmp_path), UNIT_ROOT,
         tmp_path / "peers.json", tmp_path / "cost_policy.json",
-        session_runner=fake_session,
+        session_runner=fake_session, mcp_bridge_url="http://bridge:9005",
     )
     assert result.ran and result.outcome == "resolved"
     assert seen["cwd"].name == "research"
@@ -581,14 +683,15 @@ def test_an_execution_tick_runs_in_the_repo_with_injected_instructions(
     store.add("build it", tags=["afk"], kind="execution", repo=str(repo))
     seen = {}
 
-    def fake_session(prompt, cwd, allowed_tools, model):
-        seen.update(cwd=cwd, prompt=prompt, allowed_tools=allowed_tools)
+    def fake_session(prompt, cwd, allowed_tools, model, mcp_bridge_url):
+        seen.update(cwd=cwd, prompt=prompt, allowed_tools=allowed_tools,
+                    mcp_bridge_url=mcp_bridge_url)
         return runner.SessionResult(0, text="changed one file", is_error=False)
 
     result = pipeline.tick(
         store, body_store, _session_store(tmp_path), UNIT_ROOT,
         tmp_path / "peers.json", tmp_path / "cost_policy.json",
-        session_runner=fake_session,
+        session_runner=fake_session, mcp_bridge_url="http://bridge:9005",
     )
     assert result.ran
     # cwd is the repo, so its own CLAUDE.md and hooks apply...
@@ -608,7 +711,11 @@ def test_an_intake_tick_creates_the_proposed_tasks(store, body_store, tmp_path):
         "traces_to": "please fix the deploy",
     }]})
 
-    def fake_session(prompt, cwd, allowed_tools, model):
+    def fake_session(prompt, cwd, allowed_tools, model, mcp_bridge_url):
+        # intake is not in REACHES_PEERS, so a configured bridge must not
+        # reach it: the URL is what grants `mcp__mcp-bridge__*`, and this is
+        # the session whose narrow grant matters most.
+        assert mcp_bridge_url is None
         # The catalogue is handed to intake up front: it cannot choose tags
         # from a set it does not know exists.
         assert "Available procedures" in prompt

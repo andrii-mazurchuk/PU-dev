@@ -43,6 +43,7 @@ from pu import (
     guards,
     intake as intake_mod,
     logs_client,
+    notify,
     records,
     repo_setup,
     runner as runner_mod,
@@ -204,6 +205,7 @@ def _apply_intake(
     body_store: bodies.BodyStore,
     task: records.Task,
     result: runner_mod.SessionResult,
+    mcp_bridge_url: str | None = None,
 ) -> tuple[str, str]:
     """Convert an intake session's proposal into tasks, or record a bounce.
 
@@ -222,6 +224,15 @@ def _apply_intake(
             task.uuid, f"bounced ({bounce['condition']}): {bounce['reason']}"
         )
         store.complete(task.uuid)
+        # A bounce is a finished answer, but only pu has heard it: the
+        # record closes and whoever sent the message is never told what was
+        # missing. Best-effort, so a silent bounce beats a failed tick.
+        notify.notify_owner(
+            mcp_bridge_url,
+            f"pu bounced an inbox message ({bounce['condition']}): "
+            f"{bounce['reason']}\n\nThe message was: {task.description}",
+            source_unit=UNIT_NAME,
+        )
         return "bounced", f"{bounce['condition']}: {bounce['reason']}"
 
     created = intake_mod.apply(store, body_store, plan)
@@ -260,6 +271,7 @@ def tick(
     tracker_path: Path | None = None,
     repeat_threshold: int = guards.DEFAULT_REPEAT_THRESHOLD,
     stale_claim_seconds: int = guards.DEFAULT_STALE_CLAIM_SECONDS,
+    mcp_bridge_url: str | None = None,
 ) -> TickResult:
     """Do at most one unit of work."""
     if not _TICK_LOCK.acquire(blocking=False):
@@ -269,7 +281,7 @@ def tick(
             store, body_store, session_store, unit_root, peers_path,
             cost_policy_path, session_runner, now,
             tracker_path or (unit_root / "state" / "repeat_tracker.json"),
-            repeat_threshold, stale_claim_seconds,
+            repeat_threshold, stale_claim_seconds, mcp_bridge_url,
         )
     finally:
         _TICK_LOCK.release()
@@ -278,6 +290,7 @@ def tick(
 def _tick(
     store, body_store, session_store, unit_root, peers_path, cost_policy_path,
     session_runner, now, tracker_path, repeat_threshold, stale_claim_seconds,
+    mcp_bridge_url,
 ) -> TickResult:
     moment = now()
 
@@ -307,12 +320,18 @@ def _tick(
         # before any work, so a session that fails to launch counts too.
         seen = guards.note_selection(tracker_path, candidate.uuid)
         if seen >= repeat_threshold:
-            guards.block(
-                store, candidate.uuid,
-                f"selected {seen} ticks running without resolving; a person "
-                f"needs to look at this",
-            )
+            reason = (f"selected {seen} ticks running without resolving; a "
+                      f"person needs to look at this")
+            guards.block(store, candidate.uuid, reason)
             guards.clear_tracker(tracker_path)
+            # Blocking *means* "this needs a person". Saying so only on the
+            # task itself makes that true and unheard.
+            notify.notify_owner(
+                mcp_bridge_url,
+                f"pu blocked a task and needs a person.\n\n"
+                f"{candidate.description}\n{reason}\ntask {candidate.uuid}",
+                source_unit=UNIT_NAME,
+            )
             return TickResult(
                 ran=False, reason="blocked after repeated dispatch",
                 task_uuid=candidate.uuid, session_type=stype.name,
@@ -344,6 +363,7 @@ def _tick(
         return _run(
             store, body_store, session_store, unit_root, peers_path,
             candidate, stype, cwd, instructions, session_runner,
+            mcp_bridge_url,
         )
 
     return TickResult(ran=False, reason="nothing runnable")
@@ -351,7 +371,7 @@ def _tick(
 
 def _run(
     store, body_store, session_store, unit_root, peers_path,
-    task, stype, cwd, instructions, session_runner,
+    task, stype, cwd, instructions, session_runner, mcp_bridge_url,
 ) -> TickResult:
     store.claim(task.uuid)
 
@@ -366,6 +386,10 @@ def _run(
             cwd=cwd,
             allowed_tools=stype.allowed_tools,
             model=stype.model,
+            # Gated on the type, not merely on the URL being configured:
+            # passing one grants `mcp__mcp-bridge__*`, every tool every peer
+            # exposes. See session_types.REACHES_PEERS for why intake is out.
+            mcp_bridge_url=mcp_bridge_url if stype.reaches_peers else None,
         )
     except Exception as exc:  # a launch failure must not strand the claim
         store.release(task.uuid)
@@ -380,7 +404,9 @@ def _run(
         store.annotate(task.uuid, f"session failed (exit {result.exit_code})")
         outcome, detail = "failed", f"exit {result.exit_code}"
     elif stype.name == "intake":
-        outcome, detail = _apply_intake(store, body_store, task, result)
+        outcome, detail = _apply_intake(
+            store, body_store, task, result, mcp_bridge_url
+        )
     else:
         outcome, detail = _apply_resolution(store, task, result)
 

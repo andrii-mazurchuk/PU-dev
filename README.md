@@ -109,7 +109,7 @@ gates apply.
 ## Verifying it
 
 ```bash
-pytest                                     # 130 tests, against the real binary
+pytest                                     # 136 tests, against the real binary
 python scripts/tag_sop_lookup.py --validate-all
 python scripts/smoke.py --base-url http://127.0.0.1:9001
 curl -X POST http://127.0.0.1:9001/trigger # spends a real session
@@ -137,6 +137,7 @@ operations, and the register of load-bearing decisions. Start at
 | `runner` | the `claude -p` invocation and its stream |
 | `sessions` | local run artifacts, and the `/stats` aggregates |
 | `logs_client` | best-effort `session_run` entries to whoever stores logs |
+| `notify` | best-effort word to the `owner` role when a person is needed |
 | `intake` | validating a proposal, and writing it all-or-none |
 | `repo_setup` | preparing a target repo, non-destructively |
 | `pipeline` | one tick: gate, select, claim, run, record |

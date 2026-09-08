@@ -139,12 +139,14 @@ Two properties of the implementation are load-bearing:
   before being used to build a path. This store is addressed by values
   arriving over HTTP, so a strict pattern is what keeps `../` out of it,
   rather than trusting a caller to have validated first.
-- **Writes are atomic and newline-preserving** (`pu/bodies.py:61`):
-  written to a temporary sibling and `os.replace`d, so a reader never
-  observes a half-written map; and `newline=""` on both read and write, so
-  a body posted by one tool and read by another comes back byte for byte.
-  Without that, Python rewrites every `\n` to `\r\n` on Windows and a map
-  that round-trips through git churns on line endings.
+- **Writes are atomic and newline-preserving** (`pu/bodies.py`): written
+  to a temporary sibling and `os.replace`d, so a reader never observes a
+  half-written map; and read and written as **bytes**, so a body posted by
+  one tool and read by another comes back byte for byte. Left to itself
+  Python rewrites every `\n` to `\r\n` on Windows, and a map that
+  round-trips through git then churns on line endings. Bytes rather than
+  `read_text(newline="")` because that keyword only exists from 3.13 while
+  this project supports 3.10 — see `DECISIONS.md`.
 
 ## The Taskwarrior schema
 
@@ -239,7 +241,7 @@ apart from "no policy" (`pu/pipeline.py:80`).
 |---|---|---|
 | `peers.json` | `pu/logs_client.py:33` | finding the `log_write` peer **by capability, never by name** |
 | `cost_policy.json` | `pu/pipeline.py:80` | `daily_cost_cap_usd`, enforced entirely unit-side |
-| `delivery_policy.json` | — | not currently read |
+| `delivery_policy.json` | — | never read here, and does not need to be: pu addresses the `owner` **role** and the bridge resolves it from this same file |
 
 ## SOPs — procedures a tag makes mandatory
 
