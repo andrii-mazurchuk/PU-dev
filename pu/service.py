@@ -58,6 +58,7 @@ def as_dict(task: records.Task, body: str | None = None) -> dict[str, Any]:
         "project": task.project,
         "url": task.url,
         "parent": task.parent,
+        "repo": task.repo,
         "tags": list(task.tags),
         "depends": list(task.depends),
         "urgency": task.urgency,

@@ -11,7 +11,7 @@ import argparse
 import os
 from pathlib import Path
 
-from pu import bodies, server, taskstore
+from pu import bodies, pipeline, server, sessions, taskstore
 
 # Matches this unit's registered base_url. Keeping the default equal to the
 # registered port is deliberate: a sibling unit ships a main.py defaulting
@@ -37,11 +37,24 @@ def main() -> None:
     parser.add_argument("--prompts-dir", default="prompts")
     args = parser.parse_args()
 
+    unit_root = Path(__file__).resolve().parent.parent
+    state = Path(args.state_dir)
+
     store = taskstore.TaskStore(data_location=args.taskdata)
-    body_store = bodies.BodyStore(Path(args.state_dir) / "bodies")
+    body_store = bodies.BodyStore(state / "bodies")
+    session_store = sessions.SessionStore(state / "sessions")
+
+    def tick():
+        return pipeline.tick(
+            store, body_store, session_store,
+            unit_root=unit_root,
+            peers_path=unit_root / "peers.json",
+            cost_policy_path=unit_root / "cost_policy.json",
+        ).as_dict()
 
     httpd = server.build_server(
-        args.host, args.port, store, body_store, Path(args.prompts_dir)
+        args.host, args.port, store, body_store, Path(args.prompts_dir),
+        unit_root=unit_root, session_store=session_store, tick=tick,
     )
     print(f"pu listening on http://{args.host}:{args.port} "
           f"(task: {' '.join(store.base_cmd)}, data: {args.taskdata})")

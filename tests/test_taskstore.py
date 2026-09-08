@@ -104,10 +104,36 @@ def test_get_unknown_uuid_is_none_not_error(store):
     assert store.get("11111111-2222-3333-4444-555555555555") is None
 
 
-def test_base_cmd_from_env_splits_a_prefixed_command():
+def test_text_survives_the_hop_to_the_binary(store):
+    """Regression: `wsl -- cmd` hands the command to the login shell, which
+    ate backticks, interpolated `${HOME}` and *executed* `$(...)`. Task
+    annotations carry a session's own final message, so that was a path
+    from session output to shell execution."""
+    hostile = [
+        "backticks `repo` here",
+        "dollar $(echo PWNED) here",
+        "brace ${HOME} here",
+        "quotes \"double\" and 'single'",
+        "semicolon ; pipe | amp & star *",
+    ]
+    for text in hostile:
+        uuid = store.add(text, kind="execution")
+        assert store.get(uuid).description == text, text
+        store.annotate(uuid, text)
+        assert text in store.get(uuid).annotations, text
+
+
+def test_base_cmd_forces_exec_over_the_login_shell():
+    """`--` is rewritten to `-e` wherever it comes from, because config a
+    human writes cannot be relied on to get this right."""
     assert taskstore.base_cmd_from_env({"PU_TASK_CMD": "wsl -d Ubuntu -- task"}) == (
-        "wsl", "-d", "Ubuntu", "--", "task",
+        "wsl", "-d", "Ubuntu", "-e", "task",
     )
+    assert taskstore.normalise_base_cmd(["wsl.exe", "--", "task"]) == (
+        "wsl.exe", "-e", "task",
+    )
+    # A plain local binary is left exactly alone.
+    assert taskstore.normalise_base_cmd(["task"]) == ("task",)
     assert taskstore.base_cmd_from_env({}) == ("task",)
 
 

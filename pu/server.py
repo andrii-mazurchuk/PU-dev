@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from pu import bodies, records, service, taskstore
+from pu import bodies, records, service, sops, taskstore
 
 UNIT_NAME = "pu"
 PROMPT_TIERS = ("default", "reference")
@@ -83,6 +83,13 @@ TOOLS = [
             "type": "object",
             "properties": {"parent": {"type": "string", "description": "uuid of a map"}},
         },
+    },
+    {
+        "name": "list_sops",
+        "description": "The catalogue of procedures available as tags. Attaching one of these tags to a task makes that procedure mandatory for whoever works it. Consult this before creating a task so the tags you attach are real ones -- an invented tag carries no procedure.",
+        "method": "GET",
+        "path": "/sops",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "create_map",
@@ -193,6 +200,9 @@ def make_handler(
     store: taskstore.TaskStore,
     body_store: bodies.BodyStore,
     prompts_dir: Path,
+    unit_root: Path,
+    session_store=None,
+    tick=None,
 ):
     class Handler(BaseHTTPRequestHandler):
         server_version = "pu/0.1"
@@ -253,10 +263,13 @@ def make_handler(
                     return self._json(200, {"status": "ok"})
 
                 if parts == ["stats"]:
+                    metrics = service.stats(store, body_store)
+                    if session_store is not None:
+                        metrics["sessions"] = session_store.aggregates()
                     return self._json(200, {
                         "unit": UNIT_NAME,
                         "computed_at": datetime.now(timezone.utc).isoformat(),
-                        "metrics": service.stats(store, body_store),
+                        "metrics": metrics,
                     })
 
                 if parts == ["tools"]:
@@ -285,6 +298,12 @@ def make_handler(
                 if len(parts) == 2 and parts[0] == "tasks":
                     found = service.get_task(store, body_store, parts[1])
                     return self._json(200, found) if found else self._not_found()
+
+                if parts == ["sops"]:
+                    return self._json(200, {
+                        "sops": sops.catalogue(unit_root),
+                        "broken": sops.validate(unit_root),
+                    })
 
                 if parts == ["projects"]:
                     return self._json(200, {"projects": service.list_projects(store)})
@@ -332,6 +351,16 @@ def make_handler(
                         project=payload.get("project"),
                     ))
 
+                if parts == ["trigger"]:
+                    # The gateway pokes an already-running unit here rather
+                    # than restarting it. One tick, synchronously: the cost
+                    # gate runs inside it, so there is no path in that can
+                    # route around the gate.
+                    if tick is None:
+                        return self._json(200, {"ran": False,
+                                                "reason": "no pipeline wired"})
+                    return self._json(200, tick())
+
                 if parts == ["inbox"]:
                     return self._json(202, service.push_inbox(
                         store, body_store,
@@ -373,7 +402,15 @@ def build_server(
     store: taskstore.TaskStore,
     body_store: bodies.BodyStore,
     prompts_dir: Path,
+    unit_root: Path | None = None,
+    session_store=None,
+    tick=None,
 ) -> ThreadingHTTPServer:
     return ThreadingHTTPServer(
-        (host, port), make_handler(store, body_store, prompts_dir)
+        (host, port),
+        make_handler(
+            store, body_store, prompts_dir,
+            Path(unit_root) if unit_root else Path("."),
+            session_store, tick,
+        ),
     )

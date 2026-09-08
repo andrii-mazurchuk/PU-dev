@@ -90,6 +90,7 @@ class Task:
     project: str | None = None
     url: str | None = None
     parent: str | None = None
+    repo: str | None = None
     tags: tuple[str, ...] = ()
     depends: tuple[str, ...] = ()
     annotations: tuple[str, ...] = ()
@@ -163,6 +164,7 @@ def from_export(raw: dict[str, Any]) -> Task:
         project=raw.get("project"),
         url=raw.get("url"),
         parent=raw.get("parent_uuid"),
+        repo=raw.get("repo"),
         tags=tuple(raw.get("tags", ()) or ()),
         depends=depends,
         annotations=annotations,

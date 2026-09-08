@@ -16,8 +16,9 @@ by-hand use, generated from the one source.
 
 **The binary may be behind a prefix.** There is no native Windows
 Taskwarrior, so on this machine `task` is reached as
-`wsl -d Ubuntu -- task`. That is entirely contained in `base_cmd`; nothing
-else in the unit knows. `PU_TASK_CMD` sets it.
+`wsl -d Ubuntu -e task`. That is entirely contained in `base_cmd`; nothing
+else in the unit knows. `PU_TASK_CMD` sets it, and `-e` is not optional --
+see `normalise_base_cmd`.
 
 **Writes are serialised.** `task add` does not print the uuid of what it
 just created, so recovering it means a follow-up `+LATEST export` -- which
@@ -37,6 +38,7 @@ import os
 import shlex
 import subprocess
 import threading
+from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 from pu import records
@@ -58,6 +60,8 @@ RC_SCHEMA: dict[str, str] = {
     "uda.url.label": "URL",
     "uda.parent_uuid.type": "string",
     "uda.parent_uuid.label": "Parent",
+    "uda.repo.type": "string",
+    "uda.repo.label": "Repo",
     # Ordering across every source lives here rather than in a priority
     # ladder in code. Retuning what PU works on next is a config change.
     "urgency.uda.kind.intake.coefficient": "6.0",
@@ -101,13 +105,35 @@ def subprocess_runner(argv: Sequence[str]) -> CommandResult:
     return CommandResult(proc.returncode, proc.stdout or "", proc.stderr or "")
 
 
+def normalise_base_cmd(base_cmd: Sequence[str]) -> tuple[str, ...]:
+    """Force `wsl -e` in place of `wsl --`.
+
+    This is a correctness *and* a safety fix, found by running the real
+    binary against adversarial text. `wsl.exe -- <cmd>` hands the command
+    to the default login shell, which expands it: backticks vanish,
+    `${HOME}` interpolates, and `$(echo PWNED)` **executes**. `wsl.exe -e
+    <cmd>` execs directly and every byte survives.
+
+    That matters here more than it might elsewhere, because the text
+    reaching this module is not all trusted: a task's annotations carry a
+    session's own final message, so a session could otherwise write shell
+    into a store write and have it run.
+
+    Normalised rather than documented, because `PU_TASK_CMD` is config a
+    human sets and a comment cannot stop someone typing `--`."""
+    argv = list(base_cmd)
+    if argv and Path(argv[0]).stem.lower() == "wsl":
+        argv = ["-e" if a == "--" else a for a in argv]
+    return tuple(argv)
+
+
 def base_cmd_from_env(environ: dict[str, str] | None = None) -> tuple[str, ...]:
     """`PU_TASK_CMD` is the whole command up to the arguments -- normally
-    just `task`, and on a Windows host `wsl -d Ubuntu -- task`. Config
+    just `task`, and on a Windows host `wsl -d Ubuntu -e task`. Config
     comes from the environment; the gateway injects it from units.yaml."""
     env = os.environ if environ is None else environ
     raw = env.get("PU_TASK_CMD", "task").strip()
-    return tuple(shlex.split(raw)) if raw else ("task",)
+    return normalise_base_cmd(shlex.split(raw) if raw else ["task"])
 
 
 def render_taskrc(data_location: str) -> str:
@@ -150,7 +176,9 @@ class TaskStore:
         runner: Runner = subprocess_runner,
     ):
         self.data_location = data_location
-        self.base_cmd = tuple(base_cmd) if base_cmd else base_cmd_from_env()
+        self.base_cmd = (
+            normalise_base_cmd(base_cmd) if base_cmd else base_cmd_from_env()
+        )
         self._runner = runner
         self._write_lock = threading.Lock()
 
