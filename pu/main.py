@@ -51,6 +51,7 @@ def main() -> None:
             unit_root=unit_root,
             peers_path=unit_root / "peers.json",
             cost_policy_path=unit_root / "cost_policy.json",
+            tracker_path=state / "repeat_tracker.json",
         ).as_dict()
 
     # The store may live behind WSL, whose first call after idle pays to

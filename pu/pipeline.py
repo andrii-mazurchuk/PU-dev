@@ -9,15 +9,22 @@ hand with `task next`.
 
 Order of operations, and each is load-bearing:
 
-1. **Cost gate first, before selection**, on every path into this
-   function. A gate that runs after selection can be skipped by whatever
-   selected differently, and a gate an external trigger can route around
-   is not a gate.
-2. **Claim before work.** The claim is the store's own `+ACTIVE` state, so
+1. **One tick at a time.** The server is threaded and the gateway pokes
+   `/trigger` on a schedule, so a slow session and the next poke overlap
+   sooner or later. A second tick declines rather than queueing: two
+   sessions running at once is not a busier unit, it is two sessions
+   racing for the same top-of-queue task.
+2. **Collect stale claims**, before anything reads the queue -- a claim
+   left by a process that died is otherwise invisible forever.
+3. **Cost gate before selection**, on every path into this function. A
+   gate that runs after selection can be skipped by whatever selected
+   differently, and a gate an external trigger can route around is not a
+   gate.
+4. **Claim before work.** The claim is the store's own `+ACTIVE` state, so
    a concurrent session's frontier no longer contains the task. It is the
    session's first write for the same reason wayfinder makes it one.
-3. **Run.**
-4. **Record whatever happened** -- to local artifacts, to the logs unit,
+5. **Run.**
+6. **Record whatever happened** -- to local artifacts, to the logs unit,
    and onto the task. A session that failed leaves the task released and
    annotated rather than silently claimed forever.
 """
@@ -26,12 +33,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from pu import (
     bodies,
+    guards,
     intake as intake_mod,
     logs_client,
     records,
@@ -44,6 +53,11 @@ from pu import (
 )
 
 UNIT_NAME = "pu"
+
+# One tick at a time, process-wide. Non-blocking: an overlapping poke is
+# declined and says so, rather than queueing up behind a long session and
+# firing into a queue that has moved on since.
+_TICK_LOCK = threading.Lock()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -242,10 +256,36 @@ def tick(
     cost_policy_path: Path,
     session_runner: Callable[..., runner_mod.SessionResult] = runner_mod.run_session,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    tracker_path: Path | None = None,
+    repeat_threshold: int = guards.DEFAULT_REPEAT_THRESHOLD,
+    stale_claim_seconds: int = guards.DEFAULT_STALE_CLAIM_SECONDS,
 ) -> TickResult:
     """Do at most one unit of work."""
+    if not _TICK_LOCK.acquire(blocking=False):
+        return TickResult(ran=False, reason="a tick is already running")
+    try:
+        return _tick(
+            store, body_store, session_store, unit_root, peers_path,
+            cost_policy_path, session_runner, now,
+            tracker_path or (unit_root / "state" / "repeat_tracker.json"),
+            repeat_threshold, stale_claim_seconds,
+        )
+    finally:
+        _TICK_LOCK.release()
+
+
+def _tick(
+    store, body_store, session_store, unit_root, peers_path, cost_policy_path,
+    session_runner, now, tracker_path, repeat_threshold, stale_claim_seconds,
+) -> TickResult:
+    moment = now()
+
+    # Before anything reads the queue: a claim left behind by a process
+    # that died is otherwise invisible to every future tick.
+    guards.release_stale_claims(store, stale_claim_seconds, moment)
+
     policy = read_cost_policy(cost_policy_path)
-    blocked = check_cost_gate(policy, session_store, now().strftime("%Y-%m-%d"))
+    blocked = check_cost_gate(policy, session_store, moment.strftime("%Y-%m-%d"))
     if blocked:
         return TickResult(ran=False, reason=blocked)
 
@@ -260,6 +300,23 @@ def tick(
             # A kind whose session type has no directory. Skipped and said
             # out loud rather than silently passed over.
             continue
+
+        # Winning selection repeatedly means it is not resolving: a
+        # resolved task is closed and cannot win again. Counted here,
+        # before any work, so a session that fails to launch counts too.
+        seen = guards.note_selection(tracker_path, candidate.uuid)
+        if seen >= repeat_threshold:
+            guards.block(
+                store, candidate.uuid,
+                f"selected {seen} ticks running without resolving; a person "
+                f"needs to look at this",
+            )
+            guards.clear_tracker(tracker_path)
+            return TickResult(
+                ran=False, reason="blocked after repeated dispatch",
+                task_uuid=candidate.uuid, session_type=stype.name,
+                outcome="auto_blocked",
+            )
 
         if stype.runs_in_target_repo:
             if not candidate.repo:
