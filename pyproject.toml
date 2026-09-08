@@ -5,8 +5,18 @@ description = "PU: the processing unit for a holonic-node harness. Runs claude -
 requires-python = ">=3.10"
 dependencies = []
 
+# Declared twice on purpose, and they must stay in step.
+# `pip install -e ".[dev]"` (what CI runs) reads the extra; `uv sync` reads
+# the PEP 735 group and ignores extras, so a project with only the extra
+# gets an empty venv and a confusing "no module named pytest".
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+
+[dependency-groups]
+dev = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [build-system]
 requires = ["setuptools>=68"]

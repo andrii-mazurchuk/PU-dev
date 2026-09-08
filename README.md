@@ -16,11 +16,15 @@ stays inspectable by hand.
 ## Running it
 
 ```bash
-pip install -e ".[dev]"
-pytest
-
-python -m pu.main                       # defaults to :9001
+uv sync && uv run pytest        # or: pip install -e ".[dev]" && pytest
+python -m pu.main               # defaults to :9001
 ```
+
+The dev dependency is declared twice in `pyproject.toml`, as a PEP 735
+group *and* as an extra, and they must stay in step. `uv sync` reads the
+group and ignores extras; `pip install -e ".[dev]"` (what CI runs) reads
+the extra. With only one of them, the other toolchain silently produces an
+environment with no pytest in it.
 
 Config is environment, injected by the gateway:
 
@@ -31,15 +35,38 @@ Config is environment, injected by the gateway:
 | `PU_STATE_DIR` | this unit's private storage |
 | `PU_PORT` | listen port |
 
-**There is no native Windows Taskwarrior.** Upstream ships source only, so
-on this machine it lives in WSL and is reached through a command prefix
-that nothing outside `taskstore.py` knows about.
+## Where the `task` binary lives
 
-`wsl -e` rather than `wsl --` is load-bearing, not cosmetic: `--` hands the
-command to a login shell, which eats backticks, interpolates `${HOME}` and
-**executes** `$(...)`. Annotations carry a session's own final message, so
-that is a path from model output to shell execution. `normalise_base_cmd`
-rewrites `--` to `-e` wherever it comes from.
+The unit does not care, and nothing outside `taskstore.py` knows. The whole
+of it is `PU_TASK_CMD` — the command up to the arguments.
+
+**On Linux, set nothing.** The default is `task`, so a native deployment
+needs no configuration at all. That is the ordinary case; the Windows
+arrangement below is the special one.
+
+**On Windows there is no native Taskwarrior** — upstream ships source only
+— so the binary lives in WSL and is reached through a prefix:
+
+```
+PU_TASK_CMD="wsl -d Ubuntu -e task"
+```
+
+`-e` rather than `--` is load-bearing, not cosmetic: `--` hands the command
+to a login shell, which expands what it is given — backticks disappear,
+`${HOME}` interpolates, and command substitution *runs*. Annotations carry
+a session's own final message, so that is a path from model output to shell
+execution. `normalise_base_cmd` rewrites `--` to `-e` wherever it comes
+from, so config cannot get this wrong.
+
+**Mind which side of the boundary a path is on.** Under the WSL
+arrangement, `PU_TASKDATA` is a path the *binary* sees — a Linux path,
+where `~` expands to the WSL user's home — while `PU_STATE_DIR` and a
+task's `repo` are paths *this process* sees, so on Windows they are Windows
+paths. Natively on Linux the distinction disappears entirely.
+
+One more Windows trap: a shell may rewrite a `/tmp/...` argument into a
+Windows path before the process ever sees it. Git Bash does. Pass WSL paths
+from PowerShell, or with `MSYS_NO_PATHCONV=1`.
 
 ## The two write doors
 

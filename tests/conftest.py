@@ -5,9 +5,11 @@ reachable, and skips otherwise. That is deliberate: a fake runner cannot
 catch an argv bug, and argv bugs are exactly what survives a fully green
 suite built entirely on fakes.
 
-On Linux (and CI) the binary is `task`. On this Windows host there is no
-native build, so it is reached as `wsl -d Ubuntu -- task` -- set
-`PU_TASK_CMD` and the suite picks it up unchanged.
+On Linux (and CI) the binary is plain `task` and nothing needs setting. On
+a Windows host there is no native build, so it is reached through WSL. The
+suite works either way with no configuration: it probes, in order,
+`PU_TASK_CMD`, then `task` on PATH, then WSL (`PU_WSL_DISTRO`, default
+`Ubuntu`).
 """
 
 from __future__ import annotations
@@ -31,7 +33,10 @@ def _resolve_base_cmd() -> tuple[str, ...] | None:
     if shutil.which("task"):
         candidates.append(("task",))
     if shutil.which("wsl"):
-        candidates.append(("wsl", "-d", "Ubuntu", "--", "task"))
+        distro = os.environ.get("PU_WSL_DISTRO", "Ubuntu")
+        # `-e`, never `--`: the latter goes through a login shell that
+        # expands the arguments. See taskstore.normalise_base_cmd.
+        candidates.append(("wsl", "-d", distro, "-e", "task"))
 
     for cmd in candidates:
         try:
