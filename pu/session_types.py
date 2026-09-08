@@ -30,9 +30,23 @@ a real repository, which cannot be enumerated in advance.
 from __future__ import annotations
 
 import dataclasses
+import os
 from pathlib import Path
 
-LOOKUP = "Bash(python3 ../../scripts/tag_sop_lookup.py:*)"
+# The interpreter a session should invoke. `python3` is right on Linux and
+# absent on Windows, where only `python` exists -- so a grant naming just
+# one of them silently fails on the other platform, and a session with no
+# way to resolve a procedure does not fail loudly, it just quietly ignores
+# a mandatory one.
+INTERPRETER = "python" if os.name == "nt" else "python3"
+LOOKUP_SCRIPT = "../../scripts/tag_sop_lookup.py"
+LOOKUP_COMMAND = f"{INTERPRETER} {LOOKUP_SCRIPT}"
+
+# Both spellings are granted regardless of platform. It costs nothing, and
+# it means a session that reaches for the other name still works rather
+# than hitting a permission prompt nobody is present to answer.
+LOOKUP = (f"Bash(python3 {LOOKUP_SCRIPT}:*),"
+          f"Bash(python {LOOKUP_SCRIPT}:*)")
 
 ALLOWED_TOOLS: dict[str, str] = {
     "intake": f"Read,{LOOKUP}",

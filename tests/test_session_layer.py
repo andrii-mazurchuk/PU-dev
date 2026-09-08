@@ -601,3 +601,21 @@ def test_the_prompt_names_mandatory_procedures(store, body_store, tmp_path):
     assert "--tag integration" in prompt
     # the afk marker is not a procedure and must not be presented as one
     assert "--tag afk" not in prompt
+
+
+def test_the_prompt_names_an_interpreter_the_grant_actually_allows():
+    """`python3` does not exist on Windows and `python` often does not on
+    Linux. A session told to run one it has no permission for hits a
+    permission prompt with nobody there to answer it."""
+    task = records.Task(
+        uuid="11111111-2222-3333-4444-555555555555",
+        description="do it", status="pending", kind="execution",
+        tags=("afk", "integration"),
+    )
+    import tempfile
+    root = Path(tempfile.mkdtemp())
+    _write_sop(root, "integration", "How to integrate.")
+    prompt = pipeline.build_prompt(task, None, root)
+    grant = session_types.ALLOWED_TOOLS["execution"]
+    assert session_types.LOOKUP_COMMAND in prompt
+    assert f"Bash({session_types.LOOKUP_COMMAND}:*)" in grant

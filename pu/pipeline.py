@@ -153,8 +153,9 @@ def build_prompt(
         ]
         for tag in procedures:
             lines.append(
-                f"- `{tag}` — "
-                f"`python3 ../../scripts/tag_sop_lookup.py --tag {tag}`"
+                f"- `{tag}` — run "
+                f"`{session_types_mod.LOOKUP_COMMAND} --tag {tag}` "
+                f"and read what it points at"
             )
     free_tags = [t for t in unmatched if t != records.AFK_TAG]
     if free_tags:
