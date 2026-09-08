@@ -51,10 +51,12 @@ class BodyStore:
         normal -- most tasks are one line."""
         path = self._path(uuid)
         try:
-            # newline="" to match the write: what was stored comes back
-            # byte for byte, with no platform translation in either
-            # direction.
-            return path.read_text(encoding="utf-8", newline="")
+            # Bytes, not read_text: what was stored has to come back byte
+            # for byte with no platform newline translation, and the
+            # `newline=` keyword that would say so on read_text only exists
+            # from 3.13 -- while this project supports 3.10. Decoding raw
+            # bytes means the same thing on every version.
+            return path.read_bytes().decode("utf-8")
         except OSError:
             return None
 
@@ -65,11 +67,13 @@ class BodyStore:
         # observes a half-written map. os.replace is atomic within a
         # filesystem.
         tmp = path.with_suffix(".md.tmp")
-        # newline="" stores exactly what was sent. Without it Python
-        # rewrites every \n to \r\n on Windows, so a body posted by one
-        # tool and read by another comes back subtly different -- and a
-        # map that round-trips through git would churn on line endings.
-        tmp.write_text(text, encoding="utf-8", newline="")
+        # Stores exactly what was sent. Left to itself Python rewrites every
+        # \n to \r\n on Windows, so a body posted by one tool and read by
+        # another comes back subtly different -- and a map that round-trips
+        # through git would churn on line endings. Bytes rather than
+        # write_text(newline=...) to match the read above, which cannot use
+        # that keyword before 3.13.
+        tmp.write_bytes(text.encode("utf-8"))
         tmp.replace(path)
 
     def delete(self, uuid: str) -> bool:

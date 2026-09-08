@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from pu import records, taskstore
@@ -190,6 +192,12 @@ def test_rendered_taskrc_declares_every_kind():
     assert "hooks=" not in rendered
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="the WSL arrangement only exists on a Windows host, and a "
+           "Windows drive letter is not a drive to a POSIX Path -- the "
+           "assertion would be measuring pathlib, not the translation",
+)
 def test_a_path_is_translated_for_a_binary_behind_wsl():
     """The config file this process writes lives on the Windows side; the
     binary reading it lives in WSL. Handing a session the path we wrote to
@@ -199,5 +207,8 @@ def test_a_path_is_translated_for_a_binary_behind_wsl():
         r"C:\agents\units\pu\state\taskrc", wsl
     ) == "/mnt/c/agents/units/pu/state/taskrc"
 
-    # Natively there is no boundary and nothing is translated.
+
+def test_natively_there_is_no_boundary_and_nothing_is_translated():
+    """Runs everywhere, because this is the branch that runs everywhere:
+    with no WSL prefix the path is handed back untouched."""
     assert taskstore.path_for_binary("/home/u/.taskrc", ("task",)) == "/home/u/.taskrc"
