@@ -12,6 +12,12 @@ file and that one disagree, that one is right and this one is the bug.
 
 ## What is specific to pu
 
+- **Private storage is one directory**, learned from
+  `HOLONIC_STATE_DIR` -- the standard's "Private storage" section. It
+  holds `taskdata/` (the Taskwarrior store), `taskrc`, `bodies/`,
+  `sessions/` and `repeat_tracker.json`. The task store used to sit at
+  `~/.pu-taskdata`, outside the repo; nothing migrates automatically and
+  pu says so at boot when the new store is empty.
 - **It holds the task queue and runs the sessions.** This is the only unit
   that launches `claude -p`.
 - **Its store is Taskwarrior, and there is no native Windows build.** The
