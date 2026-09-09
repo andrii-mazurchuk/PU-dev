@@ -35,6 +35,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Sequence
 
+from pu import usage_gate
+
 
 def claude_command(environ: dict[str, str] | None = None) -> tuple[str, ...]:
     """The command that actually launches Claude Code on this machine.
@@ -80,6 +82,10 @@ class SessionResult:
     tool_calls: tuple[str, ...] = ()
     models_used: tuple[str, ...] = ()
     permission_denials: tuple[str, ...] = ()
+    # What this session saw of the account's rolling usage windows, if it
+    # reported them. Empty when the CLI emitted no rate_limit_event --
+    # which is normal, and means the previous reading stands.
+    rate_limit_windows: dict = dataclasses.field(default_factory=dict)
     raw_stream: str = ""
 
     @property
@@ -155,6 +161,7 @@ def parse_stream(stdout: str) -> SessionResult:
     tool_calls: list[str] = []
     denials: list[str] = []
     final: dict = {}
+    rate_limit_windows: dict = {}
 
     for line in stdout.splitlines():
         line = line.strip()
@@ -169,6 +176,16 @@ def parse_stream(stdout: str) -> SessionResult:
 
         if event.get("type") == "result":
             final = event
+            continue
+
+        # The only place the account's rolling usage windows are ever
+        # visible: the CLI emits them mid-session and offers no way to
+        # ask. Captured here so the gate has something to read next tick
+        # -- see pu/usage_gate.py.
+        if event.get("type") == "rate_limit_event":
+            windows = usage_gate.parse_rate_limit_event(event)
+            if windows:
+                rate_limit_windows = windows
             continue
 
         message = event.get("message")
@@ -198,6 +215,7 @@ def parse_stream(stdout: str) -> SessionResult:
         tool_calls=tuple(tool_calls),
         models_used=models,
         permission_denials=tuple(denials),
+        rate_limit_windows=rate_limit_windows,
         raw_stream=stdout,
     )
 

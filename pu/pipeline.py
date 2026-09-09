@@ -51,6 +51,7 @@ from pu import (
     sessions as sessions_mod,
     sops,
     taskstore,
+    usage_gate,
 )
 
 UNIT_NAME = "pu"
@@ -303,6 +304,25 @@ def _tick(
     if blocked:
         return TickResult(ran=False, reason=blocked)
 
+    # The account-usage ceilings, in the same place and for the same
+    # reason as the cost gate above: before selection, on every path in.
+    # See holonic-node/docs/UNIT_STANDARDS.md, "Account-usage ceilings".
+    usage_blocked = usage_gate.check_usage_gate(
+        usage_gate.read_usage(unit_root / usage_gate.USAGE_FILENAME),
+        usage_gate.ceilings_from_env(),
+    )
+    # Reported on the transition rather than every tick. Blocked is a
+    # state that can last hours, and a message per tick is one every few
+    # minutes -- noise that teaches its own reader to skip it.
+    state_path = tracker_path.parent / "usage_gate.json"
+    previous = usage_gate.load_blocked_state(state_path)
+    message = usage_gate.blocked_transition(previous, usage_blocked)
+    if message is not None:
+        notify.notify_owner(mcp_bridge_url, message, source_unit=UNIT_NAME)
+        usage_gate.save_blocked_state(state_path, usage_blocked)
+    if usage_blocked:
+        return TickResult(ran=False, reason=usage_blocked)
+
     try:
         types = session_types_mod.discover(unit_root / "session_types")
     except session_types_mod.SessionTypeError as exc:
@@ -411,6 +431,11 @@ def _run(
         outcome, detail = _apply_resolution(store, task, result)
 
     session_store.record(task.uuid, stype.name, prompt, result, outcome, detail)
+    # What this session saw of the account's rolling windows, back to the
+    # gateway, which records it once for the whole node. Best-effort: the
+    # session has already succeeded and a bridge that is down must not
+    # turn that into a failure.
+    usage_gate.report_usage(mcp_bridge_url, result.rate_limit_windows)
     logs_client.record_session_run(
         peers_path,
         source_unit=UNIT_NAME,

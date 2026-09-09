@@ -18,6 +18,10 @@ file and that one disagree, that one is right and this one is the bug.
   `sessions/` and `repeat_tracker.json`. The task store used to sit at
   `~/.pu-taskdata`, outside the repo; nothing migrates automatically and
   pu says so at boot when the new store is empty.
+- **It gates on the account-usage ceilings** before selection, in the
+  same place as its cost gate -- the standard's "Account-usage ceilings"
+  section. Blocked means skip the tick and retry; no task changes state.
+  The owner is told on the transition, not every tick.
 - **It holds the task queue and runs the sessions.** This is the only unit
   that launches `claude -p`.
 - **Its store is Taskwarrior, and there is no native Windows build.** The
