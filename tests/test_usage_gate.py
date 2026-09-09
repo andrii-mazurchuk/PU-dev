@@ -152,3 +152,46 @@ def test_an_unreachable_bridge_does_not_raise():
     assert usage_gate.report_usage(
         "http://127.0.0.1:1", {"five_hour": {"utilization": 0.1}}, timeout=0.2
     ) is False
+
+
+# --- the notification's argument name -----------------------------------
+
+
+def test_the_notify_argument_name_is_configurable():
+    """The tool name and its argument are one contract, and only the tool
+    name used to be configurable. Getting the tool right and the argument
+    wrong is the worse failure: /route answers delivered:true, the
+    receiving unit reads the key it expects, finds nothing, and queues an
+    empty message. Measured live against cu, whose push_notification
+    takes `content` while this defaulted to `text`."""
+    from pu import notify
+
+    assert notify.notify_arg({"PU_NOTIFY_ARG": "content"}) == "content"
+    assert notify.notify_arg({}) == notify.DEFAULT_ARG
+
+
+def test_the_message_travels_under_the_configured_argument():
+    from pu import notify
+
+    captured = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"delivered": true}'
+
+    def opener(request, timeout=None):
+        captured["body"] = json.loads(request.data.decode())
+        return _Response()
+
+    assert notify.notify_owner(
+        "http://bridge", "sessions paused", source_unit="pu",
+        tool="push_notification", arg="content", opener=opener,
+    ) is True
+    assert captured["body"]["args"] == {"content": "sessions paused"}
+    assert captured["body"]["tool"] == "push_notification"

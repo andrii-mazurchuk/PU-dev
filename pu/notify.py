@@ -46,6 +46,16 @@ TIMEOUT_SECONDS = 3.0
 # `delivered: false` with a reason rather than raising.
 DEFAULT_TOOL = "send_message"
 
+# The argument the message travels in. Configurable for the same reason
+# the tool name is, and it has to be: the two are one contract, and
+# getting the tool right while getting this wrong is the worse failure.
+# A wrong *tool* name is loud -- /route answers delivered:false with a
+# reason. A wrong *argument* name is silent: the tool exists, dispatch
+# succeeds, the receiving unit reads the key it expects, finds nothing,
+# and queues an empty message. Measured live against cu, whose
+# push_notification takes `content` while this defaulted to `text`.
+DEFAULT_ARG = "text"
+
 
 def bridge_url(environ: dict[str, str] | None = None) -> str | None:
     """The gateway's MCP bridge, or None when there isn't one.
@@ -61,11 +71,18 @@ def notify_tool(environ: dict[str, str] | None = None) -> str:
     return env.get("PU_NOTIFY_TOOL", "").strip() or DEFAULT_TOOL
 
 
+def notify_arg(environ: dict[str, str] | None = None) -> str:
+    """Which argument the target tool takes the message in."""
+    env = os.environ if environ is None else environ
+    return env.get("PU_NOTIFY_ARG", "").strip() or DEFAULT_ARG
+
+
 def notify_owner(
     url: str | None,
     text: str,
     source_unit: str,
     tool: str | None = None,
+    arg: str | None = None,
     opener=urllib.request.urlopen,
 ) -> bool:
     """One message to whoever holds the `owner` role. True if the bridge
@@ -82,7 +99,7 @@ def notify_owner(
         "from": source_unit,
         "to": OWNER_ROLE,
         "tool": tool or notify_tool(),
-        "args": {"text": text},
+        "args": {arg or notify_arg(): text},
     }).encode("utf-8")
 
     request = urllib.request.Request(
