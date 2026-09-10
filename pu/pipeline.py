@@ -113,6 +113,89 @@ def check_cost_gate(
     return None
 
 
+def gate_state(
+    session_store: sessions_mod.SessionStore,
+    unit_root: Path,
+    cost_policy_path: Path,
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> dict[str, Any]:
+    """What the two gates would decide right now, without deciding it.
+
+    "Why has nothing run since this morning" is the question a person
+    brings to this unit most often, and today it is answerable only by
+    reading logs. This is that answer as data.
+
+    It is a separate read from `tick` on purpose, and the separation is
+    load-bearing in one direction: **asking must never be able to start
+    a session.** A page that polls this refreshes every few seconds, and
+    if the answer came from running a tick, looking at the dashboard
+    would spend money.
+
+    Both readings degrade the same way the gates themselves do -- an
+    absent usage file and an absent policy both mean "nothing is
+    blocking", which is what keeps the gates from latching shut.
+    """
+    moment = now()
+    today = moment.strftime("%Y-%m-%d")
+
+    policy = read_cost_policy(cost_policy_path)
+    cost_blocked = check_cost_gate(policy, session_store, today)
+
+    windows = usage_gate.read_usage(unit_root / usage_gate.USAGE_FILENAME)
+    ceilings = usage_gate.ceilings_from_env()
+    usage_blocked = usage_gate.check_usage_gate(windows, ceilings)
+
+    def window_rows(name: str) -> list[dict[str, Any]]:
+        """One window as a meter row. Percentages rather than fractions:
+        the panel renders the number as it is given, and `0.74 / 0.7`
+        reads as nothing at all."""
+        reading = windows.get(name)
+        if not isinstance(reading, dict):
+            return []
+        utilization = reading.get("utilization")
+        if not isinstance(utilization, (int, float)):
+            return []
+        return [{"name": name.replace("_", "-"), "percent": round(utilization * 100, 1)}]
+
+    cap = policy.get("daily_cost_cap_usd")
+    spent = session_store.cost_since(today)
+
+    return {
+        "blocked": bool(cost_blocked or usage_blocked),
+        # The cost gate is reported first because it is the one a person
+        # sets themselves, and so the one they can act on.
+        "reason": cost_blocked or usage_blocked or "",
+        # The same facts arranged as label/value/note. Not judgement --
+        # "blocked" and the reason are both mechanical readings; this is
+        # only the shape a reader can scan.
+        "summary": [
+            {
+                "key": "Sessions",
+                "value": "blocked" if (cost_blocked or usage_blocked) else "clear",
+                "note": cost_blocked or usage_blocked or "nothing is holding work back",
+            },
+            {
+                "key": "Spent today",
+                "value": f"${spent:.2f}",
+                "note": f"cap ${float(cap):.2f}" if cap is not None else "no cap set",
+            },
+            {
+                "key": "Runs recorded",
+                "value": str(len(session_store.runs(limit=10_000))),
+                "note": "all time",
+            },
+        ],
+        "cost": {
+            "spent_today_usd": session_store.cost_since(today),
+            "daily_cap_usd": policy.get("daily_cost_cap_usd"),
+            "blocked": bool(cost_blocked),
+        },
+        "five_hour": window_rows(usage_gate.FIVE_HOUR),
+        "seven_day": window_rows(usage_gate.SEVEN_DAY),
+        "ceilings": {name: round(value * 100, 1) for name, value in ceilings.items()},
+    }
+
+
 # -- context assembly -----------------------------------------------------
 
 

@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from pu import bodies, docs, records, service, sops, taskstore
+from pu import bodies, dashboard, docs, pipeline, records, service, sops, taskstore
 
 UNIT_NAME = "pu"
 PROMPT_TIERS = ("default", "reference", "insights")
@@ -289,6 +289,20 @@ def make_handler(
                 return ""
             return self.rfile.read(length).decode("utf-8", errors="replace")
 
+        def _gate(self) -> dict:
+            """What the gates would decide right now. Degrades to an
+            empty reading rather than taking /stats down with it: this is
+            a diagnostic, and a diagnostic that can break the endpoint it
+            is reported on is worse than an absent one."""
+            if session_store is None:
+                return {}
+            try:
+                return pipeline.gate_state(
+                    session_store, unit_root, unit_root / "cost_policy.json"
+                )
+            except OSError:
+                return {}
+
         def _path_parts(self) -> tuple[list[str], dict[str, list[str]]]:
             parsed = urlparse(self.path)
             # Percent-decode every segment. A uuid is safe, but a project
@@ -311,11 +325,65 @@ def make_handler(
                     metrics = service.stats(store, body_store)
                     if session_store is not None:
                         metrics["sessions"] = session_store.aggregates()
+                        metrics["gate"] = self._gate()
                     return self._json(200, {
                         "unit": UNIT_NAME,
                         "computed_at": datetime.now(timezone.utc).isoformat(),
                         "metrics": metrics,
                     })
+
+                if parts == ["dashboard"]:
+                    # The spec tier. Built per request rather than stored,
+                    # so the meters carry the ceilings this process was
+                    # actually given -- see dashboard.py.
+                    ceilings = self._gate().get("ceilings", {})
+                    return self._json(200, dashboard.spec(ceilings))
+
+                if parts == ["gate"]:
+                    return self._json(200, self._gate())
+
+                if parts == ["spend"]:
+                    if session_store is None:
+                        return self._json(200, {"days": []})
+                    days = int(one("days") or 14)
+                    return self._json(200, {
+                        "days": session_store.cost_by_day(min(max(days, 1), 90))
+                    })
+
+                if parts == ["sessions"]:
+                    if session_store is None:
+                        return self._json(200, {"sessions": []})
+                    limit = int(one("limit") or 50)
+                    runs = session_store.runs(limit=min(max(limit, 1), 500))
+                    task = one("task")
+                    if task:
+                        runs = [r for r in runs if r.get("task_uuid") == task]
+                    return self._json(200, {"sessions": runs})
+
+                if len(parts) == 3 and parts[0] == "sessions":
+                    if session_store is None:
+                        return self._not_found()
+                    found = session_store.run(parts[1], parts[2])
+                    return self._json(200, found) if found else self._not_found()
+
+                # Presentation payloads for the dashboard's two detail
+                # pages. Under their own prefix because that is what they
+                # are -- no panel kind can render a field of a fetched
+                # object, so the shaping has to happen somewhere, and
+                # reshaping the real API for it would have been worse.
+                if len(parts) == 3 and parts[:2] == ["panels", "task"]:
+                    found = service.get_task(store, body_store, parts[2])
+                    if found is None:
+                        return self._not_found()
+                    return self._json(200, dashboard.task_fields(found))
+
+                if len(parts) == 4 and parts[:2] == ["panels", "run"]:
+                    if session_store is None:
+                        return self._not_found()
+                    found = session_store.run(parts[2], parts[3])
+                    if found is None:
+                        return self._not_found()
+                    return self._json(200, dashboard.run_fields(found))
 
                 if parts == ["tools"]:
                     return self._json(200, {"unit": UNIT_NAME, "tools": TOOLS})

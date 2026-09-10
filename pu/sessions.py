@@ -23,11 +23,17 @@ work.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from pu import runner as runner_mod
+
+# A run is addressed by two path segments that arrive from a URL. A
+# Taskwarrior uuid and this module's own stamps both match this; `..`
+# and anything carrying a separator do not.
+_SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _stamp() -> str:
@@ -91,7 +97,73 @@ class SessionStore:
             except (OSError, ValueError):
                 continue
             if isinstance(parsed, dict):
+                # Where it was found, so a caller can address one run
+                # without re-deriving this layout. The directory wins
+                # over the `task_uuid` in the file if they ever disagree:
+                # the directory is what was actually looked in.
+                parsed["task_uuid"] = path.parent.parent.name
+                parsed["run_id"] = path.parent.name
                 out.append(parsed)
+        return out
+
+    def runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Every recorded run, most recent first.
+
+        Ordered on `recorded_at` rather than on the directory name: the
+        stamp is the moment the directory was created, and a session
+        that ran for four minutes finishes out of that order.
+        """
+        ordered = sorted(
+            self._results(),
+            key=lambda r: str(r.get("recorded_at") or ""),
+            reverse=True,
+        )
+        return ordered[: max(0, limit)]
+
+    def run(self, task_uuid: str, run_id: str) -> dict[str, Any] | None:
+        """One run, with the prompt it was given.
+
+        The raw stream is deliberately not returned. It is the largest
+        thing this unit keeps on disk and nothing on the other end can
+        render it -- whoever genuinely needs it reads the file, which is
+        the reason it is kept at all.
+        """
+        if not (_SAFE_SEGMENT.match(task_uuid) and _SAFE_SEGMENT.match(run_id)):
+            # Both halves arrive from a URL, and joining an unchecked
+            # segment onto a root is the whole of a path traversal.
+            return None
+        run_dir = self.root / task_uuid / run_id
+        try:
+            parsed = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        parsed["task_uuid"] = task_uuid
+        parsed["run_id"] = run_id
+        try:
+            parsed["prompt"] = (run_dir / "prompt.txt").read_text(encoding="utf-8")
+        except OSError:
+            parsed["prompt"] = ""
+        return parsed
+
+    def cost_by_day(self, days: int = 14) -> list[dict[str, Any]]:
+        """Daily spend, oldest first, with quiet days present as zero.
+
+        The zeros are not padding. A series that omits the days nothing
+        ran on renders as continuous work at an even rate, which is the
+        opposite of what happened.
+        """
+        totals: dict[str, float] = {}
+        for record in self._results():
+            day = str(record.get("recorded_at") or "")[:10]
+            if len(day) == 10:
+                totals[day] = totals.get(day, 0.0) + float(record.get("cost_usd") or 0.0)
+        today = datetime.now(timezone.utc).date()
+        out: list[dict[str, Any]] = []
+        for offset in range(max(1, days) - 1, -1, -1):
+            day = (today - timedelta(days=offset)).isoformat()
+            out.append({"day": day, "cost_usd": round(totals.get(day, 0.0), 6)})
         return out
 
     def cost_since(self, iso_prefix: str) -> float:
