@@ -883,7 +883,13 @@ function draw() {
       box.appendChild(meta);
     }
 
-    const inner = svgEl('g', { transform: `translate(${MAP_PAD} ${MAP_PAD + 12})` });
+    // MAP_PAD + label band + half a node: coordinates are
+    // normalised so the topmost node's *centre* sits at zero, so
+    // its top edge is NODE_H/2 above this origin. Offsetting by
+    // less drew the first card over the map's own meta line.
+    const inner = svgEl('g', {
+      transform: `translate(${MAP_PAD} ${MAP_PAD + 8 + NODE_H / 2})`,
+    });
 
     for (const r of grp.laid.routes) {
       const cls = ['edge'];
@@ -919,6 +925,7 @@ function draw() {
   }
 
   applyView();
+  requestAnimationFrame(fit);
 }
 
 function clip(s, n) { return (s ?? '').length > n ? (s ?? '').slice(0, n - 1) + '…' : (s ?? ''); }
@@ -1202,8 +1209,13 @@ function fit() {
   }
   STATE.tasks = d.tasks;
   renderStrip(d);
+  // The busiest project, not the first alphabetically: opening on
+  // the emptiest space is the worst possible first impression of a
+  // view whose whole point is showing how much is in flight.
   const ps = projects(STATE.tasks);
-  STATE.project = ps.length ? ps[0][0] : null;
+  STATE.project = ps.length
+    ? ps.reduce((best, p) => (p[1] > best[1] ? p : best))[0]
+    : null;
   renderScopes(STATE.tasks);
   if (!STATE.tasks.length) {
     $('scene').innerHTML = '';
@@ -1211,6 +1223,5 @@ function fit() {
     return;
   }
   draw();
-  setTimeout(fit, 0);
 })();
 </script>
