@@ -60,6 +60,33 @@ def test_the_taskdata_path_is_translated_for_a_binary_behind_wsl():
     assert translated == f"/mnt/c/agents/units/pu/state/{TASKDATA_SUBDIR}"
 
 
+def test_the_translation_does_not_depend_on_the_platform_running_it():
+    """The bug this pins: the drive letter used to come from
+    `Path(text).drive`, which is "C:" on Windows and "" on POSIX. The
+    same input therefore translated on a Windows host and passed through
+    untouched on Linux -- and this test could only ever pass on one of
+    them, which is how it sat red in CI.
+
+    This function speaks for the binary on the *other* side of the
+    boundary. What it answers must depend on the path it is given, never
+    on the machine doing the answering."""
+    wsl = ("wsl", "-d", "Ubuntu", "-e", "task")
+    for written in ("C:/agents/pu/state", r"C:\agents\pu\state"):
+        assert taskstore.path_for_binary(written, wsl) == "/mnt/c/agents/pu/state"
+    assert taskstore.path_for_binary("d:/x/y", wsl) == "/mnt/d/x/y"
+
+
+def test_an_already_posix_path_is_left_alone_behind_wsl():
+    r"""It is already written for the binary's side. Resolving it would be
+    actively wrong: on a Windows host `Path("/srv/x").resolve()` is
+    `C:\srv\x`, so the old code answered `/mnt/c/srv/x` and pointed the
+    binary at a store that does not exist -- silently, which is the whole
+    class of mistake this function exists to prevent."""
+    assert taskstore.path_for_binary(
+        "/srv/pu/state/taskdata", ("wsl", "-d", "Ubuntu", "-e", "task")
+    ) == "/srv/pu/state/taskdata"
+
+
 def test_the_translation_is_the_identity_for_a_native_binary():
     """The container and Linux case: state/taskdata, unchanged. This is
     the path that matters once pu stops running behind WSL at all."""

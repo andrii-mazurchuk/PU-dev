@@ -39,6 +39,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import shlex
 import subprocess
 import uuid as uuid_module
@@ -133,6 +134,12 @@ def normalise_base_cmd(base_cmd: Sequence[str]) -> tuple[str, ...]:
     return tuple(argv)
 
 
+# `C:\...` or `C:/...`, with the rest of the path. Matched as a string
+# so the answer is the same whichever platform is doing the matching --
+# see path_for_binary.
+_WINDOWS_DRIVE = re.compile(r"^([A-Za-z]):[\\/](.*)$", re.DOTALL)
+
+
 def path_for_binary(path: Path | str, base_cmd: Sequence[str]) -> str:
     """A local path, written the way the `task` binary will read it.
 
@@ -148,12 +155,37 @@ def path_for_binary(path: Path | str, base_cmd: Sequence[str]) -> str:
     text = str(path)
     if not base_cmd or Path(base_cmd[0]).stem.lower() != "wsl":
         return text
-    resolved = Path(text).resolve()
-    if not resolved.drive:
-        return text.replace("\\", "/")
-    drive = resolved.drive.rstrip(":").lower()
-    rest = str(resolved)[len(resolved.drive):].replace("\\", "/").lstrip("/")
-    return f"/mnt/{drive}/{rest}"
+
+    # The drive letter is found by reading the string, never by asking
+    # pathlib. `Path("C:/x").drive` is "C:" on Windows and "" on POSIX,
+    # so routing this through `Path` makes the answer depend on the
+    # platform doing the translating rather than on the path being
+    # translated -- and this function's whole job is to speak for the
+    # binary on the *other* side of that boundary. The old version
+    # translated on a Windows host and returned the Windows path
+    # unchanged on Linux, which is also why its test could only pass on
+    # one of them.
+    if text.startswith("/"):
+        # Already absolute and already POSIX: it is written for the
+        # binary's side of the boundary and there is nothing to do.
+        # Resolving it here would be actively wrong -- on a Windows host
+        # `Path("/srv/x").resolve()` is `C:\srv\x`, so the old code
+        # answered `/mnt/c/srv/x` and pointed the binary at a store that
+        # does not exist. Silent, and exactly the class of mistake this
+        # function exists to prevent.
+        return text
+
+    match = _WINDOWS_DRIVE.match(text)
+    if match is None:
+        # Relative. Resolving is what turns `state/taskdata` into
+        # something openable; on a Windows host that yields a drive,
+        # which is then translated below.
+        match = _WINDOWS_DRIVE.match(str(Path(text).resolve()))
+        if match is None:
+            return text.replace("\\", "/")
+
+    drive, rest = match.group(1).lower(), match.group(2)
+    return f"/mnt/{drive}/" + rest.replace("\\", "/").lstrip("/")
 
 
 def base_cmd_from_env(environ: dict[str, str] | None = None) -> tuple[str, ...]:
