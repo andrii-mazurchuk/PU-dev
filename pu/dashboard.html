@@ -301,6 +301,7 @@
     font: 400 12.5px var(--sans); padding: 7px 9px; min-height: 58px;
   }
   .ask textarea:focus { outline: 2px solid var(--brand); outline-offset: -1px; }
+  .ask textarea:disabled { opacity: .5; cursor: not-allowed; }
   .ask-row { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
   .ask-note { font-size: 10.5px; color: var(--ink-faint); flex: 1; }
   .ask button {
@@ -386,15 +387,26 @@
       <div class="pane chat" id="pane-ask" hidden>
         <div class="log" id="log">
           <div class="empty">
-            Ask about the queue, the gates, or why something is blocked.
-            Not wired up yet — this panel is the layout only.
+            <b>Not wired up yet.</b><br />
+            This is the shape of the panel, not a working one. Asking pu a
+            question spends money and has to go through the node's audited
+            write path; that path does not exist for a framed page yet, so
+            the box below is deliberately dead rather than silently
+            swallowing what you type.
           </div>
         </div>
         <div class="ask">
-          <textarea id="q" placeholder="Why is nothing running?&#10;What is blocking the newest map?"></textarea>
+          <!-- Disabled, not merely labelled. A box that accepts a
+               question and submits nothing is the failure the standard
+               names -- an affordance that turns out to be a drawing --
+               and a note under it does not help, because nobody reads
+               the note before typing into the box. Disabled, it reads
+               as unfinished at a glance, which is what it is. -->
+          <textarea id="q" disabled
+                    placeholder="Why is nothing running?&#10;What is blocking the newest map?"></textarea>
           <div class="ask-row">
-            <span class="ask-note" id="ask-note">Not wired up — nothing is sent.</span>
-            <button id="send">Ask</button>
+            <span class="ask-note" id="ask-note">Not wired up — nothing is sent, nothing is spent.</span>
+            <button id="send" disabled>Ask</button>
           </div>
         </div>
       </div>
@@ -1106,6 +1118,9 @@ function addMsg(who, text, extra = {}) {
    `/ask`, its session type and its gates already exist and are
    tested. */
 function ask() {
+  // Unreachable while the control is disabled. Kept, and kept
+  // small, because wiring this up later is meant to be a change
+  // to one function on a page we already own.
   const q = $('q').value.trim();
   if (!q) return;
   $('q').value = '';
