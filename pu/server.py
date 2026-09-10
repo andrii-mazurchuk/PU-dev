@@ -13,10 +13,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from pu import ask, bodies, dashboard, docs, pipeline, records, service, sops, taskstore
+from pu import ask, bodies, docs, pipeline, records, service, sops, taskstore
 
 UNIT_NAME = "pu"
 PROMPT_TIERS = ("default", "reference", "insights")
+
+# Resolved against this module, not the working directory: the
+# gateway starts this unit with a cwd of its own choosing.
+DASHBOARD_HTML = Path(__file__).resolve().parent / "dashboard.html"
 
 # Hand-written, never generated from the routing table: every entry needs a
 # description written for a model to read. Excludes /health and /tools.
@@ -361,10 +365,26 @@ def make_handler(
                     })
 
                 if parts == ["dashboard"]:
-                    # The spec tier. Built per request rather than stored,
-                    # so the meters carry the ceilings this process was
-                    # actually given -- see dashboard.py.
-                    return self._json(200, dashboard.spec())
+                    # The page tier. The node reads the tier off this
+                    # response -- text/html means "frame it below the
+                    # chrome" -- so the content type is the whole of the
+                    # declaration; see UNIT_STANDARDS.md, "Dashboards".
+                    #
+                    # pu is the escape-hatch case that section describes:
+                    # its dashboard is a dependency graph, and a graph
+                    # canvas is not expressible in the panel vocabulary.
+                    # Everything else about the page tier is a cost we
+                    # pay for that one thing.
+                    try:
+                        return self._text(
+                            200, DASHBOARD_HTML.read_text(encoding="utf-8"),
+                            "text/html; charset=utf-8",
+                        )
+                    except OSError:
+                        # A missing file is "no dashboard", not a broken
+                        # unit. 404 is a valid answer and the node lists
+                        # us greyed rather than failing.
+                        return self._not_found()
 
                 if parts == ["gate"]:
                     return self._json(200, self._gate())

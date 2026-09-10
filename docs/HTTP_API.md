@@ -345,18 +345,17 @@ Calling this **spends a real session and real money.**
 
 ## `GET /dashboard`
 
-The panel spec the node's console renders. `application/json` is what
-tells it this is the spec tier -- the tier is read off the response,
-never declared.
+`pu/dashboard.html`, served as `text/html`. The content type is the whole
+of the tier declaration -- the node reads it off the response and there
+is no `kind` field to keep in sync. Serve JSON here by accident and the
+node tries to render it as panels.
 
-Built per request rather than served from a file: the meters carry the
-account-usage ceilings this process was given, which come from the
-environment. See `pu/dashboard.py`.
+The page tier rather than the spec tier, and only because this unit's
+dashboard is a dependency graph. See the README section "The dashboard"
+for why that is the one thing worth paying for it.
 
-```json
-{ "unit": "pu", "title": "Processing unit", "lede": "...",
-  "pages": [ { "id": "overview", "title": "Overview", "panels": [ ... ] } ] }
-```
+A missing file answers `404`, which is a valid "no dashboard" rather
+than a broken unit.
 
 ## `GET /gate`
 

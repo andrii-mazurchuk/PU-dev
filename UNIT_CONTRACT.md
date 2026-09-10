@@ -8,8 +8,9 @@ file and that one disagree, that one is right and this one is the bug.
 - The four standard endpoints: `GET /health`, `GET /stats`,
   `GET /prompts/<tier>` (`default`, `reference`), `GET /tools`.
 - `POST /inbox` — the convention for accepting pushed work from a peer.
-- `GET /dashboard` — a **spec**-tier dashboard, per the standard's
-  "Dashboards" section. Pages and panels; the node owns the chrome.
+- `GET /dashboard` — a **page**-tier dashboard, per the standard's
+  "Dashboards" section. Self-contained HTML; the node frames it and
+  still owns the chrome.
 - `unit_type: processing`, `lifecycle: persistent`, port **9001**.
 
 ## What is specific to pu
@@ -37,12 +38,16 @@ file and that one disagree, that one is right and this one is the bug.
   operations, and `/inbox` — which can only ever mint an `intake` record
   for a session to convert. Reading is open to every peer.
 
-- **Its dashboard has one panel that writes, and it writes through the
-  standard door.** `ask` submits by naming `ask_unit` in this unit's own
-  `/tools`, which the console dispatches through the bridge's
-  `POST /route`; the poll is a `GET` through the read-only dashboard
-  proxy. There is no endpoint the dashboard alone knows about, and
-  nothing here assumes this unit's own port is reachable.
+- **It takes the page tier, and only because of the graph.** Its
+  dashboard is a dependency graph, which is the case the standard names
+  as the escape hatch's reason to exist. Every other unit should serve a
+  spec. The page draws no navigation, links no peer, renders no other
+  unit's data, and assumes nothing about its own port being reachable.
+- **Its dashboard is read-only, and the proxy enforces that rather than
+  the page promising it.** The node forwards GET and refuses everything
+  else with 405. The `ask` panel is present as layout and submits
+  nothing; wiring it needs a write path through the bridge, never a
+  private endpoint the dashboard alone knows about.
 - **An ask session is granted no tools.** Sessions this unit spawns have
   no way back into it, and this one answers from context assembled going
   in. It has no kind mapped to it, so nothing anyone can write to the

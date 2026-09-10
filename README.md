@@ -111,52 +111,74 @@ gates apply.
 
 ## The dashboard
 
-`GET /dashboard` answers with a **panel spec** -- JSON describing what to
-show, which the node's console renders with its own components. The
-contract is the gateway's `docs/UNIT_STANDARDS.md`, section "Dashboards".
+`GET /dashboard` answers with **HTML** -- the page tier. The node frames
+it below its own chrome. The contract is the gateway's
+`docs/UNIT_STANDARDS.md`, section "Dashboards".
 
-The node owns the chrome permanently. This unit declares scopes and
-panels; it draws no navigation, links no peer, and renders no other
-unit's data. Six visible pages -- overview, queue, tasks, maps, sessions,
-spend -- plus two hidden ones reached by drilling into a row.
+**Why not the spec tier, which every other unit should use.** A spec
+declares panels from a closed vocabulary -- kpis, table, record, bars,
+rows, meters, text -- and the node draws them with its own components.
+That is the right default, it costs a unit no frontend at all, and it is
+what pu did first. But this unit's dashboard is a **dependency graph**,
+and a graph canvas is the case the standard names as the reason the page
+tier exists. Nothing in the vocabulary draws one, and widening the
+vocabulary for one unit would have shaped every unit's dashboard around
+pu's problem.
 
-**The spec computes nothing.** It names what to show; anything that has
-to be current lives in the data a panel fetches. An earlier draft baked
-the account-usage ceilings into the meters because a meter carried one
-ceiling for a whole panel -- `ceiling_field` removed the need, and the
-ceiling now travels with the reading it belongs to.
+Everything else about the page tier is a cost paid for that one thing:
+this unit now owns its own look and no longer gains when the node's
+components improve.
 
-The overview's **gate panel** is the point of the whole thing: "why has
-nothing run since this morning" is the question this unit is asked most,
-and until now it needed a log to answer. `GET /gate` reports what the two
-gates would decide right now -- and it is a separate read from `tick` on
-purpose, so that looking at a page can never start a session.
+The page is one file, `pu/dashboard.html`. Inline CSS and JS, no build
+step, no CDN, and **every fetch is relative with no leading slash** --
+which is what lets the same file work at this unit's `/dashboard` and
+inside the node's `/dashboard/pu/` prefix with no conditional. A leading
+slash would reach the *node*, which answers with plausible JSON of the
+wrong shape rather than an error.
+
+Opened directly it falls back to a sample graph and says so, so the
+layout can be inspected without standing up a node.
+
+### The layout is the hard part
+
+`tests/layout.test.mjs` checks the layered-DAG pipeline the page
+hand-rolls. Run it with `node`; it is deliberately not in CI, which is
+Python only. It extracts the functions from `dashboard.html` rather than
+copying them, because a drifted copy of a layout algorithm passes its
+tests while the thing on screen is wrong.
+
+Three guarantees:
+
+1. **A task is drawn after everything blocking it.** Layer is the
+   *longest* path from a root. With shortest path, a task blocked by
+   both a one-step and a five-step chain lands beside the short one and
+   draws an edge leaping four layers backwards.
+2. **No node ever overlaps another.** Coordinates align to neighbour
+   medians, then a separation pass runs *last* and pushes anything too
+   close apart -- so whatever alignment wanted, nothing ends up on top
+   of anything else.
+3. **No edge is drawn across a task body.** An edge spanning more than
+   one layer is broken by a **dummy node** at every layer it crosses,
+   and that dummy occupies real space in the ordering -- so the layer
+   reserves a gap for the edge to pass through. Skipping this step is
+   why hand-rolled graphs end up with lines slicing through boxes.
+
+**Zero edge crossings is not guaranteed, and cannot be.** Crossing
+minimisation is NP-hard, and a non-planar graph cannot be drawn flat
+without a crossing by any means that exists. The page minimises with
+median sweeps and then **reports the number it could not remove**, so a
+reader who sees "3 crossings" knows to trust their eyes less. Dependency
+*cycles* are broken, drawn differently, and counted -- a cycle is real
+information: work that can never start.
 
 ### Asking it a question
 
-The one panel that causes anything to happen. Submit is `ask_unit`, a
-declared tool the console dispatches through the bridge's `POST /route`
-like any other tool call; the poll is a `GET`, carried by the same
-read-only proxy as every other panel source. No new door.
-
-```bash
-curl -X POST localhost:9001/ask -d '{"question":"why has nothing run?"}'
-# {"id": "..."}   then: curl localhost:9001/ask/<id>
-```
-
-Single-turn: each question carries its own context and knows nothing of
-the last. The session is granted **no tools at all** -- sessions this
-unit spawns have no way back into it, and this one needs nothing the
-prompt does not already carry.
-
-It is a money tap on an origin with no authentication, so: both gates
-refuse rather than queue, one question runs at a time for the whole unit,
-the question is capped and fenced below instructions it cannot
-renegotiate, and the runner gives up after five minutes rather than
-holding the lock for good.
-
-The answer is model output derived from task bodies that other agents
-wrote. It is rendered as escaped text and must stay that way.
+`POST /ask` and `GET /ask/<id>` exist, are gated, capped and tested (see
+below). **The panel in the page is not wired to them.** The node's
+dashboard proxy forwards GET and refuses everything else, so a page-tier
+chat cannot submit from inside the frame without reaching for a node
+route this unit is not supposed to know about. The panel is the layout;
+wiring it is a decision about that write path, not a missing function.
 
 ## Verifying it
 
@@ -188,7 +210,7 @@ operations, and the register of load-bearing decisions. Start at
 | `session_types` | which types exist, and what each may reach |
 | `runner` | the `claude -p` invocation and its stream |
 | `sessions` | local run artifacts, and the `/stats` aggregates |
-| `dashboard` | the panel spec the node renders at `/dashboard` |
+| `dashboard.html` | the page the node frames at `/dashboard` |
 | `ask` | one question, one session, polled for an answer |
 | `logs_client` | best-effort `session_run` entries to whoever stores logs |
 | `notify` | best-effort word to the `owner` role when a person is needed |

@@ -1,0 +1,1201 @@
+<!--
+  pu — the processing unit. Page-tier dashboard.
+
+  One file, inline CSS and JS, no build step, no CDN. Every
+  fetch is relative and does not begin with a slash, so the
+  same file works at this unit's own /dashboard and inside the
+  node's /dashboard/pu/ prefix with no conditional.
+
+  Draws no navigation: the node's topbar and unit switcher sit
+  above this and are not ours to duplicate.
+
+  Opens with no unit running -- it falls back to a sample
+  graph and says so. That is deliberate: the layout is the
+  hard part of this page and it should be inspectable without
+  standing up a node.
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pu · processing unit</title>
+
+<style>
+  /* ---- tokens -------------------------------------------------
+     Grey is the default and colour is information. Only three
+     things earn a hue: work that can start now, work that is
+     stuck, and work that needs a person. Everything else is
+     structure and stays neutral, so the eye goes to the thing
+     that wants a decision. */
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --ink: #16191d;
+    --ink-dim: #5d646e;
+    --ink-faint: #939aa4;
+    --rule: #d4d8de;
+    --rule-soft: #e6e9ed;
+
+    --brand: #0e6e77;
+    --ready: #0e6e77;   /* runnable now  */
+    --ready-bg: #e2f1f2;
+    --stuck: #a2432c;   /* blocked       */
+    --stuck-bg: #f8e7e2;
+    --human: #8a6d1f;   /* needs a person*/
+    --human-bg: #f8f0dc;
+    --done: #6b7280;
+
+    --map-bg: #fbfcfd;
+    --map-rule: #cdd3db;
+
+    --radius: 3px;
+    --dock: 380px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "IBM Plex Mono", Menlo, monospace;
+    --sans: Archivo, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101317;
+      --panel: #171b21;
+      --ink: #e7eaee;
+      --ink-dim: #98a1ad;
+      --ink-faint: #6b747f;
+      --rule: #2b323b;
+      --rule-soft: #222831;
+
+      --brand: #3fb6bf;
+      --ready: #3fb6bf;
+      --ready-bg: #10312f;
+      --stuck: #e08363;
+      --stuck-bg: #34201a;
+      --human: #d6b048;
+      --human-bg: #2f2716;
+      --done: #6b7280;
+
+      --map-bg: #13171c;
+      --map-rule: #2e353f;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 13.5px/1.45 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---- shell ---- */
+  .wrap { display: flex; flex-direction: column; height: 100vh; }
+
+  /* ---- the strip: the five-second read ---- */
+  .strip {
+    display: flex; align-items: stretch; gap: 0;
+    background: var(--panel);
+    border-bottom: 1px solid var(--rule);
+    flex: 0 0 auto;
+  }
+  .stat {
+    padding: 9px 16px; border-right: 1px solid var(--rule-soft);
+    min-width: 108px;
+  }
+  .stat b {
+    display: block; font: 500 19px/1.2 var(--mono);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+  }
+  .stat span {
+    display: block; font-size: 10.5px; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--ink-faint); margin-top: 2px;
+  }
+  .stat.on b { color: var(--ready); }
+  .stat.warn b { color: var(--stuck); }
+  .strip .grow { flex: 1; }
+  .gate {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 16px; font-size: 12.5px; color: var(--ink-dim);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ready); }
+  .dot.warn { background: var(--stuck); }
+
+  /* ---- scope bar ---- */
+  .scopes {
+    display: flex; align-items: center; gap: 4px; padding: 6px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--rule);
+    flex: 0 0 auto; overflow-x: auto; scrollbar-width: thin;
+  }
+  .scope {
+    border: 1px solid transparent; background: none; cursor: pointer;
+    font: 400 12.5px var(--sans); color: var(--ink-dim);
+    padding: 3px 10px; border-radius: var(--radius); white-space: nowrap;
+  }
+  .scope:hover { background: var(--rule-soft); color: var(--ink); }
+  .scope[aria-pressed="true"] {
+    background: var(--ready-bg); border-color: var(--ready); color: var(--ready);
+  }
+  .scope .n { font-family: var(--mono); opacity: .65; margin-left: 5px; }
+  .legend {
+    margin-left: auto; display: flex; gap: 12px; align-items: center;
+    font-size: 11px; color: var(--ink-faint); white-space: nowrap;
+  }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+
+  /* ---- stage ---- */
+  .stage { flex: 1; display: flex; min-height: 0; position: relative; }
+  .canvas { flex: 1; position: relative; overflow: hidden; cursor: grab; }
+  .canvas.dragging { cursor: grabbing; }
+  .canvas svg { display: block; width: 100%; height: 100%; }
+
+  .hint {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: 12px; z-index: 3;
+    font-size: 11px; color: var(--ink-faint); pointer-events: none;
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    padding: 4px 8px; border-radius: var(--radius);
+  }
+  .zoomers {
+    position: absolute; left: 12px; bottom: 12px; z-index: 3;
+    display: flex; gap: 4px;
+  }
+  .zoomers button {
+    width: 26px; height: 26px; border: 1px solid var(--rule);
+    background: var(--panel); color: var(--ink-dim); cursor: pointer;
+    border-radius: var(--radius); font: 500 13px var(--mono);
+  }
+  .zoomers button:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+  /* ---- graph marks ---- */
+  .map-box { fill: var(--map-bg); stroke: var(--map-rule); stroke-width: 1; }
+  .map-label {
+    font: 500 11px var(--sans); fill: var(--ink-dim);
+    letter-spacing: .04em; text-transform: uppercase;
+  }
+  .map-meta { font: 400 10.5px var(--mono); fill: var(--ink-faint); }
+
+  .edge {
+    fill: none; stroke: var(--rule); stroke-width: 1.25;
+    transition: stroke .12s, stroke-width .12s, opacity .12s;
+  }
+  .edge.cross { stroke-dasharray: 3 3; }
+  .edge.cycle { stroke: var(--stuck); stroke-dasharray: 2 3; }
+  .edge.lit { stroke: var(--ready); stroke-width: 2; }
+  .edge.dim { opacity: .12; }
+
+  .node { cursor: pointer; }
+  .node rect {
+    fill: var(--panel); stroke: var(--rule); stroke-width: 1;
+    rx: 3; transition: stroke .12s, fill .12s;
+  }
+  .node.ready rect { stroke: var(--ready); fill: var(--ready-bg); }
+  .node.stuck rect { stroke: var(--stuck); }
+  .node.human rect { stroke: var(--human); fill: var(--human-bg); }
+  .node.claimed rect { stroke-dasharray: 3 2; }
+  .node text { font: 400 11.5px var(--sans); fill: var(--ink); }
+  .node .k { font: 400 9.5px var(--mono); fill: var(--ink-faint); }
+  .node:hover rect { stroke: var(--brand); stroke-width: 1.75; }
+  .node.sel rect { stroke: var(--brand); stroke-width: 2; }
+  .node.dim { opacity: .2; }
+
+  /* ---- right dock ---- */
+  .dock {
+    flex: 0 0 var(--dock); display: flex; flex-direction: column;
+    background: var(--panel); border-left: 1px solid var(--rule);
+    min-width: 0;
+  }
+  .dock[hidden] { display: none; }
+  .grip {
+    position: absolute; top: 0; bottom: 0; width: 7px; cursor: col-resize;
+    z-index: 5; background: transparent;
+  }
+  .grip:hover, .grip.on { background: color-mix(in srgb, var(--brand) 35%, transparent); }
+
+  .dock-head {
+    display: flex; align-items: center; gap: 2px; padding: 6px 8px;
+    border-bottom: 1px solid var(--rule); flex: 0 0 auto;
+  }
+  .tab {
+    border: 0; background: none; cursor: pointer; padding: 4px 10px;
+    font: 400 12.5px var(--sans); color: var(--ink-faint);
+    border-radius: var(--radius);
+  }
+  .tab[aria-selected="true"] { background: var(--rule-soft); color: var(--ink); }
+  .tab .badge {
+    display: inline-block; min-width: 15px; margin-left: 5px; padding: 0 4px;
+    background: var(--ready); color: #fff; border-radius: 7px;
+    font: 500 9.5px/15px var(--mono); text-align: center;
+  }
+  .x {
+    margin-left: auto; border: 0; background: none; cursor: pointer;
+    color: var(--ink-faint); font-size: 15px; padding: 2px 6px; line-height: 1;
+  }
+  .x:hover { color: var(--ink); }
+
+  .pane { flex: 1; overflow-y: auto; min-height: 0; }
+  .pane[hidden] { display: none; }
+
+  /* inspector */
+  .insp { padding: 14px 16px; }
+  .insp h2 { margin: 0 0 3px; font: 500 15px/1.3 var(--sans); }
+  .insp .sub { color: var(--ink-faint); font-size: 11.5px; margin-bottom: 14px; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 5px 10px; font-size: 12.5px; }
+  .kv dt { color: var(--ink-faint); }
+  .kv dd { margin: 0; word-break: break-word; }
+  .body-md {
+    margin-top: 14px; padding: 10px 12px; background: var(--bg);
+    border: 1px solid var(--rule-soft); border-radius: var(--radius);
+    font: 400 11.5px/1.55 var(--mono); white-space: pre-wrap;
+    max-height: 320px; overflow: auto;
+  }
+  .rel { margin-top: 16px; }
+  .rel h3 {
+    margin: 0 0 6px; font: 500 10.5px var(--sans); letter-spacing: .07em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  .rel button {
+    display: block; width: 100%; text-align: left; cursor: pointer;
+    border: 1px solid var(--rule-soft); background: var(--bg);
+    border-radius: var(--radius); padding: 5px 8px; margin-bottom: 4px;
+    font: 400 12px var(--sans); color: var(--ink);
+  }
+  .rel button:hover { border-color: var(--brand); }
+
+  .pill {
+    display: inline-block; padding: 0 6px; border-radius: 2px;
+    background: var(--rule-soft); color: var(--ink-dim);
+    font: 400 10.5px/17px var(--mono);
+  }
+  .pill.ready { background: var(--ready-bg); color: var(--ready); }
+  .pill.stuck { background: var(--stuck-bg); color: var(--stuck); }
+  .pill.human { background: var(--human-bg); color: var(--human); }
+
+  /* chat */
+  .chat { display: flex; flex-direction: column; height: 100%; }
+  .log { flex: 1; overflow-y: auto; padding: 14px 16px; min-height: 0; }
+  .msg { margin-bottom: 14px; font-size: 12.5px; line-height: 1.5; }
+  .msg .who {
+    font: 500 10px var(--sans); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 3px;
+  }
+  .msg.me .bubble {
+    background: var(--rule-soft); padding: 7px 10px;
+    border-radius: var(--radius); white-space: pre-wrap;
+  }
+  /* The answer is model output derived from task bodies other
+     agents wrote. It is set as text and never as markup -- see
+     the note in ask.py. `white-space: pre-wrap` on a text node
+     is the whole of the rendering. */
+  .msg.pu .bubble { white-space: pre-wrap; }
+  .msg .cost {
+    font: 400 10.5px var(--mono); color: var(--ink-faint); margin-top: 5px;
+  }
+  .msg.err .bubble { color: var(--stuck); }
+  .ask {
+    flex: 0 0 auto; border-top: 1px solid var(--rule); padding: 10px 12px;
+  }
+  .ask textarea {
+    width: 100%; resize: none; border: 1px solid var(--rule);
+    border-radius: var(--radius); background: var(--bg); color: var(--ink);
+    font: 400 12.5px var(--sans); padding: 7px 9px; min-height: 58px;
+  }
+  .ask textarea:focus { outline: 2px solid var(--brand); outline-offset: -1px; }
+  .ask-row { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
+  .ask-note { font-size: 10.5px; color: var(--ink-faint); flex: 1; }
+  .ask button {
+    border: 1px solid var(--brand); background: var(--brand); color: #fff;
+    padding: 4px 14px; border-radius: var(--radius); cursor: pointer;
+    font: 500 12.5px var(--sans);
+  }
+  .ask button:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* the bubble */
+  .bubble-btn {
+    position: absolute; right: 16px; bottom: 16px; z-index: 6;
+    width: 46px; height: 46px; border-radius: 50%;
+    border: 1px solid var(--rule); background: var(--panel);
+    color: var(--brand); cursor: pointer;
+    box-shadow: 0 2px 10px rgb(0 0 0 / .13);
+    display: grid; place-items: center;
+  }
+  .bubble-btn:hover { border-color: var(--brand); }
+  .bubble-btn[hidden] { display: none; }
+  .bubble-btn .n {
+    position: absolute; top: -2px; left: -2px; min-width: 16px; height: 16px;
+    background: var(--ready); color: #fff; border-radius: 8px;
+    font: 500 9.5px/16px var(--mono); text-align: center; padding: 0 4px;
+  }
+
+  .empty { padding: 28px 16px; color: var(--ink-faint); font-size: 12.5px; }
+  .offline {
+    background: var(--human-bg); color: var(--human);
+    padding: 3px 12px; font-size: 11.5px; border-bottom: 1px solid var(--rule);
+  }
+  .offline[hidden] { display: none; }
+</style>
+
+<div class="wrap">
+  <div class="offline" id="offline" hidden></div>
+
+  <div class="strip" id="strip"></div>
+
+  <div class="scopes">
+    <div id="scopes" style="display:flex;gap:4px"></div>
+    <div class="legend">
+      <span><i style="background:var(--ready)"></i>can start now</span>
+      <span><i style="background:var(--human)"></i>needs you</span>
+      <span><i style="background:var(--rule)"></i>waiting on a blocker</span>
+      <span id="xing"></span>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="canvas" id="canvas">
+      <svg id="svg"><g id="scene"></g></svg>
+      <div class="hint">drag to pan · scroll to zoom · click a task to inspect</div>
+      <div class="zoomers">
+        <button id="zin" title="Zoom in">+</button>
+        <button id="zout" title="Zoom out">−</button>
+        <button id="zfit" title="Fit">⤢</button>
+      </div>
+      <button class="bubble-btn" id="bubble" title="Ask pu (a)" aria-label="Ask pu">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.8-.8L3 21l1.9-4.1A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z"/>
+        </svg>
+        <span class="n" id="bubble-n" hidden></span>
+      </button>
+    </div>
+
+    <div class="grip" id="grip" hidden></div>
+
+    <aside class="dock" id="dock" hidden>
+      <div class="dock-head">
+        <button class="tab" id="tab-insp" aria-selected="true">Inspect</button>
+        <button class="tab" id="tab-ask" aria-selected="false">
+          Ask<span class="badge" id="ask-n" hidden></span>
+        </button>
+        <button class="x" id="close" aria-label="Close panel">×</button>
+      </div>
+
+      <div class="pane" id="pane-insp">
+        <div class="empty">Click a task, a map, or a dependency to inspect it.</div>
+      </div>
+
+      <div class="pane chat" id="pane-ask" hidden>
+        <div class="log" id="log">
+          <div class="empty">
+            Ask about the queue, the gates, or why something is blocked.
+            Not wired up yet — this panel is the layout only.
+          </div>
+        </div>
+        <div class="ask">
+          <textarea id="q" placeholder="Why is nothing running?&#10;What is blocking the newest map?"></textarea>
+          <div class="ask-row">
+            <span class="ask-note" id="ask-note">Not wired up — nothing is sent.</span>
+            <button id="send">Ask</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+/* =============================================================
+   LAYOUT — the layered DAG pipeline.
+
+   Three guarantees, and one thing that is not guaranteed and
+   cannot be. See the long note in each function.
+   ============================================================= */
+
+const NODE_GAP = 16, LAYER_GAP = 216, SWEEPS = 12;
+
+/* Break dependency cycles. `depends` is user data and nothing
+   stops A blocking B blocking A -- Taskwarrior holds that
+   happily. An unbroken cycle makes layering recurse forever, so
+   back edges found by DFS are reversed for layout and flagged.
+   A reversed edge is a real finding: work that can never start. */
+function breakCycles(nodes, edges) {
+  const onStack = new Set(), done = new Set();
+  const out = new Map(nodes.map(n => [n.id, []]));
+  for (const e of edges) if (out.has(e.from)) out.get(e.from).push(e);
+  const reversed = [];
+  const visit = id => {
+    if (done.has(id)) return;
+    onStack.add(id);
+    for (const e of out.get(id) ?? []) {
+      if (onStack.has(e.to)) { e.reversed = true; reversed.push(e); }
+      else if (!done.has(e.to)) visit(e.to);
+    }
+    onStack.delete(id); done.add(id);
+  };
+  for (const n of nodes) visit(n.id);
+  const effective = edges.map(e =>
+    e.reversed ? { ...e, from: e.to, to: e.from, reversed: true } : e);
+  return { edges: effective, reversed };
+}
+
+/* Longest path from a root, not shortest. With shortest, a task
+   blocked by both a 1-step and a 5-step chain lands beside the
+   short one and draws an edge leaping four layers backwards.
+   Longest path puts every node strictly after all its blockers. */
+function assignLayers(nodes, edges) {
+  const incoming = new Map(nodes.map(n => [n.id, []]));
+  for (const e of edges) incoming.get(e.to)?.push(e.from);
+  const layer = new Map();
+  const resolve = (id, seen = new Set()) => {
+    if (layer.has(id)) return layer.get(id);
+    if (seen.has(id)) return 0;
+    seen.add(id);
+    const parents = incoming.get(id) ?? [];
+    const v = parents.length ? Math.max(...parents.map(p => resolve(p, seen) + 1)) : 0;
+    layer.set(id, v);
+    return v;
+  };
+  for (const n of nodes) resolve(n.id);
+  return layer;
+}
+
+/* Every edge spanning more than one layer becomes a chain of
+   dummy nodes, one per layer it passes through. A dummy takes
+   part in ordering and coordinate assignment exactly like a
+   real node, so each layer physically reserves room for the
+   edge to pass. This is the step people skip, and skipping it
+   is why hand-rolled graphs end up with lines through boxes. */
+function insertDummies(nodes, edges, layer) {
+  const all = [...nodes], segments = [];
+  for (const e of edges) {
+    const a = layer.get(e.from), b = layer.get(e.to);
+    if (b - a <= 1) { segments.push({ edge: e, chain: [e.from, e.to] }); continue; }
+    const chain = [e.from];
+    for (let l = a + 1; l < b; l++) {
+      const d = { id: `~${e.from}~${e.to}~${l}`, dummy: true };
+      layer.set(d.id, l); all.push(d); chain.push(d.id);
+    }
+    chain.push(e.to);
+    segments.push({ edge: e, chain });
+  }
+  return { nodes: all, segments };
+}
+
+function buildAdjacency(segments) {
+  const adj = new Map();
+  const link = (a, b) => { if (!adj.has(a)) adj.set(a, []); adj.get(a).push(b); };
+  for (const { chain } of segments)
+    for (let i = 0; i < chain.length - 1; i++) { link(chain[i], chain[i+1]); link(chain[i+1], chain[i]); }
+  return adj;
+}
+
+/* Two edges cross when their endpoints sit in opposite order in
+   the two layers. Counted directly: at these sizes the
+   quadratic version is instant and far easier to confirm.
+   ponytail: O(e^2) per layer pair. Past a few hundred tasks,
+   switch the view to an adjacency matrix rather than optimising
+   this -- a matrix is what actually reads at that scale. */
+function countCrossings(order, adj) {
+  let total = 0;
+  for (let i = 0; i < order.length - 1; i++) {
+    const upper = new Map(order[i].map((id, n) => [id, n]));
+    const lower = new Map(order[i+1].map((id, n) => [id, n]));
+    const pairs = [];
+    for (const id of order[i])
+      for (const other of adj.get(id) ?? [])
+        if (lower.has(other)) pairs.push([upper.get(id), lower.get(other)]);
+    for (let a = 0; a < pairs.length; a++)
+      for (let b = a + 1; b < pairs.length; b++)
+        if ((pairs[a][0] - pairs[b][0]) * (pairs[a][1] - pairs[b][1]) < 0) total++;
+  }
+  return total;
+}
+
+/* Median heuristic (Eades & Wells): a node wants the median
+   position of its neighbours in the adjacent layer. Median
+   beats barycentre on uneven degree, which a dependency graph
+   always has -- one blocker with nine dependents is normal.
+   Every sweep is scored and the best is kept, so a late
+   unlucky pass cannot make things worse than an earlier one. */
+function reduceCrossings(byLayer, segments) {
+  const adj = buildAdjacency(segments);
+  let best = byLayer.map(l => [...l]);
+  let bestScore = countCrossings(best, adj);
+  let cur = best.map(l => [...l]);
+
+  for (let s = 0; s < SWEEPS && bestScore > 0; s++) {
+    const down = s % 2 === 0;
+    const range = down
+      ? [...cur.keys()].slice(1)
+      : [...cur.keys()].slice(0, -1).reverse();
+    for (const i of range) {
+      const fixed = cur[down ? i - 1 : i + 1];
+      const pos = new Map(fixed.map((id, n) => [id, n]));
+      const keyed = new Map();
+      for (const id of cur[i]) {
+        const ns = (adj.get(id) ?? []).map(o => pos.get(o))
+          .filter(p => p !== undefined).sort((a, b) => a - b);
+        if (!ns.length) { keyed.set(id, Infinity); continue; }
+        const m = Math.floor(ns.length / 2);
+        keyed.set(id, ns.length % 2 ? ns[m] : (ns[m-1] + ns[m]) / 2);
+      }
+      // A node with no neighbour in the fixed layer keeps its
+      // place rather than being flung to the end.
+      let prev = 0;
+      for (const id of cur[i]) {
+        if (keyed.get(id) === Infinity) keyed.set(id, prev); else prev = keyed.get(id);
+      }
+      cur[i] = [...cur[i]].sort((a, b) => keyed.get(a) - keyed.get(b));
+    }
+    const score = countCrossings(cur, adj);
+    if (score < bestScore) { bestScore = score; best = cur.map(l => [...l]); }
+  }
+  return { order: best, crossings: bestScore };
+}
+
+/* Priority method, then a hard separation pass. Alignment pulls
+   each node toward its neighbours' average so long chains draw
+   straight; separation then guarantees the minimum gap. It runs
+   LAST on purpose: whatever alignment wanted, nothing is
+   allowed to end up on top of anything else. */
+function assignCoordinates(order, adj, sizeOf) {
+  const y = new Map();
+  for (const layer of order) {
+    let cursor = 0;
+    for (const id of layer) {
+      const h = sizeOf(id);
+      y.set(id, cursor + h / 2);
+      cursor += h + NODE_GAP;
+    }
+  }
+  const separate = layer => {
+    const sorted = [...layer].sort((a, b) => y.get(a) - y.get(b));
+    for (let i = 1; i < sorted.length; i++) {
+      const p = sorted[i-1], c = sorted[i];
+      const floor = y.get(p) + sizeOf(p)/2 + NODE_GAP + sizeOf(c)/2;
+      if (y.get(c) < floor) y.set(c, floor);
+    }
+  };
+  for (let pass = 0; pass < 4; pass++) {
+    const layers = pass % 2 === 0 ? order : [...order].reverse();
+    for (const layer of layers) {
+      for (const id of layer) {
+        const ns = (adj.get(id) ?? []).map(o => y.get(o)).filter(v => v !== undefined);
+        if (ns.length) y.set(id, ns.reduce((a, b) => a + b, 0) / ns.length);
+      }
+      separate(layer);
+    }
+  }
+  const top = Math.min(...y.values());
+  for (const [id, v] of y) y.set(id, v - top);
+  return y;
+}
+
+function layout(nodes, rawEdges, sizeOf) {
+  if (!nodes.length) return { nodes: [], routes: [], crossings: 0, reversed: [], width: 0, height: 0 };
+  const { edges, reversed } = breakCycles(nodes, rawEdges);
+  const layer = assignLayers(nodes, edges);
+  const { nodes: withDummies, segments } = insertDummies(nodes, edges, layer);
+
+  const depth = Math.max(...layer.values()) + 1;
+  const byLayer = Array.from({ length: depth }, () => []);
+  for (const n of withDummies) byLayer[layer.get(n.id)].push(n.id);
+
+  const { order, crossings } = reduceCrossings(byLayer, segments);
+  const adj = buildAdjacency(segments);
+  const y = assignCoordinates(order, adj, sizeOf);
+
+  const placed = new Map();
+  for (const n of withDummies)
+    placed.set(n.id, { ...n, x: layer.get(n.id) * LAYER_GAP, y: y.get(n.id), layer: layer.get(n.id) });
+
+  const routes = segments.map(({ edge, chain }) => ({
+    edge, points: chain.map(id => ({ x: placed.get(id).x, y: placed.get(id).y })),
+  }));
+
+  const real = [...placed.values()].filter(n => !n.dummy);
+  return {
+    nodes: real, routes, crossings, reversed,
+    width: (depth - 1) * LAYER_GAP + NODE_W,
+    height: Math.max(...[...placed.values()].map(n => n.y)) + sizeOf('') ,
+  };
+}
+
+/* =============================================================
+   DATA
+   ============================================================= */
+
+const NODE_W = 176, NODE_H = 36;
+const MAP_PAD = 26, MAP_GAP = 44;
+
+let STATE = { tasks: [], live: false, project: null, selected: null, chat: [] };
+
+/* Relative, never leading-slash: at this unit's /dashboard that
+   lands on its own root; behind the node's /dashboard/pu/ it
+   lands inside the proxied prefix. One file, both contexts. */
+async function getJSON(path) {
+  const r = await fetch(path, { headers: { accept: 'application/json' } });
+  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
+  return r.json();
+}
+
+async function loadLive() {
+  const [tasks, gate, stats, spend] = await Promise.all([
+    getJSON('tasks?status=pending'), getJSON('gate'),
+    getJSON('stats'), getJSON('spend?days=1'),
+  ]);
+  return { tasks: tasks.tasks ?? [], gate, stats, spend };
+}
+
+function sample() {
+  const t = (uuid, description, kind, project, parent, depends, tags, extra = {}) =>
+    ({ uuid, description, kind, project, parent, depends, tags,
+       status: 'pending', urgency: 8, afk: tags.includes('afk'),
+       active: false, runnable: false, ...extra });
+
+  const tasks = [
+    t('m1', 'Dashboard routing across units', 'map', 'holonic.node', null, [], []),
+    t('a1', 'How does a unit declare a dashboard?', 'research', 'holonic.node', 'm1', [], ['afk'], { runnable: true }),
+    t('a2', 'Decide the panel vocabulary', 'grilling', 'holonic.node', 'm1', ['a1'], []),
+    t('a3', 'Proxy or publish ports?', 'grilling', 'holonic.node', 'm1', ['a1'], []),
+    t('a4', 'Build the spec renderer', 'execution', 'holonic.node', 'm1', ['a2', 'a3'], ['afk']),
+    t('a5', 'Vendor a real fixture', 'execution', 'holonic.node', 'm1', ['a4'], ['afk']),
+
+    t('m2', 'Give pu a dashboard worth opening', 'map', 'holonic.pu', null, [], []),
+    t('b1', 'What can the spec tier express?', 'research', 'holonic.pu', 'm2', [], ['afk'], { runnable: true }),
+    t('b2', 'Which tier for a graph canvas?', 'grilling', 'holonic.pu', 'm2', ['b1'], []),
+    t('b3', 'Lay out dependencies without crossings', 'prototype', 'holonic.pu', 'm2', ['b2'], []),
+    t('b4', 'Ship the page', 'execution', 'holonic.pu', 'm2', ['b3'], ['afk']),
+    t('b5', 'Persist the ask conversation', 'execution', 'holonic.pu', 'm2', ['b2'], ['afk'], { active: true }),
+
+    t('m3', 'Account usage ceilings', 'map', 'holonic.pu', null, [], []),
+    t('c1', 'Read the two rolling windows', 'execution', 'holonic.pu', 'm3', [], ['afk'], { runnable: true }),
+    t('c2', 'Gate before selection', 'execution', 'holonic.pu', 'm3', ['c1'], ['afk']),
+    t('c3', 'Tell the owner on transition', 'task', 'holonic.pu', 'm3', ['c2'], []),
+  ];
+  const gate = {
+    blocked: false, reason: '',
+    cost: { spent_today_usd: 0.42, daily_cap_usd: 5 },
+    windows: [
+      { name: 'five-hour', utilization: 0.31, ceiling: 0.7 },
+      { name: 'seven-day', utilization: 0.58, ceiling: 0.8 },
+    ],
+  };
+  return {
+    tasks, gate,
+    stats: { metrics: { pending_tasks: tasks.length, runnable_now: 3, claimed: 1,
+             blocked: 9, sessions: { runs: 12, cost_usd_total: 1.87 } } },
+    spend: { days: [{ day: 'today', cost_usd: 0.42 }] },
+  };
+}
+
+/* =============================================================
+   RENDER
+   ============================================================= */
+
+const $ = id => document.getElementById(id);
+const svgEl = (tag, attrs = {}) => {
+  const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  return n;
+};
+
+/* Only the frontier gets a colour.
+   The first version painted every blocked task red, which
+   looked informative and told you nothing: in a dependency
+   chain *everything* after the frontier is blocked, so the
+   colour marked "is downstream" -- a fact already carried,
+   better, by the edges. Grey is the default here and a hue has
+   to earn itself by naming something you can act on. Two
+   things qualify: work that can start right now, and work that
+   is unblocked but waiting on a person. Blocked is the resting
+   state of most of the graph and reads as structure. */
+function stateOf(task, byId) {
+  if (task.kind === 'map') return '';
+  const blockers = (task.depends ?? []).filter(d => byId.has(d));
+  if (blockers.length) return '';           // blocked: structure, not alarm
+  return task.afk ? 'ready' : 'human';      // the frontier: actionable
+}
+
+function projects(tasks) {
+  const counts = new Map();
+  for (const t of tasks) {
+    const p = t.project || '(none)';
+    counts.set(p, (counts.get(p) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function renderStrip(d) {
+  const m = d.stats?.metrics ?? {};
+  const today = d.spend?.days?.at(-1)?.cost_usd ?? 0;
+  const cap = d.gate?.cost?.daily_cap_usd;
+  const blocked = d.gate?.blocked;
+  $('strip').innerHTML = `
+    <div class="stat"><b>${num(m.pending_tasks)}</b><span>pending</span></div>
+    <div class="stat on"><b>${num(m.runnable_now)}</b><span>runnable now</span></div>
+    <div class="stat"><b>${num(m.claimed)}</b><span>claimed</span></div>
+    <div class="stat ${escapeText((m.blocked ?? 0) > 0 ? 'warn' : '')}"><b>${num(m.blocked)}</b><span>blocked</span></div>
+    <div class="stat"><b>$${num(today, 2)}</b><span>spent today${escapeText(cap ? ' / $' + num(cap, 2) : '')}</span></div>
+    <div class="stat"><b>${num(m.sessions?.runs)}</b><span>runs recorded</span></div>
+    <div class="grow"></div>
+    <div class="gate">
+      <span class="dot ${escapeText(blocked ? 'warn' : '')}"></span>
+      ${escapeText(blocked ? d.gate.reason : 'gates clear')}
+    </div>`;
+}
+
+/* Values reaching markup pass through exactly one of two
+   functions: escapeText for anything textual, num for anything
+   that should be a figure. Two named doors mean a reviewer --
+   and tests/test_dashboard_page.py -- can check the rule
+   mechanically instead of reasoning about each interpolation. */
+function num(v, dp) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '0';
+  return dp == null ? String(n) : n.toFixed(dp);
+}
+
+function escapeText(s) {
+  const n = document.createElement('span');
+  n.textContent = s ?? '';
+  return n.innerHTML;
+}
+
+function renderScopes(tasks) {
+  const box = $('scopes');
+  box.innerHTML = '';
+  for (const [name, n] of projects(tasks)) {
+    const b = document.createElement('button');
+    b.className = 'scope';
+    b.setAttribute('aria-pressed', String(name === STATE.project));
+    // Built as DOM rather than markup: the count is the one
+    // value here that is a number rather than text, and having
+    // a single absolute rule beats an exception with a comment.
+    b.append(name);
+    const count = document.createElement('span');
+    count.className = 'n';
+    count.textContent = String(n);
+    b.appendChild(count);
+    b.onclick = () => { STATE.project = name; STATE.selected = null; draw(); };
+    box.appendChild(b);
+  }
+}
+
+/* Each map is laid out on its own, then the map boxes are
+   stacked down the project space. Laying every map into one
+   shared layering is what produces a tangle: two unrelated maps
+   have no dependency between them, so nothing constrains their
+   relative order and the crossing heuristic has no signal to
+   work with. Per-map keeps every picture small and readable,
+   which is the whole ask. */
+function buildScene(tasks) {
+  const inProject = tasks.filter(t => (t.project || '(none)') === STATE.project);
+  const byId = new Map(inProject.map(t => [t.uuid, t]));
+  const maps = inProject.filter(t => t.kind === 'map');
+  const loose = inProject.filter(t => t.kind !== 'map' && !t.parent);
+
+  const groups = [...maps.map(m => ({
+    map: m,
+    children: inProject.filter(t => t.parent === m.uuid),
+  }))];
+  if (loose.length) groups.push({ map: null, children: loose });
+
+  let cursorY = 0;
+  const scene = { groups: [], crossings: 0, reversed: 0, width: 0 };
+
+  for (const g of groups) {
+    const nodes = g.children.map(t => ({ id: t.uuid, task: t }));
+    const ids = new Set(nodes.map(n => n.id));
+    const edges = [];
+    for (const t of g.children)
+      for (const dep of t.depends ?? [])
+        if (ids.has(dep)) edges.push({ from: dep, to: t.uuid });
+
+    const laid = layout(nodes, edges, () => NODE_H);
+    const height = Math.max(NODE_H, laid.height) + MAP_PAD + 26;
+    scene.groups.push({
+      ...g, laid, y: cursorY, height,
+      width: Math.max(laid.width + MAP_PAD * 2, 260),
+    });
+    scene.crossings += laid.crossings;
+    scene.reversed += laid.reversed.length;
+    scene.width = Math.max(scene.width, laid.width + MAP_PAD * 2);
+    cursorY += height + MAP_GAP;
+  }
+  scene.height = Math.max(0, cursorY - MAP_GAP);
+  scene.byId = byId;
+  return scene;
+}
+
+/* A route becomes a smooth path through every point its dummy
+   chain reserved. Because a dummy occupied real space in its
+   layer, the curve passes through a gap rather than over a box. */
+function pathOf(points) {
+  const q = points.map((pt, i) => (i === 0 ? { x: pt.x + NODE_W, y: pt.y } : { x: pt.x, y: pt.y }));
+  let d = `M ${q[0].x} ${q[0].y}`;
+  for (let i = 1; i < q.length; i++) {
+    const a = q[i - 1], b = q[i];
+    const mid = (a.x + b.x) / 2;
+    d += ` C ${mid} ${a.y}, ${mid} ${b.y}, ${b.x} ${b.y}`;
+  }
+  return d;
+}
+
+let view = { x: 40, y: 30, k: 1 };
+
+function draw() {
+  const scene = buildScene(STATE.tasks);
+  const g = $('scene');
+  g.innerHTML = '';
+
+  $('xing').textContent = scene.crossings === 0
+    ? 'no crossings'
+    : `${scene.crossings} crossing${scene.crossings === 1 ? '' : 's'}`;
+  if (scene.reversed) $('xing').textContent += ` · ${scene.reversed} cyclic`;
+
+  for (const grp of scene.groups) {
+    const box = svgEl('g', { transform: `translate(0 ${grp.y})` });
+
+    if (grp.map) {
+      box.appendChild(svgEl('rect', {
+        class: 'map-box', x: -8, y: -4,
+        width: grp.width + 16, height: grp.height, rx: 5,
+      }));
+      const label = svgEl('text', { class: 'map-label', x: 4, y: 12 });
+      label.textContent = grp.map.description;
+      label.style.cursor = 'pointer';
+      label.onclick = () => select(grp.map);
+      box.appendChild(label);
+      const meta = svgEl('text', { class: 'map-meta', x: 4, y: 26 });
+      meta.textContent = `${grp.children.length} tickets · ${grp.map.project}`;
+      box.appendChild(meta);
+    }
+
+    const inner = svgEl('g', { transform: `translate(${MAP_PAD} ${MAP_PAD + 12})` });
+
+    for (const r of grp.laid.routes) {
+      const cls = ['edge'];
+      if (r.edge.reversed) cls.push('cycle');
+      const p = svgEl('path', {
+        class: cls.join(' '), d: pathOf(r.points),
+        'data-from': r.edge.from, 'data-to': r.edge.to,
+      });
+      inner.appendChild(p);
+    }
+
+    for (const n of grp.laid.nodes) {
+      const task = n.task;
+      const st = stateOf(task, scene.byId);
+      const cls = ['node', st, task.active ? 'claimed' : ''].filter(Boolean).join(' ');
+      const node = svgEl('g', { class: cls, transform: `translate(${n.x} ${n.y - NODE_H/2})`,
+                                'data-id': task.uuid, tabindex: '0' });
+      node.appendChild(svgEl('rect', { width: NODE_W, height: NODE_H }));
+      const kind = svgEl('text', { class: 'k', x: 8, y: 13 });
+      kind.textContent = task.kind + (task.active ? ' · claimed' : '');
+      node.appendChild(kind);
+      const title = svgEl('text', { x: 8, y: 26 });
+      title.textContent = clip(task.description, 25);
+      node.appendChild(title);
+      node.onclick = () => select(task);
+      node.onmouseenter = () => highlight(task.uuid, scene);
+      node.onmouseleave = () => highlight(null, scene);
+      inner.appendChild(node);
+    }
+
+    box.appendChild(inner);
+    g.appendChild(box);
+  }
+
+  applyView();
+}
+
+function clip(s, n) { return (s ?? '').length > n ? (s ?? '').slice(0, n - 1) + '…' : (s ?? ''); }
+
+/* Hovering a task lights its whole dependency chain in both
+   directions -- everything it waits on, and everything waiting
+   on it -- and dims the rest. Reading a chain by eye is the
+   thing the picture is for; this is what makes it one glance
+   instead of a trace. */
+function highlight(id, scene) {
+  const svg = $('scene');
+  const nodes = [...svg.querySelectorAll('.node')];
+  const edges = [...svg.querySelectorAll('.edge')];
+  if (!id) {
+    for (const n of nodes) n.classList.remove('dim');
+    for (const e of edges) { e.classList.remove('dim', 'lit'); }
+    return;
+  }
+  const keep = new Set([id]);
+  const walk = (from, dir) => {
+    for (const e of edges) {
+      const a = e.dataset.from, b = e.dataset.to;
+      if (dir === 'up' && b === from && !keep.has(a)) { keep.add(a); walk(a, 'up'); }
+      if (dir === 'down' && a === from && !keep.has(b)) { keep.add(b); walk(b, 'down'); }
+    }
+  };
+  walk(id, 'up'); walk(id, 'down');
+  for (const n of nodes) n.classList.toggle('dim', !keep.has(n.dataset.id));
+  for (const e of edges) {
+    const on = keep.has(e.dataset.from) && keep.has(e.dataset.to);
+    e.classList.toggle('lit', on);
+    e.classList.toggle('dim', !on);
+  }
+}
+
+/* =============================================================
+   INSPECTOR
+   ============================================================= */
+
+async function select(task) {
+  STATE.selected = task.uuid;
+  openDock('insp');
+  for (const n of document.querySelectorAll('.node'))
+    n.classList.toggle('sel', n.dataset.id === task.uuid);
+
+  const byId = new Map(STATE.tasks.map(t => [t.uuid, t]));
+  const blockers = (task.depends ?? []).map(d => byId.get(d)).filter(Boolean);
+  const blocking = STATE.tasks.filter(t => (t.depends ?? []).includes(task.uuid));
+  const children = STATE.tasks.filter(t => t.parent === task.uuid);
+  const st = stateOf(task, byId);
+
+  const pane = $('pane-insp');
+  pane.innerHTML = `
+    <div class="insp">
+      <h2>${escapeText(task.description)}</h2>
+      <div class="sub">
+        <span class="pill ${st}">${escapeText(task.kind)}</span>
+        ${task.afk ? '' : '<span class="pill human">needs a person</span>'}
+        ${task.active ? '<span class="pill">claimed</span>' : ''}
+      </div>
+      <dl class="kv">
+        <dt>Project</dt><dd class="mono">${escapeText(task.project || '—')}</dd>
+        <dt>Status</dt><dd>${escapeText(task.status || '—')}</dd>
+        <dt>Urgency</dt><dd class="mono">${num(task.urgency)}</dd>
+        <dt>Runnable</dt><dd>${escapeText(task.runnable ? 'yes' : 'no')}</dd>
+        <dt>Tags</dt><dd class="mono">${escapeText((task.tags ?? []).join(', ') || '—')}</dd>
+        <dt>uuid</dt><dd class="mono" style="font-size:10.5px">${escapeText(task.uuid)}</dd>
+      </dl>
+      <div id="body-slot"></div>
+      ${relList('Blocked by', blockers)}
+      ${relList('Blocking', blocking)}
+      ${relList('Tickets', children)}
+    </div>`;
+
+  for (const b of pane.querySelectorAll('[data-goto]'))
+    b.onclick = () => { const t = byId.get(b.dataset.goto); if (t) select(t); };
+
+  // The body is markdown a person or an agent wrote. Set as
+  // text, never as markup.
+  if (STATE.live) {
+    try {
+      const r = await fetch(`tasks/${encodeURIComponent(task.uuid)}/body`);
+      if (r.ok) {
+        const text = await r.text();
+        if (text.trim()) {
+          const pre = document.createElement('div');
+          pre.className = 'body-md';
+          pre.textContent = text;
+          $('body-slot').appendChild(pre);
+        }
+      }
+    } catch {}
+  }
+}
+
+function relList(title, items) {
+  if (!items.length) return '';
+  return `<div class="rel"><h3>${escapeText(title)} (${num(items.length)})</h3>` +
+    items.map(t => `<button data-goto="${escapeText(t.uuid)}">${escapeText(t.description)}</button>`).join('') +
+    '</div>';
+}
+
+/* =============================================================
+   DOCK, CHAT, VIEW
+   ============================================================= */
+
+function openDock(which) {
+  $('dock').hidden = false;
+  $('grip').hidden = false;
+  $('bubble').hidden = which === 'ask';
+  setTab(which);
+  positionGrip();
+  requestAnimationFrame(fit);
+}
+
+function setTab(which) {
+  const insp = which === 'insp';
+  $('tab-insp').setAttribute('aria-selected', String(insp));
+  $('tab-ask').setAttribute('aria-selected', String(!insp));
+  $('pane-insp').hidden = !insp;
+  $('pane-ask').hidden = insp;
+  if (!insp) { $('ask-n').hidden = true; $('bubble-n').hidden = true; setTimeout(() => $('q').focus(), 0); }
+}
+
+$('tab-insp').onclick = () => setTab('insp');
+$('tab-ask').onclick = () => setTab('ask');
+$('close').onclick = () => { $('dock').hidden = true; $('grip').hidden = true; $('bubble').hidden = false; };
+$('bubble').onclick = () => openDock('ask');
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'a' && e.target.tagName !== 'TEXTAREA') { e.preventDefault(); openDock('ask'); }
+  if (e.key === 'Escape') $('close').click();
+});
+
+/* The dock is resizable because the chat is meant to be lived
+   in, not glanced at. Width is remembered so it survives a
+   reload -- panel-level state that nobody else needs to see,
+   which is what localStorage is for. */
+function positionGrip() {
+  const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--dock'));
+  $('grip').style.right = `${w - 3}px`;
+}
+(() => {
+  const saved = localStorage.getItem('pu.dock.w');
+  if (saved) document.documentElement.style.setProperty('--dock', `${saved}px`);
+  let dragging = false;
+  $('grip').addEventListener('pointerdown', e => {
+    dragging = true; $('grip').classList.add('on');
+    $('grip').setPointerCapture(e.pointerId);
+  });
+  $('grip').addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const w = Math.min(760, Math.max(280, window.innerWidth - e.clientX));
+    document.documentElement.style.setProperty('--dock', `${w}px`);
+    positionGrip();
+  });
+  $('grip').addEventListener('pointerup', e => {
+    dragging = false; $('grip').classList.remove('on');
+    localStorage.setItem('pu.dock.w', parseInt(getComputedStyle(document.documentElement).getPropertyValue('--dock')));
+  });
+})();
+
+function addMsg(who, text, extra = {}) {
+  const log = $('log');
+  if (log.querySelector('.empty')) log.innerHTML = '';
+  const d = document.createElement('div');
+  d.className = `msg ${who}${extra.error ? ' err' : ''}`;
+  const w = document.createElement('div');
+  w.className = 'who';
+  w.textContent = who === 'me' ? 'you' : 'pu';
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;                       // never innerHTML
+  d.append(w, b);
+  if (extra.cost != null) {
+    const c = document.createElement('div');
+    c.className = 'cost';
+    c.textContent = `$${Number(extra.cost).toFixed(4)}`;
+    d.appendChild(c);
+  }
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  STATE.chat.push({ who, text });
+  return d;
+}
+
+/* The chat is the shape of the thing, not the thing.
+   Submitting a question is a POST, and the node's dashboard
+   proxy is GET-only by design -- so a page-tier chat cannot
+   reach `POST /ask` from inside the frame without a route this
+   unit is not supposed to know about. That is a real feature
+   with a real decision behind it, and it is deliberately not
+   half-built here: the panel takes input, renders a turn, and
+   says plainly that nothing was sent and nothing was spent.
+
+   Wiring it up later changes this function and nothing else --
+   `/ask`, its session type and its gates already exist and are
+   tested. */
+function ask() {
+  const q = $('q').value.trim();
+  if (!q) return;
+  $('q').value = '';
+  addMsg('me', q);
+  addMsg('pu',
+    'Not wired up yet — nothing was sent and nothing was spent.\n\n' +
+    'This panel is the layout only. The endpoint behind it (POST /ask, ' +
+    'one session per question, gated and capped) already exists; what is ' +
+    'missing is a way to submit through the node, whose dashboard proxy ' +
+    'only forwards GETs.');
+}
+$('send').onclick = ask;
+$('q').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) ask();
+});
+
+/* pan + zoom */
+function applyView() {
+  $('scene').setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`);
+}
+(() => {
+  const c = $('canvas');
+  let down = null;
+  c.addEventListener('pointerdown', e => {
+    if (e.target.closest('.node') || e.target.closest('button')) return;
+    down = { x: e.clientX - view.x, y: e.clientY - view.y };
+    c.classList.add('dragging');
+  });
+  window.addEventListener('pointermove', e => {
+    if (!down) return;
+    view.x = e.clientX - down.x; view.y = e.clientY - down.y; applyView();
+  });
+  window.addEventListener('pointerup', () => { down = null; c.classList.remove('dragging'); });
+  c.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = c.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const k = Math.min(2.2, Math.max(0.25, view.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+    view.x = mx - (mx - view.x) * (k / view.k);
+    view.y = my - (my - view.y) * (k / view.k);
+    view.k = k; applyView();
+  }, { passive: false });
+  $('zin').onclick = () => { view.k = Math.min(2.2, view.k * 1.2); applyView(); };
+  $('zout').onclick = () => { view.k = Math.max(0.25, view.k / 1.2); applyView(); };
+  $('zfit').onclick = fit;
+})();
+
+function fit() {
+  const box = $('scene').getBBox();
+  const c = $('canvas').getBoundingClientRect();
+  if (!box.width || !box.height) return;
+  const k = Math.min(1.15, Math.min((c.width - 80) / box.width, (c.height - 80) / box.height));
+  view.k = k;
+  view.x = (c.width - box.width * k) / 2 - box.x * k;
+  // Centring vertically strands a short graph in the middle of
+  // a tall empty canvas. Anchor to the top instead and only
+  // centre when the drawing actually fills the height.
+  const drawn = box.height * k;
+  view.y = drawn > c.height - 120 ? (c.height - drawn) / 2 - box.y * k : 28 - box.y * k;
+  applyView();
+}
+
+/* =============================================================
+   BOOT
+   ============================================================= */
+
+(async () => {
+  let d;
+  try {
+    d = await loadLive();
+    STATE.live = true;
+  } catch (e) {
+    d = sample();
+    STATE.live = false;
+    const o = $('offline');
+    o.hidden = false;
+    o.textContent = 'Not connected to a running pu — showing a sample graph. ' +
+                    'The layout below is the real algorithm on example data.';
+  }
+  STATE.tasks = d.tasks;
+  renderStrip(d);
+  const ps = projects(STATE.tasks);
+  STATE.project = ps.length ? ps[0][0] : null;
+  renderScopes(STATE.tasks);
+  if (!STATE.tasks.length) {
+    $('scene').innerHTML = '';
+    document.querySelector('.hint').textContent = 'No pending tasks. Nothing to draw yet.';
+    return;
+  }
+  draw();
+  setTimeout(fit, 0);
+})();
+</script>
