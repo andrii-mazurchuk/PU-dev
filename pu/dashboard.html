@@ -794,7 +794,8 @@ function renderScopes(tasks) {
   for (const [name, n] of projects(tasks)) {
     const b = document.createElement('button');
     b.className = 'scope';
-    b.setAttribute('aria-pressed', String(name === STATE.project));
+    b.type = 'button';
+    b.dataset.project = name;
     // Built as DOM rather than markup: the count is the one
     // value here that is a number rather than text, and having
     // a single absolute rule beats an exception with a comment.
@@ -803,9 +804,35 @@ function renderScopes(tasks) {
     count.className = 'n';
     count.textContent = String(n);
     b.appendChild(count);
-    b.onclick = () => { STATE.project = name; STATE.selected = null; draw(); };
+    b.onclick = () => selectProject(name);
     box.appendChild(b);
   }
+  syncScopes();
+}
+
+/* The pressed state is derived from STATE every time it changes,
+   never written once while building the buttons.
+
+   It was written once, so the strip claimed whichever project was
+   selected at mount was selected forever, while the canvas drew
+   the one you actually clicked. The largest-project default is
+   what made it visible -- before that, the mount-time project and
+   the first tab usually coincided.
+
+   The visual desync is the smaller half. `aria-pressed` is the
+   accessible selected-state, so a screen reader announced the
+   wrong project as pressed permanently, with no other channel to
+   correct it from. */
+function syncScopes() {
+  for (const b of document.querySelectorAll('.scope'))
+    b.setAttribute('aria-pressed', String(b.dataset.project === STATE.project));
+}
+
+function selectProject(name) {
+  STATE.project = name;
+  STATE.selected = null;
+  syncScopes();
+  draw();
 }
 
 /* Each map is laid out on its own, then the map boxes are
