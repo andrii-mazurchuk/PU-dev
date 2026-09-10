@@ -24,3 +24,15 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["pu*"]
+
+# The page-tier dashboard is a runtime asset, not a source file, and
+# setuptools ships no non-`.py` file unless told to. Without this line a
+# non-editable `pip install .` omits `dashboard.html` and `GET /dashboard`
+# answers 404 -- which the node renders as "this unit has no dashboard"
+# rather than as a packaging error, so nothing anywhere says it is wrong.
+#
+# It does not bite in the container, where units are git-cloned whole
+# rather than installed. That is a property of the Dockerfile, not of this
+# unit, and it is not what a future deployment is obliged to do.
+[tool.setuptools.package-data]
+pu = ["dashboard.html"]

@@ -146,6 +146,48 @@ def test_untrusted_text_is_never_set_as_markup(html):
             )
 
 
+# -- the page has to actually ship ---------------------------------------
+
+
+def test_the_page_is_declared_as_package_data():
+    """`UNIT_STANDARDS.md`, page-tier requirements: the page must be
+    present at runtime however this unit is installed, and this unit is
+    responsible for proving it.
+
+    setuptools ships no non-`.py` file unless told to, so without a
+    `package-data` entry a non-editable `pip install .` omits the page
+    and `GET /dashboard` answers 404 -- which the node renders as "this
+    unit has no dashboard" rather than as a packaging error. Nothing on
+    screen says it is wrong.
+
+    **What this deliberately does not do is assert the file exists in
+    the checkout.** That is true whatever the packaging says, so it
+    proves nothing -- it is exactly the check that would pass while the
+    installed artefact was broken.
+    """
+    config = (UNIT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[tool.setuptools.package-data]" in config, (
+        "no package-data section; a built wheel would omit dashboard.html"
+    )
+    section = config.split("[tool.setuptools.package-data]", 1)[1]
+    # Only up to the next section header.
+    section = section.split("\n[", 1)[0]
+    assert "dashboard.html" in section, section
+
+
+def test_the_server_finds_the_page_relative_to_itself():
+    """Resolved against the module, never the working directory.
+
+    The gateway starts this unit with a cwd of its own choosing, and an
+    installed package sits nowhere near the repo -- so a repo-relative
+    path finds the page in development and nothing in production, which
+    is the worst possible split.
+    """
+    assert server.DASHBOARD_HTML.is_absolute()
+    assert server.DASHBOARD_HTML.parent == Path(server.__file__).resolve().parent
+    assert server.DASHBOARD_HTML.read_text(encoding="utf-8").strip()
+
+
 # -- over the wire --------------------------------------------------------
 
 
