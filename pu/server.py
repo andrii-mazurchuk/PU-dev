@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from pu import bodies, records, service, sops, taskstore
+from pu import bodies, docs, records, service, sops, taskstore
 
 UNIT_NAME = "pu"
 PROMPT_TIERS = ("default", "reference")
@@ -204,6 +204,24 @@ TOOLS = [
             "required": ["source", "message"],
         },
     },
+    {
+        "name": "list_docs",
+        "description": "Index of this unit's own documentation: name, title, summary and size, so a caller can decide what not to fetch.",
+        "method": "GET",
+        "path": "/docs",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_doc",
+        "description": "One of this unit's documents, as Markdown. Names come from list_docs.",
+        "method": "GET",
+        "path": "/docs/{name}",
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
 ]
 
 
@@ -301,6 +319,19 @@ def make_handler(
 
                 if parts == ["tools"]:
                     return self._json(200, {"unit": UNIT_NAME, "tools": TOOLS})
+
+                if parts == ["docs"]:
+                    return self._json(
+                        200, {"unit": UNIT_NAME, "docs": docs.build_index()}
+                    )
+
+                if len(parts) == 2 and parts[0] == "docs":
+                    # Looked up in the derived index, never joined onto a
+                    # path -- so "../../units.yaml" is simply not a key.
+                    text = docs.read_doc(parts[1])
+                    if text is None:
+                        return self._not_found()
+                    return self._text(200, text, "text/markdown; charset=utf-8")
 
                 if len(parts) == 2 and parts[0] == "prompts":
                     tier = parts[1]

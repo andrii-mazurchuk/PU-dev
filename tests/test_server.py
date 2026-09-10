@@ -317,3 +317,27 @@ def test_unknown_route_is_404(base_url):
     with pytest.raises(HTTPError) as excinfo:
         get(f"{base_url}/nope")
     assert excinfo.value.code == 404
+
+
+def test_docs_index_is_derived_from_the_files_this_repo_ships(base_url):
+    status, payload = get(f"{base_url}/docs")
+    assert status == 200
+    assert payload["unit"] == "pu"
+    names = [d["name"] for d in payload["docs"]]
+    # Both roots: UNIT_CONTRACT.md at the top, docs/OPERATIONS.md inside.
+    assert "unit_contract" in names and "operations" in names
+    entry = next(d for d in payload["docs"] if d["name"] == "operations")
+    assert entry["bytes"] and entry["title"]
+
+
+def test_get_doc_returns_markdown(base_url):
+    status, body = get(f"{base_url}/docs/operations")
+    assert status == 200
+    assert isinstance(body, str) and body.startswith("#")
+
+
+def test_get_doc_refuses_anything_not_in_the_index(base_url):
+    for name in ["nope", "..%2F..%2Funits.yaml", "pyproject"]:
+        with pytest.raises(HTTPError) as excinfo:
+            get(f"{base_url}/docs/{name}")
+        assert excinfo.value.code == 404
