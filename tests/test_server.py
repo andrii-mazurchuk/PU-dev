@@ -341,3 +341,14 @@ def test_get_doc_refuses_anything_not_in_the_index(base_url):
         with pytest.raises(HTTPError) as excinfo:
             get(f"{base_url}/docs/{name}")
         assert excinfo.value.code == 404
+
+
+def test_every_declared_prompt_tier_ships_a_file():
+    """A tier in PROMPT_TIERS with no file behind it serves a 404 to
+    whoever asks for it -- and the caller that asks is another unit, so
+    the failure is silent and remote. AU reads the insights tier."""
+    from pu.server import PROMPT_TIERS
+
+    prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
+    missing = [t for t in PROMPT_TIERS if not (prompts_dir / f"{t}.md").is_file()]
+    assert not missing, f"declared but not shipped: {missing}"

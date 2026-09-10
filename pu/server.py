@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from pu import bodies, docs, records, service, sops, taskstore
 
 UNIT_NAME = "pu"
-PROMPT_TIERS = ("default", "reference")
+PROMPT_TIERS = ("default", "reference", "insights")
 
 # Hand-written, never generated from the routing table: every entry needs a
 # description written for a model to read. Excludes /health and /tools.
