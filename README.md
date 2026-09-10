@@ -120,11 +120,11 @@ panels; it draws no navigation, links no peer, and renders no other
 unit's data. Six visible pages -- overview, queue, tasks, maps, sessions,
 spend -- plus two hidden ones reached by drilling into a row.
 
-**The spec is built per request, not stored as a file.** A meter's
-ceiling is a literal in the spec and the account-usage ceilings come from
-the environment the gateway injected, so a static file would carry `70`
-and `80` hard-coded and draw a line the gate does not enforce the day a
-manifest changed one.
+**The spec computes nothing.** It names what to show; anything that has
+to be current lives in the data a panel fetches. An earlier draft baked
+the account-usage ceilings into the meters because a meter carried one
+ceiling for a whole panel -- `ceiling_field` removed the need, and the
+ceiling now travels with the reading it belongs to.
 
 The overview's **gate panel** is the point of the whole thing: "why has
 nothing run since this morning" is the question this unit is asked most,

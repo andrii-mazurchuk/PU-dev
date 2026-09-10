@@ -12,13 +12,15 @@ in this file:
   node fetches it through the read-only proxy it already owns, so a spec
   cannot make the node call anywhere else.
 
-**Why this is built rather than stored as a JSON file.** Two values in
-it are not constants: the account-usage ceilings come from the
-environment the gateway injected, and a meter's `ceiling` is a literal
-in the spec rather than something read from the data. A static file
-would carry 70 and 80 as hard-coded numbers and drift silently the day
-a manifest changed one -- the panel would then draw a line the gate does
-not enforce, which is worse than drawing no line.
+**Nothing in here is computed, and that is the point.** An earlier draft
+built the meters' ceilings into the spec from the environment, because a
+meter carried one ceiling for a whole panel and the two account-usage
+windows have different ones. `ceiling_field` removed that -- the ceiling
+now travels with the row it belongs to, read from `/gate` like the
+reading beside it -- so the spec went back to being a description of what
+to show rather than a snapshot of what was true when it was asked for.
+It should stay that way: a value that has to be current belongs in the
+data a panel fetches, never in the spec that names it.
 
 **Read-only.** Every source here is a GET, and the one panel that causes
 anything to happen -- `ask` -- does it by naming a tool in this unit's
@@ -63,7 +65,7 @@ RUN_DETAIL: dict[str, Any] = {
 }
 
 
-def _overview(ceilings: dict[str, float]) -> dict[str, Any]:
+def _overview() -> dict[str, Any]:
     return {
         "id": "overview",
         "title": "Overview",
@@ -98,32 +100,21 @@ def _overview(ceilings: dict[str, float]) -> dict[str, Any]:
                     {"key": "note", "label": ""},
                 ],
             },
-            # Two panels rather than one because the windows have
-            # separate ceilings and a meter panel carries a single
-            # `ceiling` for all its rows. Drawing both against the higher
-            # of the two would show the five-hour window as clear while
-            # the gate was blocking on it.
             {
+                # One panel, two rows, a ceiling each. The windows are
+                # separate limits rather than an average, and a row drawn
+                # against the other's ceiling reads clear while the gate
+                # is blocking on it.
                 "kind": "meters",
-                "title": "5-hour window",
-                "note": f"ceiling {ceilings.get('five_hour', 0):.0f}%",
-                "span": 3,
+                "title": "Account usage",
+                "note": "each window against its own ceiling",
+                "span": 6,
                 "source": "gate",
-                "path": "five_hour",
+                "path": "windows",
                 "x": "name",
-                "y": "percent",
-                "ceiling": ceilings.get("five_hour", 70.0),
-            },
-            {
-                "kind": "meters",
-                "title": "7-day window",
-                "note": f"ceiling {ceilings.get('seven_day', 0):.0f}%",
-                "span": 3,
-                "source": "gate",
-                "path": "seven_day",
-                "x": "name",
-                "y": "percent",
-                "ceiling": ceilings.get("seven_day", 80.0),
+                "y": "utilization",
+                "ceiling_field": "ceiling",
+                "format": "percent",
             },
             {
                 # Submit is a tool call the node dispatches through the
@@ -223,16 +214,38 @@ TASK_PAGE: dict[str, Any] = {
     "hidden": True,
     "panels": [
         {
-            "kind": "rows",
+            "kind": "record",
             "title": "Task",
-            "span": 12,
-            "source": "panels/task/{uuid}",
-            "path": "fields",
+            "span": 6,
+            "source": "tasks/{uuid}",
             "columns": [
-                {"key": "key", "label": "Field"},
-                {"key": "value", "label": "Value"},
-                {"key": "note", "label": ""},
+                {"key": "description", "label": "Description"},
+                {"key": "kind", "label": "Kind", "format": "pill"},
+                {"key": "session_type", "label": "Session type"},
+                {"key": "status", "label": "Status"},
+                {"key": "project", "label": "Project"},
+                {"key": "urgency", "label": "Urgency"},
+                {"key": "runnable", "label": "Runnable"},
+                {"key": "active", "label": "Claimed"},
+                {"key": "afk", "label": "afk"},
+                {"key": "tags", "label": "Tags"},
+                {"key": "depends", "label": "Blocked by"},
+                {"key": "parent", "label": "Parent"},
+                {"key": "url", "label": "URL"},
+                {"key": "repo", "label": "Repo"},
+                {"key": "uuid", "label": "uuid"},
             ],
+        },
+        {
+            # The body is the content, for a wayfinder map especially.
+            # Served as text/markdown and rendered as escaped
+            # preformatted text -- never parsed, because it was written
+            # by whoever could reach this unit.
+            "kind": "text",
+            "title": "Body",
+            "note": "as written; not rendered as markup",
+            "span": 6,
+            "source": "tasks/{uuid}/body",
         },
         {
             "kind": "table",
@@ -324,25 +337,34 @@ RUN_PAGE: dict[str, Any] = {
     "hidden": True,
     "panels": [
         {
-            "kind": "rows",
+            "kind": "record",
             "title": "Run",
-            "span": 12,
-            "source": "panels/run/{uuid}/{run_id}",
-            "path": "fields",
+            "span": 6,
+            "source": "sessions/{uuid}/{run_id}",
             "columns": [
-                {"key": "key", "label": "Field"},
-                {"key": "value", "label": "Value"},
-                {"key": "note", "label": ""},
+                {"key": "recorded_at", "label": "When", "format": "time"},
+                {"key": "session_type", "label": "Session type", "format": "pill"},
+                {"key": "outcome", "label": "Outcome", "format": "pill"},
+                {"key": "detail", "label": "Detail"},
+                {"key": "cost_usd", "label": "Cost"},
+                {"key": "duration_ms", "label": "Duration, ms"},
+                {"key": "num_turns", "label": "Turns"},
+                {"key": "exit_code", "label": "Exit code"},
+                {"key": "models_used", "label": "Models"},
+                # The ordered sequence, not counts -- which is the
+                # question the field exists to answer.
+                {"key": "tool_calls", "label": "Tool calls"},
+                {"key": "permission_denials", "label": "Denied"},
+                {"key": "task_uuid", "label": "Task"},
             ],
         },
         {
-            "kind": "table",
-            "title": "Tool calls",
-            "note": "what the session actually reached for",
-            "span": 12,
-            "source": "panels/run/{uuid}/{run_id}",
-            "path": "tool_calls",
-            "columns": [{"key": "tool", "label": "Tool"}],
+            "kind": "text",
+            "title": "Prompt",
+            "note": "what this session was actually given",
+            "span": 6,
+            "source": "sessions/{uuid}/{run_id}",
+            "field": "prompt",
         },
     ],
 }
@@ -376,10 +398,13 @@ SPEND_PAGE: dict[str, Any] = {
 }
 
 
-def spec(ceilings: dict[str, float]) -> dict[str, Any]:
-    """The whole dashboard. `ceilings` is percentages, as `gate_state`
-    reports them, so the meters draw the line the gate actually
-    enforces."""
+def spec() -> dict[str, Any]:
+    """The whole dashboard.
+
+    A fresh dict each call rather than a module constant: this is handed
+    straight to a JSON encoder, and a shared mutable structure that
+    everything serialises is one edit away from a bug nobody looks for.
+    """
     return {
         "unit": UNIT,
         "title": "Processing unit",
@@ -390,7 +415,7 @@ def spec(ceilings: dict[str, float]) -> dict[str, Any]:
             "across all of them is one urgency calculation, not a ladder."
         ),
         "pages": [
-            _overview(ceilings),
+            _overview(),
             QUEUE_PAGE,
             TASKS_PAGE,
             TASK_PAGE,
@@ -399,85 +424,4 @@ def spec(ceilings: dict[str, float]) -> dict[str, Any]:
             RUN_PAGE,
             SPEND_PAGE,
         ],
-    }
-
-
-# -- presentation payloads for the two detail pages ----------------------
-#
-# These exist because no panel kind renders a field of a fetched object.
-# `kpis` reads dotted paths out of /stats only, and `rows` needs an array
-# -- so a detail view of one record has nowhere to put it. Rather than
-# reshape the real API for the dashboard's convenience, the shaping lives
-# here and is served under its own prefix, clearly marked as being for
-# this and nothing else.
-#
-# If the node gains a way to read a field of a named source, both of
-# these collapse to nothing and should be deleted rather than kept.
-
-
-def _one_line(text: str, limit: int = 400) -> str:
-    """A body flattened to fit a table cell.
-
-    Nothing renders markdown here, so a 5KB wayfinder map in a `value`
-    column would be a wall. The full text is a GET away at
-    `tasks/<uuid>/body`, which is where anyone who wants it should go.
-    """
-    flat = " ".join(text.split())
-    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
-
-
-def task_fields(task: dict[str, Any]) -> dict[str, Any]:
-    """One task as label/value/note rows."""
-    body = task.get("body")
-    fields = [
-        {"key": "Description", "value": task.get("description") or "", "note": ""},
-        {"key": "Kind", "value": task.get("kind") or "unset",
-         "note": f"session type: {task.get('session_type') or 'none -- pu cannot run this'}"},
-        {"key": "Status", "value": task.get("status") or "", "note": ""},
-        {"key": "Project", "value": task.get("project") or "—", "note": ""},
-        {"key": "Urgency", "value": str(task.get("urgency") or 0), "note": ""},
-        {"key": "Runnable", "value": "yes" if task.get("runnable") else "no",
-         "note": "afk tag, and a kind with a session type behind it"},
-        {"key": "Claimed", "value": "yes" if task.get("active") else "no", "note": ""},
-        {"key": "Tags", "value": ", ".join(task.get("tags") or []) or "—",
-         "note": "tags decide which procedures are mandatory"},
-        {"key": "Blocked by", "value": ", ".join(task.get("depends") or []) or "—",
-         "note": ""},
-        {"key": "Parent", "value": task.get("parent") or "—", "note": ""},
-        {"key": "URL", "value": task.get("url") or "—",
-         "note": "external authority; empty means this record is the authority"},
-        {"key": "Repo", "value": task.get("repo") or "—", "note": ""},
-        {"key": "uuid", "value": task.get("uuid") or "", "note": ""},
-    ]
-    if body:
-        fields.append({
-            "key": "Body",
-            "value": _one_line(body),
-            "note": "truncated; the whole of it is at tasks/<uuid>/body",
-        })
-    return {"fields": fields}
-
-
-def run_fields(run: dict[str, Any]) -> dict[str, Any]:
-    """One session run as label/value/note rows, plus its tool calls."""
-    denials = run.get("permission_denials") or []
-    fields = [
-        {"key": "Recorded", "value": run.get("recorded_at") or "", "note": ""},
-        {"key": "Session type", "value": run.get("session_type") or "", "note": ""},
-        {"key": "Outcome", "value": run.get("outcome") or "", "note": run.get("detail") or ""},
-        {"key": "Cost", "value": f"${float(run.get('cost_usd') or 0):.4f}", "note": ""},
-        {"key": "Duration", "value": f"{int(run.get('duration_ms') or 0) / 1000:.1f}s", "note": ""},
-        {"key": "Turns", "value": str(run.get("num_turns") or 0), "note": ""},
-        {"key": "Exit code", "value": str(run.get("exit_code")),
-         "note": "error" if run.get("is_error") else ""},
-        {"key": "Models", "value": ", ".join(run.get("models_used") or []) or "—", "note": ""},
-        {"key": "Permission denials", "value": str(len(denials)),
-         "note": ", ".join(str(d) for d in denials[:5]) if denials else "none"},
-        {"key": "Task", "value": run.get("task_uuid") or "", "note": ""},
-        {"key": "Prompt", "value": _one_line(run.get("prompt") or ""),
-         "note": "truncated; the whole of it is on disk with the raw stream"},
-    ]
-    return {
-        "fields": fields,
-        "tool_calls": [{"tool": str(name)} for name in (run.get("tool_calls") or [])],
     }

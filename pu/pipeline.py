@@ -145,17 +145,27 @@ def gate_state(
     ceilings = usage_gate.ceilings_from_env()
     usage_blocked = usage_gate.check_usage_gate(windows, ceilings)
 
-    def window_rows(name: str) -> list[dict[str, Any]]:
-        """One window as a meter row. Percentages rather than fractions:
-        the panel renders the number as it is given, and `0.74 / 0.7`
-        reads as nothing at all."""
-        reading = windows.get(name)
-        if not isinstance(reading, dict):
-            return []
-        utilization = reading.get("utilization")
-        if not isinstance(utilization, (int, float)):
-            return []
-        return [{"name": name.replace("_", "-"), "percent": round(utilization * 100, 1)}]
+    def window_rows() -> list[dict[str, Any]]:
+        """The windows as meter rows, each carrying **its own** ceiling.
+
+        They are separate limits, not an average, and a row drawn against
+        the other one's ceiling reads "clear" while the gate is actively
+        blocking on it -- a gauge contradicting the thing it reports.
+        """
+        rows: list[dict[str, Any]] = []
+        for name in usage_gate.WINDOWS:
+            reading = windows.get(name)
+            if not isinstance(reading, dict):
+                continue
+            utilization = reading.get("utilization")
+            if not isinstance(utilization, (int, float)):
+                continue
+            rows.append({
+                "name": name.replace("_", "-"),
+                "utilization": utilization,
+                "ceiling": ceilings.get(name),
+            })
+        return rows
 
     cap = policy.get("daily_cost_cap_usd")
     spent = session_store.cost_since(today)
@@ -190,9 +200,8 @@ def gate_state(
             "daily_cap_usd": policy.get("daily_cost_cap_usd"),
             "blocked": bool(cost_blocked),
         },
-        "five_hour": window_rows(usage_gate.FIVE_HOUR),
-        "seven_day": window_rows(usage_gate.SEVEN_DAY),
-        "ceilings": {name: round(value * 100, 1) for name, value in ceilings.items()},
+        "windows": window_rows(),
+        "ceilings": dict(ceilings),
     }
 
 

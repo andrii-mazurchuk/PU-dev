@@ -370,10 +370,14 @@ spend money.
 { "blocked": false, "reason": "",
   "summary": [ { "key": "Sessions", "value": "clear", "note": "..." } ],
   "cost": { "spent_today_usd": 0.42, "daily_cap_usd": 5.0, "blocked": false },
-  "five_hour": [ { "name": "five-hour", "percent": 41.0 } ],
-  "seven_day": [ { "name": "seven-day", "percent": 12.0 } ],
-  "ceilings": { "five_hour": 70.0, "seven_day": 80.0 } }
+  "windows": [ { "name": "five-hour", "utilization": 0.41, "ceiling": 0.70 },
+               { "name": "seven-day", "utilization": 0.12, "ceiling": 0.80 } ],
+  "ceilings": { "five_hour": 0.70, "seven_day": 0.80 } }
 ```
+
+Each window carries **its own** ceiling, because they are separate
+limits rather than an average -- a meter drawn against the other one's
+limit reads "clear" while the gate is actively blocking on it.
 
 Both readings degrade to "nothing is blocking" when absent, which is what
 keeps the gates from latching shut -- see `pu/usage_gate.py`.
@@ -436,14 +440,3 @@ and changes no task's state.
 { "ran": false, "reason": "nothing runnable", "task_uuid": null,
   "session_type": null, "outcome": null, "detail": "", "cost_usd": null }
 ```
-
-## `GET /panels/task/{uuid}`, `GET /panels/run/{uuid}/{run_id}`
-
-Presentation payloads for the dashboard's two detail pages, and for
-nothing else.
-
-They exist because no panel kind renders a *field* of a fetched object:
-`kpis` reads dotted paths out of `/stats` only, and `rows` needs an
-array. Reshaping the real API to suit the dashboard would have been
-worse. If the node gains a way to read a field of a named source, both of
-these collapse to nothing and should be deleted rather than kept.

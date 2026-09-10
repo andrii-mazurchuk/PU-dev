@@ -30,7 +30,7 @@ UNIT_ROOT = Path(__file__).resolve().parent.parent
 # The node's closed vocabulary. A kind outside this renders as an
 # "unsupported panel" note rather than failing -- which is the right
 # behaviour on their side and a bug on ours.
-KNOWN_KINDS = {"kpis", "table", "bars", "rows", "meters", "text", "ask"}
+KNOWN_KINDS = {"kpis", "table", "record", "bars", "rows", "meters", "text", "ask"}
 
 # `ask` is the one kind here that a node may not have learned yet -- it
 # was added to the standard for this unit. An older node renders it as an
@@ -66,7 +66,7 @@ def _is_safe_source(source: str) -> bool:
 
 @pytest.fixture
 def spec():
-    return dashboard.spec({"five_hour": 70.0, "seven_day": 80.0})
+    return dashboard.spec()
 
 
 def _panels(spec):
@@ -148,6 +148,26 @@ def test_tables_declare_columns_and_a_path(spec):
             assert panel.get("path"), panel.get("title")
 
 
+def test_record_panels_read_an_object_not_an_array(spec):
+    """`record` renders one object. A `path` on it would be a leftover
+    from the array-shaped panel it replaced."""
+    for _, panel in _panels(spec):
+        if panel["kind"] == "record":
+            assert panel.get("source"), panel.get("title")
+            assert "path" not in panel, panel.get("title")
+
+
+def test_no_panel_reads_a_document_without_saying_which_part(spec):
+    """A source with no `field` on a panel that wants one value renders
+    the whole document -- the bug that put two presentation endpoints in
+    this unit before `field` existed."""
+    for _, panel in _panels(spec):
+        for item in panel.get("items", []):
+            source = item.get("source") or ""
+            if source and not source.startswith(STATS_PREFIX):
+                assert item.get("field"), item.get("label")
+
+
 def test_series_panels_name_their_value_field(spec):
     for _, panel in _panels(spec):
         if panel["kind"] in {"bars", "meters"}:
@@ -155,15 +175,22 @@ def test_series_panels_name_their_value_field(spec):
             assert panel.get("path"), panel.get("title")
 
 
-def test_meters_carry_the_ceiling_the_gate_enforces():
-    """The reason this spec is built and not stored. A static file would
-    hard-code the ceilings and draw a line the gate does not enforce the
-    day a manifest changed one."""
-    built = dashboard.spec({"five_hour": 55.0, "seven_day": 91.0})
-    ceilings = [
-        panel["ceiling"] for _, panel in _panels(built) if panel["kind"] == "meters"
-    ]
-    assert ceilings == [55.0, 91.0]
+def test_meters_take_their_ceiling_from_the_row(spec):
+    """The two account-usage windows are separate limits, not an
+    average. Under one panel-wide ceiling the five-hour window read
+    "clear" while the gate was actively blocking on it."""
+    meters = [panel for _, panel in _panels(spec) if panel["kind"] == "meters"]
+    assert meters, "the gate panel is the reason this dashboard exists"
+    for panel in meters:
+        assert panel.get("ceiling_field"), panel.get("title")
+        assert "ceiling" not in panel, "a panel-wide ceiling would win over nothing"
+
+
+def test_the_spec_carries_no_reading_of_its_own(spec):
+    """A spec describes what to show. Anything that has to be current
+    belongs in the data a panel fetches -- otherwise it is a snapshot of
+    what was true when the spec was asked for."""
+    assert dashboard.spec() == spec
 
 
 def test_spec_is_json(spec):
@@ -190,6 +217,21 @@ def test_only_the_ask_panel_causes_anything_to_happen(spec):
         panel["kind"] for _, panel in _panels(spec) if panel.get("tool")
     }
     assert causing <= EXTENSION_KINDS
+
+
+def test_the_published_fixture_matches_the_spec():
+    """`docs/dashboard-spec.example.json` is a copy of generated data,
+    sent to the node so its renderer can be checked against a real spec
+    rather than one it wrote itself. A copy drifts; this is the guard.
+
+    Regenerate with:
+        python -c "from pu import dashboard, json; ..."  -- or just
+        copy what `GET /dashboard` returns.
+    """
+    fixture = json.loads(
+        (UNIT_ROOT / "docs" / "dashboard-spec.example.json").read_text(encoding="utf-8")
+    )
+    assert fixture == dashboard.spec()
 
 
 # -- the reads the panels make -------------------------------------------
@@ -272,8 +314,11 @@ def test_gate_state_reads_the_usage_windows(tmp_path, session_store, monkeypatch
     )
     state = pipeline.gate_state(session_store, tmp_path, tmp_path / "absent.json")
     assert state["blocked"] is True
-    assert state["five_hour"] == [{"name": "five-hour", "percent": 90.0}]
-    assert state["ceilings"]["five_hour"] == 50.0
+    # The ceiling travels with the row, so a meter can draw each window
+    # against its own limit rather than against a shared one.
+    assert state["windows"] == [
+        {"name": "five-hour", "utilization": 0.9, "ceiling": 0.5}
+    ]
 
 
 def test_gate_state_survives_an_absent_usage_file(tmp_path, session_store):
@@ -281,42 +326,8 @@ def test_gate_state_survives_an_absent_usage_file(tmp_path, session_store):
     session knows nothing, and blocking on that would mean it could never
     run the first."""
     state = pipeline.gate_state(session_store, tmp_path, tmp_path / "absent.json")
-    assert state["five_hour"] == []
+    assert state["windows"] == []
     assert state["blocked"] is False
-
-
-# -- the presentation payloads -------------------------------------------
-
-
-def test_task_fields_flattens_a_body_into_one_line():
-    fields = dashboard.task_fields({
-        "uuid": "abc", "description": "chart the thing",
-        "body": "# A map\n\nwith\nseveral\nlines", "tags": ["afk"],
-    })
-    body = [f for f in fields["fields"] if f["key"] == "Body"][0]
-    assert "\n" not in body["value"]
-    assert "tasks/<uuid>/body" in body["note"]
-
-
-def test_task_fields_omits_the_body_row_when_there_is_none():
-    fields = dashboard.task_fields({"uuid": "abc", "description": "x"})
-    assert not [f for f in fields["fields"] if f["key"] == "Body"]
-
-
-def test_run_fields_lists_tool_calls_as_rows():
-    payload = dashboard.run_fields({
-        "recorded_at": "2026-01-01T00:00:00Z", "cost_usd": 0.5,
-        "tool_calls": ["Read", "Edit"], "permission_denials": [],
-    })
-    assert payload["tool_calls"] == [{"tool": "Read"}, {"tool": "Edit"}]
-
-
-def test_run_fields_survives_a_torn_record():
-    """A result.json written by a process that died mid-write still has
-    to render -- this is the view someone opens *because* a run failed."""
-    payload = dashboard.run_fields({})
-    assert payload["fields"]
-    assert payload["tool_calls"] == []
 
 
 # -- over the wire -------------------------------------------------------
@@ -390,6 +401,14 @@ def test_asking_over_the_wire_returns_an_id_and_polls(dash_url, monkeypatch):
     status, record = get(f"{dash_url}/ask/{submitted['id']}")
     assert status == 200
     assert record["status"] in {"running", "done"}
+
+
+def test_a_windows_meter_has_both_a_reading_and_its_ceiling(dash_url):
+    """The meter panel reads `gate`; if either half of a row went
+    missing the gauge would draw against nothing."""
+    _, gate = get(f"{dash_url}/gate")
+    for row in gate["windows"]:
+        assert "utilization" in row and "ceiling" in row, row
 
 
 def test_every_stats_source_in_the_spec_resolves(dash_url):

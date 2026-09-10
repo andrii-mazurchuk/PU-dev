@@ -364,8 +364,7 @@ def make_handler(
                     # The spec tier. Built per request rather than stored,
                     # so the meters carry the ceilings this process was
                     # actually given -- see dashboard.py.
-                    ceilings = self._gate().get("ceilings", {})
-                    return self._json(200, dashboard.spec(ceilings))
+                    return self._json(200, dashboard.spec())
 
                 if parts == ["gate"]:
                     return self._json(200, self._gate())
@@ -394,17 +393,6 @@ def make_handler(
                     found = session_store.run(parts[1], parts[2])
                     return self._json(200, found) if found else self._not_found()
 
-                # Presentation payloads for the dashboard's two detail
-                # pages. Under their own prefix because that is what they
-                # are -- no panel kind can render a field of a fetched
-                # object, so the shaping has to happen somewhere, and
-                # reshaping the real API for it would have been worse.
-                if len(parts) == 3 and parts[:2] == ["panels", "task"]:
-                    found = service.get_task(store, body_store, parts[2])
-                    if found is None:
-                        return self._not_found()
-                    return self._json(200, dashboard.task_fields(found))
-
                 if len(parts) == 2 and parts[0] == "ask":
                     # The poll half of the ask panel. A GET, so it comes
                     # through the node's read proxy like every other
@@ -413,14 +401,6 @@ def make_handler(
                         return self._not_found()
                     found = ask_store.read(parts[1])
                     return self._json(200, found) if found else self._not_found()
-
-                if len(parts) == 4 and parts[:2] == ["panels", "run"]:
-                    if session_store is None:
-                        return self._not_found()
-                    found = session_store.run(parts[2], parts[3])
-                    if found is None:
-                        return self._not_found()
-                    return self._json(200, dashboard.run_fields(found))
 
                 if parts == ["tools"]:
                     return self._json(200, {"unit": UNIT_NAME, "tools": TOOLS})
