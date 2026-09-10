@@ -126,6 +126,19 @@ def _overview(ceilings: dict[str, float]) -> dict[str, Any]:
                 "ceiling": ceilings.get("seven_day", 80.0),
             },
             {
+                # Submit is a tool call the node dispatches through the
+                # bridge; the poll is a GET through the read proxy. Two
+                # doors that already exist, no third.
+                "kind": "ask",
+                "title": "Ask pu",
+                "note": "each question starts a session and spends",
+                "span": 12,
+                "tool": "ask_unit",
+                "poll": "ask/{id}",
+                "placeholder": "How is the queue looking? Why has nothing run today?",
+                "timeout_seconds": 180,
+            },
+            {
                 "kind": "table",
                 "title": "Recent sessions",
                 "span": 12,

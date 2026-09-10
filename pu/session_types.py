@@ -54,6 +54,20 @@ ALLOWED_TOOLS: dict[str, str] = {
     "execution": f"Bash,Read,Write,Edit,{LOOKUP}",
 }
 
+# `ask` is absent from all three maps below, and from
+# records.SESSION_TYPE_FOR_KIND, and every one of those absences is
+# deliberate rather than pending.
+#
+# It answers a question typed into the dashboard from an unauthenticated
+# origin, using state assembled into its prompt. It gets **no tools**:
+# sessions this unit spawns have no way back into it, and this one needs
+# nothing the prompt does not already carry. Granting it `Read` would buy
+# nothing and would hand a session driven by untrusted text a filesystem.
+#
+# Having no kind mapped to it is what keeps it off the queue entirely --
+# there is no record anyone can write that causes an ask session to run.
+# The only path to one is `POST /ask`.
+
 # Absent means "whatever the CLI defaults to". Only set a model where the
 # work genuinely differs in reasoning load.
 MODELS: dict[str, str] = {}

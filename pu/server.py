@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from pu import bodies, dashboard, docs, pipeline, records, service, sops, taskstore
+from pu import ask, bodies, dashboard, docs, pipeline, records, service, sops, taskstore
 
 UNIT_NAME = "pu"
 PROMPT_TIERS = ("default", "reference", "insights")
@@ -205,6 +205,33 @@ TOOLS = [
         },
     },
     {
+        # Declared, and therefore callable by every peer and every MCP
+        # client that can reach the bridge -- not only by the dashboard
+        # panel that wanted it. That widening was decided on its own
+        # merits; see DECISIONS.md.
+        "name": "ask_unit",
+        "description": "Ask this unit a question about its own queue, gates and recent sessions. Starts a session and returns at once with an id; poll GET /ask/{id} for the answer. Single-turn: each question carries its own context and knows nothing of the last. Spends money, and is refused rather than queued when the cost or account-usage gates are blocking.",
+        "method": "POST",
+        "path": "/ask",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "a question about this unit's current state",
+                },
+            },
+            "required": ["question"],
+        },
+    },
+    {
+        "name": "run_tick",
+        "description": "Do at most one unit of work now: gate, select the most urgent runnable task, claim it, run a session against it, record the result. Spends money. The gate runs inside the tick, so there is no path in that routes around it; a blocked gate returns ran=false with the reason and changes no task's state.",
+        "method": "POST",
+        "path": "/trigger",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "list_docs",
         "description": "Index of this unit's own documentation: name, title, summary and size, so a caller can decide what not to fetch.",
         "method": "GET",
@@ -232,6 +259,7 @@ def make_handler(
     unit_root: Path,
     session_store=None,
     tick=None,
+    ask_store=None,
 ):
     class Handler(BaseHTTPRequestHandler):
         server_version = "pu/0.1"
@@ -377,6 +405,15 @@ def make_handler(
                         return self._not_found()
                     return self._json(200, dashboard.task_fields(found))
 
+                if len(parts) == 2 and parts[0] == "ask":
+                    # The poll half of the ask panel. A GET, so it comes
+                    # through the node's read proxy like every other
+                    # source; the submit half is a tool call.
+                    if ask_store is None:
+                        return self._not_found()
+                    found = ask_store.read(parts[1])
+                    return self._json(200, found) if found else self._not_found()
+
                 if len(parts) == 4 and parts[:2] == ["panels", "run"]:
                     if session_store is None:
                         return self._not_found()
@@ -503,6 +540,31 @@ def make_handler(
                                                 "reason": "no pipeline wired"})
                     return self._json(200, tick())
 
+                if parts == ["ask"]:
+                    if ask_store is None or session_store is None:
+                        return self._json(503, {"error": "no session layer wired"})
+                    gate = self._gate()
+                    ask_id = ask.submit(
+                        ask_store,
+                        question=payload.get("question") or "",
+                        context=ask.build_context(
+                            gate=gate,
+                            stats=service.stats(store, body_store),
+                            queue=service.queue(store),
+                            frontier=service.frontier(store),
+                            projects=service.list_projects(store),
+                            runs=session_store.runs(limit=10),
+                        ),
+                        instructions=(unit_root / "session_types" / "ask"
+                                      / "CLAUDE.md").read_text(encoding="utf-8"),
+                        cwd=unit_root / "session_types" / "ask",
+                        # Blocked does not queue and does not raise: the
+                        # record is written already in error, and the poll
+                        # reports it. One submit shape, whatever happened.
+                        gate_reason=gate.get("reason", ""),
+                    )
+                    return self._json(202, {"id": ask_id})
+
                 if parts == ["inbox"]:
                     return self._json(202, service.push_inbox(
                         store, body_store,
@@ -549,12 +611,13 @@ def build_server(
     unit_root: Path | None = None,
     session_store=None,
     tick=None,
+    ask_store=None,
 ) -> ThreadingHTTPServer:
     return ThreadingHTTPServer(
         (host, port),
         make_handler(
             store, body_store, prompts_dir,
             Path(unit_root) if unit_root else Path("."),
-            session_store, tick,
+            session_store, tick, ask_store,
         ),
     )

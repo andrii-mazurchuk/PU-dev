@@ -22,7 +22,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from pu import dashboard, pipeline, sessions, server
+from pu import ask, dashboard, pipeline, sessions, server
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 UNIT_ROOT = Path(__file__).resolve().parent.parent
@@ -30,7 +30,14 @@ UNIT_ROOT = Path(__file__).resolve().parent.parent
 # The node's closed vocabulary. A kind outside this renders as an
 # "unsupported panel" note rather than failing -- which is the right
 # behaviour on their side and a bug on ours.
-KNOWN_KINDS = {"kpis", "table", "bars", "rows", "meters", "text"}
+KNOWN_KINDS = {"kpis", "table", "bars", "rows", "meters", "text", "ask"}
+
+# `ask` is the one kind here that a node may not have learned yet -- it
+# was added to the standard for this unit. An older node renders it as an
+# "unsupported panel" note and draws every other panel normally, which is
+# the degradation rule working as intended and not a reason to hold the
+# panel back.
+EXTENSION_KINDS = {"ask"}
 
 STATS_PREFIX = "stats:"
 
@@ -161,6 +168,28 @@ def test_meters_carry_the_ceiling_the_gate_enforces():
 
 def test_spec_is_json(spec):
     json.dumps(spec)
+
+
+def test_the_ask_panel_names_a_declared_tool(spec):
+    """The node validates `tool` against this unit's own /tools before
+    rendering, and shows a disabled button if it is not there."""
+    from pu.server import TOOLS
+
+    names = {tool["name"] for tool in TOOLS}
+    for _, panel in _panels(spec):
+        if panel["kind"] == "ask":
+            assert panel["tool"] in names, panel["tool"]
+            assert _is_safe_source(panel["poll"].format(id="x")), panel["poll"]
+            assert panel.get("note"), "an ask panel must say that it spends"
+
+
+def test_only_the_ask_panel_causes_anything_to_happen(spec):
+    """Everything else here is a GET. If a second write ever appears in
+    this spec it should be a deliberate act, not a diff nobody noticed."""
+    causing = {
+        panel["kind"] for _, panel in _panels(spec) if panel.get("tool")
+    }
+    assert causing <= EXTENSION_KINDS
 
 
 # -- the reads the panels make -------------------------------------------
@@ -299,6 +328,7 @@ def dash_url(store, body_store, tmp_path):
         "127.0.0.1", 0, store, body_store, PROMPTS_DIR,
         unit_root=UNIT_ROOT,
         session_store=sessions.SessionStore(tmp_path / "sessions"),
+        ask_store=ask.AskStore(tmp_path / "asks"),
     )
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -330,6 +360,36 @@ def test_every_non_parameterised_source_in_the_spec_answers(dash_url):
                 continue
             status, _ = get(f"{dash_url}/{source}")
             assert status == 200, source
+
+
+def test_asking_over_the_wire_returns_an_id_and_polls(dash_url, monkeypatch):
+    """The two halves the panel uses: a tool call that returns at once,
+    and a GET the read proxy can carry."""
+    from urllib.request import Request, urlopen
+
+    monkeypatch.setattr(
+        "pu.ask.runner_mod.run_session",
+        lambda **kw: __import__("pu.runner", fromlist=["x"]).SessionResult(
+            exit_code=0, text="the queue is empty", cost_usd=0.0
+        ),
+    )
+    req = Request(
+        f"{dash_url}/ask",
+        data=json.dumps({"question": "how is the queue?"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(req) as resp:
+        assert resp.status == 202
+        submitted = json.loads(resp.read().decode("utf-8"))
+
+    # Exactly {"id": ...}: a fixed shape, so there is no field name for a
+    # spec to declare and get wrong.
+    assert list(submitted) == ["id"]
+
+    status, record = get(f"{dash_url}/ask/{submitted['id']}")
+    assert status == 200
+    assert record["status"] in {"running", "done"}
 
 
 def test_every_stats_source_in_the_spec_resolves(dash_url):

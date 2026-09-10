@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import Sequence
 
-from pu import bodies, notify, pipeline, server, sessions, taskstore
+from pu import ask, bodies, notify, pipeline, server, sessions, taskstore
 
 # Matches this unit's registered base_url. Keeping the default equal to the
 # registered port is deliberate: a sibling unit ships a main.py defaulting
@@ -156,6 +156,7 @@ def main() -> None:
     store = taskstore.TaskStore(data_location=taskdata, base_cmd=base_cmd)
     body_store = bodies.BodyStore(state / "bodies")
     session_store = sessions.SessionStore(state / "sessions")
+    ask_store = ask.AskStore(state / "asks")
 
     def tick():
         return pipeline.tick(
@@ -201,6 +202,7 @@ def main() -> None:
     httpd = server.build_server(
         args.host, args.port, store, body_store, Path(args.prompts_dir),
         unit_root=unit_root, session_store=session_store, tick=tick,
+        ask_store=ask_store,
     )
     # flush: stdout is a pipe whenever the gateway or a shell redirects it,
     # and a startup banner nobody sees is a path nobody can point a session
