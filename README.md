@@ -1,7 +1,10 @@
 # pu — the processing unit
 
-Holds the task queue, and runs the agent sessions that work it. The only
-unit in this system that launches `claude -p`.
+Holds the task queue, and runs the agent sessions that work it. It is not
+the only unit that launches `claude -p` -- cu runs a session per
+conversational turn and au runs its timeline reviews, which is why all
+three gate on the account-usage ceilings -- but it is the only one that
+selects what to run from a queue.
 
 ## The idea in one paragraph
 
@@ -106,6 +109,55 @@ vocabulary and written whole or not at all.
 repository as its working directory, so that repo's own conventions and
 gates apply.
 
+## The dashboard
+
+`GET /dashboard` answers with a **panel spec** -- JSON describing what to
+show, which the node's console renders with its own components. The
+contract is the gateway's `docs/UNIT_STANDARDS.md`, section "Dashboards".
+
+The node owns the chrome permanently. This unit declares scopes and
+panels; it draws no navigation, links no peer, and renders no other
+unit's data. Six visible pages -- overview, queue, tasks, maps, sessions,
+spend -- plus two hidden ones reached by drilling into a row.
+
+**The spec is built per request, not stored as a file.** A meter's
+ceiling is a literal in the spec and the account-usage ceilings come from
+the environment the gateway injected, so a static file would carry `70`
+and `80` hard-coded and draw a line the gate does not enforce the day a
+manifest changed one.
+
+The overview's **gate panel** is the point of the whole thing: "why has
+nothing run since this morning" is the question this unit is asked most,
+and until now it needed a log to answer. `GET /gate` reports what the two
+gates would decide right now -- and it is a separate read from `tick` on
+purpose, so that looking at a page can never start a session.
+
+### Asking it a question
+
+The one panel that causes anything to happen. Submit is `ask_unit`, a
+declared tool the console dispatches through the bridge's `POST /route`
+like any other tool call; the poll is a `GET`, carried by the same
+read-only proxy as every other panel source. No new door.
+
+```bash
+curl -X POST localhost:9001/ask -d '{"question":"why has nothing run?"}'
+# {"id": "..."}   then: curl localhost:9001/ask/<id>
+```
+
+Single-turn: each question carries its own context and knows nothing of
+the last. The session is granted **no tools at all** -- sessions this
+unit spawns have no way back into it, and this one needs nothing the
+prompt does not already carry.
+
+It is a money tap on an origin with no authentication, so: both gates
+refuse rather than queue, one question runs at a time for the whole unit,
+the question is capped and fenced below instructions it cannot
+renegotiate, and the runner gives up after five minutes rather than
+holding the lock for good.
+
+The answer is model output derived from task bodies that other agents
+wrote. It is rendered as escaped text and must stay that way.
+
 ## Verifying it
 
 ```bash
@@ -136,6 +188,8 @@ operations, and the register of load-bearing decisions. Start at
 | `session_types` | which types exist, and what each may reach |
 | `runner` | the `claude -p` invocation and its stream |
 | `sessions` | local run artifacts, and the `/stats` aggregates |
+| `dashboard` | the panel spec the node renders at `/dashboard` |
+| `ask` | one question, one session, polled for an answer |
 | `logs_client` | best-effort `session_run` entries to whoever stores logs |
 | `notify` | best-effort word to the `owner` role when a person is needed |
 | `intake` | validating a proposal, and writing it all-or-none |

@@ -8,6 +8,8 @@ file and that one disagree, that one is right and this one is the bug.
 - The four standard endpoints: `GET /health`, `GET /stats`,
   `GET /prompts/<tier>` (`default`, `reference`), `GET /tools`.
 - `POST /inbox` — the convention for accepting pushed work from a peer.
+- `GET /dashboard` — a **spec**-tier dashboard, per the standard's
+  "Dashboards" section. Pages and panels; the node owns the chrome.
 - `unit_type: processing`, `lifecycle: persistent`, port **9001**.
 
 ## What is specific to pu
@@ -34,3 +36,18 @@ file and that one disagree, that one is right and this one is the bug.
 - **Two typed write doors, no generic CRUD.** The six wayfinding
   operations, and `/inbox` — which can only ever mint an `intake` record
   for a session to convert. Reading is open to every peer.
+
+- **Its dashboard has one panel that writes, and it writes through the
+  standard door.** `ask` submits by naming `ask_unit` in this unit's own
+  `/tools`, which the console dispatches through the bridge's
+  `POST /route`; the poll is a `GET` through the read-only dashboard
+  proxy. There is no endpoint the dashboard alone knows about, and
+  nothing here assumes this unit's own port is reachable.
+- **An ask session is granted no tools.** Sessions this unit spawns have
+  no way back into it, and this one answers from context assembled going
+  in. It has no kind mapped to it, so nothing anyone can write to the
+  store causes one to run.
+- **It declares `run_tick`.** `POST /trigger` is a tool, so any peer or
+  MCP client that reaches the bridge can spend a session by name. That
+  widening was decided on its own merits, not as a side effect of a
+  dashboard button.

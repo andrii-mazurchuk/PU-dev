@@ -341,3 +341,109 @@ tick (`pu/pipeline.py:288`), so there is no path in that can route around
 it — a gate an external trigger can bypass is not a gate.
 
 Calling this **spends a real session and real money.**
+
+
+## `GET /dashboard`
+
+The panel spec the node's console renders. `application/json` is what
+tells it this is the spec tier -- the tier is read off the response,
+never declared.
+
+Built per request rather than served from a file: the meters carry the
+account-usage ceilings this process was given, which come from the
+environment. See `pu/dashboard.py`.
+
+```json
+{ "unit": "pu", "title": "Processing unit", "lede": "...",
+  "pages": [ { "id": "overview", "title": "Overview", "panels": [ ... ] } ] }
+```
+
+## `GET /gate`
+
+What the two gates would decide right now, without deciding it.
+
+A **separate read from a tick, deliberately**: a dashboard polls this,
+and if the answer came from running a tick then looking at a page would
+spend money.
+
+```json
+{ "blocked": false, "reason": "",
+  "summary": [ { "key": "Sessions", "value": "clear", "note": "..." } ],
+  "cost": { "spent_today_usd": 0.42, "daily_cap_usd": 5.0, "blocked": false },
+  "five_hour": [ { "name": "five-hour", "percent": 41.0 } ],
+  "seven_day": [ { "name": "seven-day", "percent": 12.0 } ],
+  "ceilings": { "five_hour": 70.0, "seven_day": 80.0 } }
+```
+
+Both readings degrade to "nothing is blocking" when absent, which is what
+keeps the gates from latching shut -- see `pu/usage_gate.py`.
+
+## `GET /sessions`
+
+Recorded runs, most recent first. `limit` (default 50, max 500) and
+`task` (a uuid) narrow it. Ordered on `recorded_at`, not on the directory
+name: the stamp is when the run started.
+
+## `GET /sessions/{task_uuid}/{run_id}`
+
+One run, with the prompt it was given. The raw stream is **not**
+included -- it is the largest thing on disk and nothing renders it;
+whoever needs it reads the file.
+
+## `GET /spend`
+
+Daily cost, oldest first. `days` (default 14, max 90). Quiet days are
+present as zero rather than omitted: a series that skips them renders as
+continuous work.
+
+## `POST /ask` → `202`
+
+Ask this unit a question. Returns at once, before the session runs.
+
+```json
+{ "question": "why has nothing run today?" }
+```
+
+The response is **exactly** `{"id": "..."}` whatever happened -- a fixed
+shape, so a caller has one path to render rather than two. A blocked
+gate, an empty question and an over-long one all produce an id whose
+record is already `error`.
+
+Spends money. Refused rather than queued when either gate is blocking.
+One question runs at a time for the whole unit.
+
+## `GET /ask/{id}`
+
+```json
+{ "status": "running" | "done" | "error",
+  "question": "...", "answer": "...", "error": "", "cost_usd": 0.031,
+  "at": "2026-09-10T14:22:01+00:00" }
+```
+
+`running` continues; `done` and `error` are terminal. `answer` is model
+output derived from task descriptions and bodies that other agents and
+`POST /inbox` wrote -- **render it as escaped text, never as markup.**
+
+## `POST /trigger` → `200`
+
+One tick: gate, select, claim, run, record. Declared as the `run_tick`
+tool, so it is callable by any peer or MCP client that reaches the
+bridge. Spends money. The gate runs inside the tick, so there is no path
+in that routes around it; blocked returns `ran: false` with the reason
+and changes no task's state.
+
+```json
+{ "ran": false, "reason": "nothing runnable", "task_uuid": null,
+  "session_type": null, "outcome": null, "detail": "", "cost_usd": null }
+```
+
+## `GET /panels/task/{uuid}`, `GET /panels/run/{uuid}/{run_id}`
+
+Presentation payloads for the dashboard's two detail pages, and for
+nothing else.
+
+They exist because no panel kind renders a *field* of a fetched object:
+`kpis` reads dotted paths out of `/stats` only, and `rows` needs an
+array. Reshaping the real API to suit the dashboard would have been
+worse. If the node gains a way to read a field of a named source, both of
+these collapse to nothing and should be deleted rather than kept.
