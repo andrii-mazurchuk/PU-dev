@@ -728,11 +728,26 @@ function stateOf(task, byId) {
   return task.afk ? 'ready' : 'human';      // the frontier: actionable
 }
 
+/* Tickets per project -- never records.
+
+   A map is drawn as the *container* around its tickets, not as an
+   item inside the project, so counting it here made the tab
+   disagree with the sum of the containers it opens: "10" on the
+   tab, "9 tickets" in the box, for one map and nine children.
+   Both numbers were right about different things and neither said
+   which, which on a page whose whole job is to be believed about
+   what is blocked is worse than either number being wrong.
+
+   A project holding only a map still appears, at zero. That is a
+   real state -- a map charted with nothing under it yet -- and
+   dropping it from the tabs would hide the emptiest thing in the
+   system, which is usually the thing worth seeing. */
 function projects(tasks) {
   const counts = new Map();
   for (const t of tasks) {
     const p = t.project || '(none)';
-    counts.set(p, (counts.get(p) ?? 0) + 1);
+    if (!counts.has(p)) counts.set(p, 0);
+    if (t.kind !== 'map') counts.set(p, counts.get(p) + 1);
   }
   return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 }
