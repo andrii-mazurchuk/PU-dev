@@ -220,18 +220,33 @@ def test_only_the_ask_panel_causes_anything_to_happen(spec):
 
 
 def test_the_published_fixture_matches_the_spec():
-    """`docs/dashboard-spec.example.json` is a copy of generated data,
-    sent to the node so its renderer can be checked against a real spec
-    rather than one it wrote itself. A copy drifts; this is the guard.
+    """`docs/dashboard-spec.example.json` is a copy of generated data.
 
-    Regenerate with:
-        python -c "from pu import dashboard, json; ..."  -- or just
-        copy what `GET /dashboard` returns.
+    It exists because the node's renderer is otherwise only ever checked
+    against a spec its own author wrote, which cannot find what that
+    author did not think of. Ours found three real bugs on first render,
+    two of them in the node and one in shipped console code -- a `rows`
+    panel with no data drew an empty box where every other kind says
+    "nothing recorded yet".
+
+    A copy drifts. This is the guard on ours; the message below is the
+    only guard on **theirs**, and it is deliberately in the failure path
+    rather than in a document, because this is where somebody lands the
+    moment `spec()` changes.
     """
-    fixture = json.loads(
-        (UNIT_ROOT / "docs" / "dashboard-spec.example.json").read_text(encoding="utf-8")
+    fixture_path = UNIT_ROOT / "docs" / "dashboard-spec.example.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    assert fixture == dashboard.spec(), (
+        f"\n{fixture_path.name} is out of date. Regenerate it:\n"
+        f"    python -c \"import json;from pu import dashboard;"
+        f"print(json.dumps(dashboard.spec(),indent=2))\" > {fixture_path}\n\n"
+        "Then send the new copy to whoever maintains the node. It vendors\n"
+        "this spec and lints it in their CI, so their snapshot goes stale\n"
+        "silently -- their build stays green while rendering a shape this\n"
+        "unit no longer serves. Nothing automates that hand-off: the two\n"
+        "repos are deliberately uncoupled, so this message is the whole\n"
+        "of the mechanism."
     )
-    assert fixture == dashboard.spec()
 
 
 # -- the reads the panels make -------------------------------------------
