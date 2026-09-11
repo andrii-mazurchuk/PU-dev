@@ -1,9 +1,4 @@
-# Handoff — 2026-09-11 — pu's dashboard: page tier, dependency graph, and `ask`
-
-> Previous handoff: `.claude/handoff/2026-09-08-pu-built-and-wired-to-wayfinder.md`
-> — that session built pu itself. **The trail continues here**: this one
-> gave it a dashboard and, in passing, found that the README's claim to be
-> the only unit launching `claude -p` had been false since au shipped.
+# Handoff — pu's dashboard: page tier, dependency graph, and `ask`
 
 **2026-09-10/11.** Twelve commits, `f1a5f09..7a345c0`, all on `master`,
 all pushed, CI green. Deployed and verified in a browser against the
