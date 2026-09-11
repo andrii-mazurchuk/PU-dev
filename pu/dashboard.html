@@ -193,6 +193,14 @@
   .node.stuck rect { stroke: var(--stuck); }
   .node.human rect { stroke: var(--human); fill: var(--human-bg); }
   .node.claimed rect { stroke-dasharray: 3 2; }
+  /* Done is the one state drawn by *removing* ink rather than
+     adding a hue. It is history: it has to be legible as part of
+     the chain -- that is the whole reason to draw it -- without
+     competing for attention with the frontier, which is the only
+     part of the picture anyone can act on. */
+  .node.done rect { stroke: var(--done); fill: none; opacity: .5; }
+  .node.done text { fill: var(--done); }
+  .node.done .t { text-decoration: line-through; }
   .node text { font: 400 11.5px var(--sans); fill: var(--ink); }
   .node .k { font: 400 9.5px var(--mono); fill: var(--ink-faint); }
   .node:hover rect { stroke: var(--brand); stroke-width: 1.75; }
@@ -270,6 +278,7 @@
   .pill.ready { background: var(--ready-bg); color: var(--ready); }
   .pill.stuck { background: var(--stuck-bg); color: var(--stuck); }
   .pill.human { background: var(--human-bg); color: var(--human); }
+  .pill.done { color: var(--done); }
 
   /* chat */
   .chat { display: flex; flex-direction: column; height: 100%; }
@@ -347,6 +356,7 @@
       <span><i style="background:var(--ready)"></i>can start now</span>
       <span><i style="background:var(--human)"></i>needs you</span>
       <span><i style="background:var(--rule)"></i>waiting on a blocker</span>
+      <span><i style="background:var(--done)"></i>done</span>
       <span id="xing"></span>
     </div>
   </div>
@@ -650,12 +660,26 @@ async function getJSON(path) {
   return r.json();
 }
 
+/* Two task reads, because the store filters on one status at a
+   time and this page needs both.
+
+   Drawing only the pending ones was not a display choice, it was
+   a lie about the shape of the work: a map is a chain, and a
+   chain with its finished links cut out reads as though that work
+   never happened. It also broke the one thing colour is for here
+   -- what makes a task startable is that its blockers are *done*,
+   and with done tasks absent the page could not tell "finished"
+   from "never existed", so it read the frontier off an edge that
+   was merely missing. */
 async function loadLive() {
-  const [tasks, gate, stats, spend] = await Promise.all([
-    getJSON('tasks?status=pending'), getJSON('gate'),
-    getJSON('stats'), getJSON('spend?days=1'),
+  const [tasks, doneTasks, gate, stats, spend] = await Promise.all([
+    getJSON('tasks?status=pending'), getJSON('tasks?status=completed'),
+    getJSON('gate'), getJSON('stats'), getJSON('spend?days=1'),
   ]);
-  return { tasks: tasks.tasks ?? [], gate, stats, spend };
+  return {
+    tasks: [...(tasks.tasks ?? []), ...(doneTasks.tasks ?? [])],
+    gate, stats, spend,
+  };
 }
 
 function sample() {
@@ -666,20 +690,23 @@ function sample() {
 
   const tasks = [
     t('m1', 'Dashboard routing across units', 'map', 'holonic.node', null, [], []),
-    t('a1', 'How does a unit declare a dashboard?', 'research', 'holonic.node', 'm1', [], ['afk'], { runnable: true }),
+    t('a1', 'How does a unit declare a dashboard?', 'research', 'holonic.node', 'm1', [], ['afk'], { status: 'completed' }),
     t('a2', 'Decide the panel vocabulary', 'grilling', 'holonic.node', 'm1', ['a1'], []),
     t('a3', 'Proxy or publish ports?', 'grilling', 'holonic.node', 'm1', ['a1'], []),
     t('a4', 'Build the spec renderer', 'execution', 'holonic.node', 'm1', ['a2', 'a3'], ['afk']),
     t('a5', 'Vendor a real fixture', 'execution', 'holonic.node', 'm1', ['a4'], ['afk']),
 
     t('m2', 'Give pu a dashboard worth opening', 'map', 'holonic.pu', null, [], []),
-    t('b1', 'What can the spec tier express?', 'research', 'holonic.pu', 'm2', [], ['afk'], { runnable: true }),
+    t('b1', 'What can the spec tier express?', 'research', 'holonic.pu', 'm2', [], ['afk'], { status: 'completed' }),
     t('b2', 'Which tier for a graph canvas?', 'grilling', 'holonic.pu', 'm2', ['b1'], []),
     t('b3', 'Lay out dependencies without crossings', 'prototype', 'holonic.pu', 'm2', ['b2'], []),
     t('b4', 'Ship the page', 'execution', 'holonic.pu', 'm2', ['b3'], ['afk']),
     t('b5', 'Persist the ask conversation', 'execution', 'holonic.pu', 'm2', ['b2'], ['afk'], { active: true }),
 
-    t('m3', 'Account usage ceilings', 'map', 'holonic.pu', null, [], []),
+    // Deliberately long: the sample is how the trim gets looked at
+    // in a browser with no node running.
+    t('m3', 'Account usage ceilings across both rolling windows and the daily cost cap',
+      'map', 'holonic.pu', null, [], []),
     t('c1', 'Read the two rolling windows', 'execution', 'holonic.pu', 'm3', [], ['afk'], { runnable: true }),
     t('c2', 'Gate before selection', 'execution', 'holonic.pu', 'm3', ['c1'], ['afk']),
     t('c3', 'Tell the owner on transition', 'task', 'holonic.pu', 'm3', ['c2'], []),
@@ -694,7 +721,8 @@ function sample() {
   };
   return {
     tasks, gate,
-    stats: { metrics: { pending_tasks: tasks.length, runnable_now: 3, claimed: 1,
+    stats: { metrics: { pending_tasks: tasks.filter(t => t.status === 'pending').length,
+             runnable_now: 3, claimed: 1,
              blocked: 9, sessions: { runs: 12, cost_usd_total: 1.87 } } },
     spend: { days: [{ day: 'today', cost_usd: 0.42 }] },
   };
@@ -721,9 +749,17 @@ const svgEl = (tag, attrs = {}) => {
    things qualify: work that can start right now, and work that
    is unblocked but waiting on a person. Blocked is the resting
    state of most of the graph and reads as structure. */
+const isDone = t => t?.status === 'completed';
+
 function stateOf(task, byId) {
   if (task.kind === 'map') return '';
-  const blockers = (task.depends ?? []).filter(d => byId.has(d));
+  if (isDone(task)) return 'done';
+  // A blocker that is finished does not block. Counting it would
+  // leave everything downstream of a completed task looking
+  // blocked forever -- the exact opposite of what finishing it
+  // meant, and the frontier is what this page is for.
+  const blockers = (task.depends ?? [])
+    .filter(d => byId.has(d) && !isDone(byId.get(d)));
   if (blockers.length) return '';           // blocked: structure, not alarm
   return task.afk ? 'ready' : 'human';      // the frontier: actionable
 }
@@ -737,6 +773,12 @@ function stateOf(task, byId) {
    Both numbers were right about different things and neither said
    which, which on a page whose whole job is to be believed about
    what is blocked is worse than either number being wrong.
+
+   The count is everything the canvas draws, done tickets included,
+   for that same reason: the tab and the boxes it opens have to be
+   the same number. The open/closed split belongs where it can be
+   read as a split -- the map's own meta line says "n tickets ·
+   k done" -- not as a second unexplained figure on the tab.
 
    A project holding only a map still appears, at zero. That is a
    real state -- a map charted with nothing under it yet -- and
@@ -915,13 +957,19 @@ function draw() {
         class: 'map-box', x: -8, y: -4,
         width: grp.width + 16, height: grp.height, rx: 5,
       }));
+      // The box runs x:-8 .. width+8 and the text starts at 4, so
+      // this is the room a label has before it draws out past the
+      // container it is naming.
+      const room = grp.width;
       const label = svgEl('text', { class: 'map-label', x: 4, y: 12 });
-      label.textContent = grp.map.description;
+      fitText(label, grp.map.description, room, 7.3);
       label.style.cursor = 'pointer';
       label.onclick = () => select(grp.map);
       box.appendChild(label);
+      const done = grp.children.filter(isDone).length;
       const meta = svgEl('text', { class: 'map-meta', x: 4, y: 26 });
-      meta.textContent = `${grp.children.length} tickets · ${grp.map.project}`;
+      fitText(meta, `${grp.children.length} tickets`
+        + (done ? ` · ${done} done` : '') + ` · ${grp.map.project}`, room, 6.3);
       box.appendChild(meta);
     }
 
@@ -953,7 +1001,7 @@ function draw() {
       const kind = svgEl('text', { class: 'k', x: 8, y: 13 });
       kind.textContent = task.kind + (task.active ? ' · claimed' : '');
       node.appendChild(kind);
-      const title = svgEl('text', { x: 8, y: 26 });
+      const title = svgEl('text', { class: 't', x: 8, y: 26 });
       title.textContent = clip(task.description, 25);
       node.appendChild(title);
       node.onclick = () => select(task);
@@ -971,6 +1019,36 @@ function draw() {
 }
 
 function clip(s, n) { return (s ?? '').length > n ? (s ?? '').slice(0, n - 1) + '…' : (s ?? ''); }
+
+/* SVG text neither wraps nor clips: a long map title, or a deep
+   dotted project name, simply keeps drawing past the container it
+   labels and over whatever sits beside it. So it is trimmed to the
+   room the box actually has, and the full string is kept on a
+   <title> so hovering still says what was cut.
+
+   The per-character figures are estimates for these two fonts.
+   Measuring exactly means getComputedTextLength(), which needs the
+   element in the document and costs a reflow per trim on every
+   redraw, to land within a character of this.
+   ponytail: estimated advance widths; measure only if a font change
+   makes the trim visibly wrong.
+
+   Note for anyone reading a label back: once a <title> is
+   attached, `el.textContent` returns the drawn string *and* the
+   tooltip concatenated, because textContent walks descendants.
+   Nothing renders it -- <title> is descriptive, not a glyph, and
+   getBBox confirms only the trimmed string is drawn -- but read
+   `el.firstChild.nodeValue` if you ever need what is on screen. */
+function fitText(el, text, room, perChar) {
+  const full = text ?? '';
+  const shown = clip(full, Math.max(4, Math.floor(room / perChar)));
+  el.appendChild(document.createTextNode(shown));
+  if (shown !== full) {
+    const tip = svgEl('title');
+    tip.textContent = full;
+    el.appendChild(tip);
+  }
+}
 
 /* Hovering a task lights its whole dependency chain in both
    directions -- everything it waits on, and everything waiting
