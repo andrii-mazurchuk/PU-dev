@@ -1142,6 +1142,9 @@ async function select(task) {
   openDock('insp');
   for (const n of document.querySelectorAll('.node'))
     n.classList.toggle('sel', n.dataset.id === task.uuid);
+  // After the dock has taken its width, so the node's position is
+  // measured against the canvas the reader is actually left with.
+  requestAnimationFrame(() => reveal(task.uuid));
 
   const byId = new Map(STATE.tasks.map(t => [t.uuid, t]));
   const blockers = (task.depends ?? []).map(d => byId.get(d)).filter(Boolean);
@@ -1204,13 +1207,48 @@ function relList(title, items) {
    DOCK, CHAT, VIEW
    ============================================================= */
 
+/* Opening the dock does not touch the view.
+
+   It used to call fit(), which reads as reasonable -- the dock
+   takes width off the canvas, so make sure the graph is still
+   visible -- and is the wrong tool by a mile. fit() recomputes
+   scale *and* position from the whole scene, so every click on a
+   task threw away the zoom and pan the reader had set. Zoom into
+   one corner of a large map, click a task to read its detail,
+   and the graph snapped back to whole-graph scale: the one
+   gesture whose entire purpose is "tell me more about this"
+   destroyed the context you were asking from.
+
+   Nothing needs recomputing. The dock is the right-hand flex
+   child, so opening it moves the canvas's left edge not at all
+   and simply covers the right. What was on screen stays where it
+   was; see reveal() for the only correction that is warranted. */
 function openDock(which) {
   $('dock').hidden = false;
   $('grip').hidden = false;
   $('bubble').hidden = which === 'ask';
   setTab(which);
   positionGrip();
-  requestAnimationFrame(fit);
+}
+
+/* The smallest pan that uncovers a node, and never a change of
+   scale. This is what the fit() call was reaching for: the task
+   you just clicked may be under the dock that opened because you
+   clicked it. Pan by the overflow, leave view.k alone. */
+function reveal(id) {
+  const el = document.querySelector(`.node[data-id="${CSS.escape(id)}"]`);
+  if (!el) return;
+  const n = el.getBoundingClientRect();
+  const c = $('canvas').getBoundingClientRect();
+  const pad = 24;
+  let dx = 0, dy = 0;
+  if (n.right > c.right - pad) dx = (c.right - pad) - n.right;
+  if (n.left + dx < c.left + pad) dx = (c.left + pad) - n.left;
+  if (n.bottom > c.bottom - pad) dy = (c.bottom - pad) - n.bottom;
+  if (n.top + dy < c.top + pad) dy = (c.top + pad) - n.top;
+  if (!dx && !dy) return;
+  view.x += dx; view.y += dy;
+  applyView();
 }
 
 function setTab(which) {
