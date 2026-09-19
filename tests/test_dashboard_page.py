@@ -227,3 +227,69 @@ def test_every_path_the_page_reads_answers_over_the_wire(base, html):
     for path in ("tasks?status=pending", "gate", "stats", "spend?days=1", "projects"):
         with urlopen(f"{base}/{path}") as resp:
             assert resp.status == 200, path
+
+
+# -- staying current ------------------------------------------------------
+#
+# The behaviour itself is a browser property and is checked by driving a
+# real page against a stub unit. What survives here are the pieces whose
+# *absence* is silent: a refresh that quietly stops, or one that quietly
+# takes the reader's view, both look exactly like a working page.
+
+
+def test_the_page_refreshes_itself_on_one_ten_second_interval(html):
+    """Rule 8. Ten seconds matches the node's own chrome poll, so
+    the frame and what it frames never visibly disagree about what
+    time it is -- and one interval, not one per panel."""
+    assert re.search(r"const POLL_MS = 10_000", html)
+    assert len(re.findall(r"setInterval\(", html)) == 0, "one scheduler, not several"
+    assert html.count("setTimeout(poll,") == 1
+
+
+def test_a_refresh_compares_before_it_touches_the_dom(html):
+    """Rule 1, the one that carries the weight. Most polls find
+    nothing changed; if that case ever starts re-rendering, the
+    page still *works* and merely flickers, which is precisely the
+    kind of regression nobody files a bug about."""
+    assert "tasksKey === seen.tasks" in html, "the no-change early return is gone"
+
+
+def test_a_refresh_never_refits_the_canvas(html):
+    """Rule 2. The reader's pan and zoom are theirs. `fit()` on a
+    timer is the frame-reload behaviour the standard forbids,
+    reimplemented by hand -- and it was already shipped once as a
+    bug, via openDock."""
+    assert "draw({ keepView: !first })" in html
+    assert "if (!keepView) requestAnimationFrame(fit)" in html
+    # fit() belongs to first paint, project switches, and the button.
+    assert html.count("requestAnimationFrame(fit)") == 1
+
+
+def test_polling_stops_for_a_hidden_tab_and_for_a_gesture(html):
+    """Rules 4 and 5. A forgotten tab polling every unit forever is
+    a cost nobody ever sees, and a graph relaying out under a drag
+    is worse than a graph ten seconds old."""
+    assert "document.visibilityState !== 'visible'" in html
+    assert "grabbing" in html
+    assert "visibilitychange" in html
+
+
+def test_a_skipped_poll_still_reschedules(html):
+    """The failure that ends the refresh for the life of the page
+    while the page goes on claiming to be live. It was written
+    wrong the first time, which is why it is pinned here."""
+    assert "if (badMoment()) { schedule(); return; }" in html
+
+
+def test_failure_is_shown_rather_than_hidden(html):
+    """Rule 6. A dashboard silently displaying its last good data
+    while the unit is unreachable is lying."""
+    assert "stale · last update" in html
+    assert "MAX_BACKOFF" in html
+
+
+def test_a_vanished_selection_is_admitted_not_reassigned(html):
+    """The failure mode the standard names for this page: the dock
+    describing one task while the reader believes they are reading
+    another."""
+    assert "no longer in the queue" in html

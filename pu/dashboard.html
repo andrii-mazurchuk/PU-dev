@@ -259,6 +259,25 @@
   .node.sel rect { stroke: var(--brand); stroke-width: 2; }
   .node.dim { opacity: .2; }
 
+  /* A task drawn for the first time says so, briefly. Rule 7:
+     without it an update is indistinguishable from nothing
+     happening. Motion is suppressed for readers who asked for
+     that -- the mark is a nicety, their setting is not. */
+  @keyframes freshmark {
+    0%, 55% { stroke: var(--brand); stroke-width: 2.5; }
+    100%    { stroke: var(--rule);  stroke-width: 1; }
+  }
+  .node.fresh rect { animation: freshmark 2.6s ease-out 1; }
+  @media (prefers-reduced-motion: reduce) {
+    .node.fresh rect { animation: none; }
+  }
+
+  /* Rule 6 and 7 share one indicator: it says the page is live
+     and when it last succeeded, and it is the same element that
+     admits when it has stopped being true. */
+  #live { color: var(--dim); }
+  #live.stale { color: var(--warn); }
+
   /* ---- right dock ---- */
   .dock {
     flex: 0 0 var(--dock); display: flex; flex-direction: column;
@@ -410,6 +429,7 @@
       <span><i style="background:var(--rule)"></i>waiting on a blocker</span>
       <span><i style="background:var(--done)"></i>done</span>
       <span id="xing"></span>
+      <span id="live" title="Refreshes every 10 seconds"></span>
     </div>
   </div>
 
@@ -991,7 +1011,14 @@ function pathOf(points) {
 
 let view = { x: 40, y: 30, k: 1 };
 
-function draw() {
+/* `keepView` is what separates a refresh from a first draw.
+
+   A refresh must not refit: the reader's pan and zoom are theirs,
+   and a 10-second timer that resets them is the frame-reload
+   behaviour the standard forbids, reimplemented by hand. A first
+   draw and a project switch have no reader view to protect, so
+   they still fit. */
+function draw({ keepView = false } = {}) {
   const scene = buildScene(STATE.tasks);
   const g = $('scene');
   g.innerHTML = '';
@@ -1057,8 +1084,8 @@ function draw() {
       title.textContent = clip(task.description, 25);
       node.appendChild(title);
       node.onclick = () => select(task);
-      node.onmouseenter = () => highlight(task.uuid, scene);
-      node.onmouseleave = () => highlight(null, scene);
+      node.onmouseenter = () => { STATE.hover = task.uuid; highlight(task.uuid, scene); };
+      node.onmouseleave = () => { STATE.hover = null; highlight(null, scene); };
       inner.appendChild(node);
     }
 
@@ -1066,8 +1093,33 @@ function draw() {
     g.appendChild(box);
   }
 
+  /* The scene is rebuilt from scratch, so anything the reader had
+     expressed through it has to be put back explicitly. Selection
+     and hover live in STATE for exactly this reason -- a class on
+     a node that no longer exists is not state, it is a leak. */
+  if (STATE.selected)
+    for (const n of g.querySelectorAll('.node'))
+      n.classList.toggle('sel', n.dataset.id === STATE.selected);
+  if (STATE.hover && g.querySelector(`.node[data-id="${CSS.escape(STATE.hover)}"]`))
+    highlight(STATE.hover, scene);
+
+  markFresh(g);
   applyView();
-  requestAnimationFrame(fit);
+  if (!keepView) requestAnimationFrame(fit);
+}
+
+/* Rule 7: mark what changed, or a swap is indistinguishable from
+   nothing having happened and the reader goes on reloading by
+   hand. A task drawn for the first time gets a brief outline;
+   `known` is seeded on the first draw so the opening screen is
+   not a wall of highlights. */
+let known = null;
+function markFresh(g) {
+  const ids = [...g.querySelectorAll('.node')].map(n => n.dataset.id);
+  if (known === null) { known = new Set(ids); return; }
+  for (const n of g.querySelectorAll('.node'))
+    if (!known.has(n.dataset.id)) n.classList.add('fresh');
+  known = new Set(ids);
 }
 
 function clip(s, n) { return (s ?? '').length > n ? (s ?? '').slice(0, n - 1) + '…' : (s ?? ''); }
@@ -1137,14 +1189,18 @@ function highlight(id, scene) {
    INSPECTOR
    ============================================================= */
 
-async function select(task) {
+/* `quiet` is what a refresh passes: re-render the pane with the
+   task's current data, but do not pan. Panning is right when the
+   reader clicked -- they asked to look at this -- and wrong on a
+   timer, where it moves the graph under someone who did nothing. */
+async function select(task, { quiet = false } = {}) {
   STATE.selected = task.uuid;
   openDock('insp');
   for (const n of document.querySelectorAll('.node'))
     n.classList.toggle('sel', n.dataset.id === task.uuid);
   // After the dock has taken its width, so the node's position is
   // measured against the canvas the reader is actually left with.
-  requestAnimationFrame(() => reveal(task.uuid));
+  if (!quiet) requestAnimationFrame(() => reveal(task.uuid));
 
   const byId = new Map(STATE.tasks.map(t => [t.uuid, t]));
   const blockers = (task.depends ?? []).map(d => byId.get(d)).filter(Boolean);
@@ -1283,7 +1339,7 @@ function positionGrip() {
   if (saved) document.documentElement.style.setProperty('--dock', `${saved}px`);
   let dragging = false;
   $('grip').addEventListener('pointerdown', e => {
-    dragging = true; $('grip').classList.add('on');
+    dragging = true; grabbing = true; $('grip').classList.add('on');
     $('grip').setPointerCapture(e.pointerId);
   });
   $('grip').addEventListener('pointermove', e => {
@@ -1293,7 +1349,7 @@ function positionGrip() {
     positionGrip();
   });
   $('grip').addEventListener('pointerup', e => {
-    dragging = false; $('grip').classList.remove('on');
+    dragging = false; grabbing = false; $('grip').classList.remove('on');
     localStorage.setItem('pu.dock.w', parseInt(getComputedStyle(document.documentElement).getPropertyValue('--dock')));
   });
 })();
@@ -1358,19 +1414,26 @@ $('q').addEventListener('keydown', e => {
 function applyView() {
   $('scene').setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`);
 }
+/* Rule 4: a refresh never lands mid-gesture. Set by both things
+   that can be held down -- panning the canvas and dragging the
+   dock's grip -- because a graph relaying out under a drag is
+   worse than a graph that is ten seconds old. */
+let grabbing = false;
+
 (() => {
   const c = $('canvas');
   let down = null;
   c.addEventListener('pointerdown', e => {
     if (e.target.closest('.node') || e.target.closest('button')) return;
     down = { x: e.clientX - view.x, y: e.clientY - view.y };
+    grabbing = true;
     c.classList.add('dragging');
   });
   window.addEventListener('pointermove', e => {
     if (!down) return;
     view.x = e.clientX - down.x; view.y = e.clientY - down.y; applyView();
   });
-  window.addEventListener('pointerup', () => { down = null; c.classList.remove('dragging'); });
+  window.addEventListener('pointerup', () => { down = null; grabbing = false; c.classList.remove('dragging'); });
   c.addEventListener('wheel', e => {
     e.preventDefault();
     const rect = c.getBoundingClientRect();
@@ -1404,11 +1467,158 @@ function fit() {
    BOOT
    ============================================================= */
 
+/* Rule 8: one interval for the page, ten seconds, matching the
+   node's own chrome poll so the frame and what it frames never
+   visibly disagree about what time it is. */
+const POLL_MS = 10_000;
+const MAX_BACKOFF = 80_000;
+
+let seen = { tasks: '', strip: '', scopes: '' };
+let fails = 0;
+let lastOk = null;
+let pollTimer = null;
+
+/* Rule 4 and rule 5, in one question: is now a bad moment?
+
+   Typing counts because the ask box is a textarea the reader may
+   be mid-sentence in, and a relayout under a cursor is the same
+   theft as one under a drag. Hidden counts because a forgotten
+   tab polling every unit forever is a cost nobody ever sees; the
+   visibilitychange handler below refreshes once on the way back,
+   so nothing is lost by skipping. */
+function badMoment() {
+  const a = document.activeElement;
+  return grabbing
+      || document.visibilityState !== 'visible'
+      || (a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT'));
+}
+
+function showLive() {
+  const el = $('live');
+  const at = lastOk ? lastOk.toLocaleTimeString() : '';
+  if (!STATE.live) { el.textContent = ''; el.className = ''; return; }
+  // Rule 6: a page quietly showing its last good data while the
+  // unit is unreachable is lying. Say which it is.
+  el.className = fails ? 'stale' : '';
+  el.textContent = fails
+    ? `stale · last update ${at} · retrying`
+    : `live · updated ${at}`;
+}
+
+/* Rule 1, and it is the whole performance story: compare, and on
+   no change touch nothing at all.
+
+   Split in two rather than hashed as one blob because the strip
+   carries a cost figure that moves on its own. Hashing everything
+   together would make a fraction of a cent relay out the entire
+   graph -- technically a change, and exactly the flicker the rule
+   exists to prevent. */
+function apply(d, { first = false } = {}) {
+  const tasksKey = JSON.stringify(d.tasks);
+  const stripKey = JSON.stringify([d.gate, d.stats, d.spend]);
+
+  if (first || stripKey !== seen.strip) renderStrip(d);
+  seen.strip = stripKey;
+
+  if (!first && tasksKey === seen.tasks) return;   // the common case: nothing
+  seen.tasks = tasksKey;
+  STATE.tasks = d.tasks;
+
+  const ps = projects(STATE.tasks);
+  // The busiest project, not the first alphabetically: opening on
+  // the emptiest space is the worst possible first impression of a
+  // view whose whole point is showing how much is in flight. On a
+  // refresh the reader's own choice stands, unless the project it
+  // named has gone away.
+  if (!STATE.project || !ps.some(p => p[0] === STATE.project))
+    STATE.project = ps.length
+      ? ps.reduce((best, p) => (p[1] > best[1] ? p : best))[0]
+      : null;
+  // Rule 3: the tabs are rebuilt only when the tabs changed. They
+  // are buttons, and rebuilding one under a cursor cancels a click
+  // already on its way down.
+  const scopeKey = JSON.stringify(ps);
+  if (first || scopeKey !== seen.scopes) { renderScopes(STATE.tasks); seen.scopes = scopeKey; }
+  else syncScopes();
+
+  if (!STATE.tasks.length) {
+    $('scene').innerHTML = '';
+    known = new Set();
+    document.querySelector('.hint').textContent = 'No pending tasks. Nothing to draw yet.';
+    return;
+  }
+  document.querySelector('.hint').textContent =
+    'drag to pan · scroll to zoom · click a task to inspect';
+  draw({ keepView: !first });
+  refreshSelection();
+}
+
+/* A tick that resolves while a task is selected leaves the
+   selection on that same task, or says plainly that it is gone.
+   Quietly moving it to whatever now sits at that position is the
+   failure worth naming: the dock would describe one task while
+   the reader believes they are reading another. */
+function refreshSelection() {
+  if (!STATE.selected || $('dock').hidden) return;
+  const still = STATE.tasks.find(t => t.uuid === STATE.selected);
+  if (still) { select(still, { quiet: true }); return; }
+  const pane = $('pane-insp');
+  const gone = document.createElement('p');
+  gone.className = 'sub';
+  gone.textContent = 'This task is no longer in the queue — it was completed, '
+                   + 'deleted, or moved out of scope since you opened it.';
+  pane.replaceChildren(gone);
+  STATE.selected = null;
+}
+
+async function poll() {
+  // Reschedule even when skipping, or the first bad moment ends
+  // the refresh for the life of the page -- a timer that stops
+  // silently is worse than no timer, because the page goes on
+  // claiming to be live.
+  if (badMoment()) { schedule(); return; }
+  try {
+    const d = await loadLive();
+    const was = STATE.live;
+    STATE.live = true;
+    fails = 0;
+    lastOk = new Date();
+    $('offline').hidden = true;
+    // Booted against a unit that was not up yet: the first good
+    // poll replaces the sample outright rather than merging into it.
+    apply(d, { first: !was });
+  } catch (e) {
+    // Rule 6: widen rather than hammer a unit that is down.
+    fails++;
+    if (STATE.live) {
+      const o = $('offline');
+      o.hidden = false;
+      o.textContent = 'Lost contact with pu — showing the last data received. '
+                    + 'Still retrying.';
+    }
+  }
+  showLive();
+  schedule();
+}
+
+function schedule() {
+  clearTimeout(pollTimer);
+  const wait = Math.min(MAX_BACKOFF, POLL_MS * 2 ** Math.min(fails, 3));
+  pollTimer = setTimeout(poll, wait);
+}
+
+// Rule 5: catch up once on the way back, rather than on a timer
+// nobody was watching.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { clearTimeout(pollTimer); poll(); }
+});
+
 (async () => {
   let d;
   try {
     d = await loadLive();
     STATE.live = true;
+    lastOk = new Date();
   } catch (e) {
     d = sample();
     STATE.live = false;
@@ -1417,21 +1627,8 @@ function fit() {
     o.textContent = 'Not connected to a running pu — showing a sample graph. ' +
                     'The layout below is the real algorithm on example data.';
   }
-  STATE.tasks = d.tasks;
-  renderStrip(d);
-  // The busiest project, not the first alphabetically: opening on
-  // the emptiest space is the worst possible first impression of a
-  // view whose whole point is showing how much is in flight.
-  const ps = projects(STATE.tasks);
-  STATE.project = ps.length
-    ? ps.reduce((best, p) => (p[1] > best[1] ? p : best))[0]
-    : null;
-  renderScopes(STATE.tasks);
-  if (!STATE.tasks.length) {
-    $('scene').innerHTML = '';
-    document.querySelector('.hint').textContent = 'No pending tasks. Nothing to draw yet.';
-    return;
-  }
-  draw();
+  apply(d, { first: true });
+  showLive();
+  schedule();
 })();
 </script>
