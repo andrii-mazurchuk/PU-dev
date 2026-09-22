@@ -67,6 +67,7 @@
     --rule-soft: #e6e9ed;
     --brand: #0e6e77;
     --brand-ink: #ffffff;
+    --brand-soft: #dcedef;
     --ok: #0e6e77;      --ok-bg: #e2f1f2;
     --warn: #8a6d1f;    --warn-bg: #f8f0dc;
     --down: #a2432c;    --down-bg: #f8e7e2;
@@ -116,6 +117,7 @@
       --rule-soft: #222831;
       --brand: #3fb6bf;
       --brand-ink: #0c1016;
+      --brand-soft: #14313a;
       --ok: #3fb6bf;      --ok-bg: #10312f;
       --warn: #d6b048;    --warn-bg: #2f2716;
       --down: #e08363;    --down-bg: #34201a;
@@ -189,6 +191,19 @@
     background: var(--ready-bg); border-color: var(--ready); color: var(--ready);
   }
   .scope .n { font-family: var(--mono); opacity: .65; margin-left: 5px; }
+
+  /* The sub row is quieter than the roots on purpose: it is a
+     position within the thing above it, not a peer of it. */
+  .subscopes {
+    display: flex; align-items: center; gap: 4px; padding: 4px 12px;
+    background: var(--panel-alt); border-bottom: 1px solid var(--rule);
+    flex: 0 0 auto; overflow-x: auto; scrollbar-width: thin;
+  }
+  .subscopes[hidden] { display: none; }
+  .scope.sub { font-size: 11.5px; padding: 2px 8px; color: var(--dim); }
+  .scope.sub[aria-pressed="true"] {
+    background: var(--brand-soft); border-color: var(--rule); color: var(--ink);
+  }
   .legend {
     margin-left: auto; display: flex; gap: 12px; align-items: center;
     font-size: 11px; color: var(--dim); white-space: nowrap;
@@ -432,6 +447,8 @@
       <span id="live" title="Refreshes every 10 seconds"></span>
     </div>
   </div>
+
+  <div class="subscopes" id="subscopes" role="group" hidden></div>
 
   <div class="stage">
     <div class="canvas" id="canvas">
@@ -866,6 +883,62 @@ function projects(tasks) {
   return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 }
 
+/* A dotted project name is a path, not a name.
+
+   `holonic-node.pu` and `holonic-node.mu-spec` are two scopes of
+   one thing, and a flat strip of fifteen tabs said otherwise: it
+   put ten siblings of one tree next to four unrelated roots, in
+   alphabetical order, with nothing on screen saying which were
+   related. The unit's own API has always read a project as a
+   nesting scope -- `project:mu-spec` matches `mu-spec.behaviour`
+   by prefix -- so the page was the only layer flattening it.
+
+   One segment is the root; whatever follows is a sub-scope, and
+   nothing here caps the depth. `a.b.c` simply appears under `a`
+   labelled `b.c`, because the scope test is a prefix test and a
+   deeper path needs no case of its own. */
+const rootOf = p => (p.indexOf('.') < 0 ? p : p.slice(0, p.indexOf('.')));
+
+/* Exact match, or a descendant -- and the dot is required, or
+   `job-search-agent` would swallow `job-search-agent-v2`, which
+   is a different project that merely starts the same way. */
+function inScope(task, scope) {
+  const p = task.project || '(none)';
+  return p === scope || p.startsWith(scope + '.');
+}
+
+/* Roots, each carrying its whole subtree's count and its children.
+
+   A root's number is the sum of everything under it, for the same
+   reason a project's number is everything drawn: selecting a root
+   draws every map in the tree, so the tab and the boxes it opens
+   have to agree. A root with no tickets of its own -- which
+   `holonic-node` currently is, ten sub-scopes and nothing at the
+   top -- is still a root, and still the way in. */
+function scopeTree(tasks) {
+  const roots = new Map();
+  for (const [name, n] of projects(tasks)) {
+    const r = rootOf(name);
+    if (!roots.has(r)) roots.set(r, { name: r, total: 0, kids: [] });
+    const e = roots.get(r);
+    e.total += n;
+    if (name !== r) e.kids.push([name, n]);
+  }
+  return [...roots.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/* Every scope the reader may select: the roots, plus each exact
+   project under them. What a stored selection is checked against
+   after a refresh. */
+function allScopes(tasks) {
+  const out = new Set();
+  for (const r of scopeTree(tasks)) {
+    out.add(r.name);
+    for (const [name] of r.kids) out.add(name);
+  }
+  return out;
+}
+
 function renderStrip(d) {
   const m = d.stats?.metrics ?? {};
   const today = d.spend?.days?.at(-1)?.cost_usd ?? 0;
@@ -902,24 +975,55 @@ function escapeText(s) {
   return n.innerHTML;
 }
 
-function renderScopes(tasks) {
-  const box = $('scopes');
-  box.innerHTML = '';
-  for (const [name, n] of projects(tasks)) {
-    const b = document.createElement('button');
-    b.className = 'scope';
-    b.type = 'button';
-    b.dataset.project = name;
-    // Built as DOM rather than markup: the count is the one
-    // value here that is a number rather than text, and having
-    // a single absolute rule beats an exception with a comment.
-    b.append(name);
+/* Built as DOM rather than markup: the count is the one value
+   here that is a number rather than text, and one absolute rule
+   beats an exception with a comment. */
+function scopeButton(scope, label, n, extra = '') {
+  const b = document.createElement('button');
+  b.className = `scope${extra ? ' ' + extra : ''}`;
+  b.type = 'button';
+  b.dataset.project = scope;
+  b.append(label);
+  if (n != null) {
     const count = document.createElement('span');
     count.className = 'n';
     count.textContent = String(n);
     b.appendChild(count);
-    b.onclick = () => selectProject(name);
-    box.appendChild(b);
+  }
+  b.onclick = () => selectProject(scope);
+  return b;
+}
+
+/* Two rows: the roots, and -- only when the current root has any
+   -- its sub-scopes.
+
+   The second row is absent rather than empty for a root with no
+   children, because a row containing one disabled chip reads as a
+   feature that is broken rather than one that does not apply.
+
+   The sub row leads with the root itself, labelled "all", which is
+   the thing a flat strip could not express at all: `holonic-node`
+   as one tree, or `holonic-node.pu` as one scope of it, are
+   different questions and both are now askable. */
+function renderScopes(tasks) {
+  const box = $('scopes');
+  const sub = $('subscopes');
+  box.innerHTML = '';
+  sub.innerHTML = '';
+
+  const tree = scopeTree(tasks);
+  for (const r of tree) box.appendChild(scopeButton(r.name, r.name, r.total));
+
+  const root = tree.find(r => r.name === rootOf(STATE.project ?? ''));
+  sub.hidden = !root || !root.kids.length;
+  if (root && root.kids.length) {
+    sub.setAttribute('aria-label', `Scopes of ${root.name}`);
+    // No count on "all": the root tab above already carries the
+    // subtree total, and two numbers for one thing is the failure
+    // this page has now made three times.
+    sub.appendChild(scopeButton(root.name, 'all', null, 'sub'));
+    for (const [name, n] of root.kids)
+      sub.appendChild(scopeButton(name, name.slice(root.name.length + 1), n, 'sub'));
   }
   syncScopes();
 }
@@ -938,14 +1042,24 @@ function renderScopes(tasks) {
    wrong project as pressed permanently, with no other channel to
    correct it from. */
 function syncScopes() {
-  for (const b of document.querySelectorAll('.scope'))
+  const root = rootOf(STATE.project ?? '');
+  for (const b of document.querySelectorAll('#scopes .scope'))
+    // A root reads as pressed for anything inside it: with
+    // `holonic-node.pu` selected, `holonic-node` is still where
+    // the reader is, and the row below says where within.
+    b.setAttribute('aria-pressed', String(b.dataset.project === root));
+  for (const b of document.querySelectorAll('#subscopes .scope'))
     b.setAttribute('aria-pressed', String(b.dataset.project === STATE.project));
 }
 
 function selectProject(name) {
+  const rootChanged = rootOf(name) !== rootOf(STATE.project ?? '');
   STATE.project = name;
   STATE.selected = null;
-  syncScopes();
+  // Only when the tree changed: rebuilding the sub row on every
+  // click inside it would tear out the button being clicked.
+  if (rootChanged) renderScopes(STATE.tasks);
+  else syncScopes();
   draw();
 }
 
@@ -957,7 +1071,10 @@ function selectProject(name) {
    work with. Per-map keeps every picture small and readable,
    which is the whole ask. */
 function buildScene(tasks) {
-  const inProject = tasks.filter(t => (t.project || '(none)') === STATE.project);
+  // Prefix, not equality: selecting a root draws every map in its
+  // subtree, which is what makes `holonic-node` navigable as one
+  // thing rather than ten unrelated tabs.
+  const inProject = tasks.filter(t => inScope(t, STATE.project));
   const byId = new Map(inProject.map(t => [t.uuid, t]));
   const maps = inProject.filter(t => t.kind === 'map');
   const loose = inProject.filter(t => t.kind !== 'map' && !t.parent);
@@ -1103,7 +1220,11 @@ function draw({ keepView = false } = {}) {
   if (STATE.hover && g.querySelector(`.node[data-id="${CSS.escape(STATE.hover)}"]`))
     highlight(STATE.hover, scene);
 
-  markFresh(g);
+  // `keepView` doubles as "this is a refresh", which is the only
+  // time a new node means new *work*. On a project switch every
+  // node is unseen, and marking them all would turn the highlight
+  // from information into decoration.
+  markFresh(g, keepView);
   applyView();
   if (!keepView) requestAnimationFrame(fit);
 }
@@ -1114,11 +1235,11 @@ function draw({ keepView = false } = {}) {
    `known` is seeded on the first draw so the opening screen is
    not a wall of highlights. */
 let known = null;
-function markFresh(g) {
+function markFresh(g, mark) {
   const ids = [...g.querySelectorAll('.node')].map(n => n.dataset.id);
-  if (known === null) { known = new Set(ids); return; }
-  for (const n of g.querySelectorAll('.node'))
-    if (!known.has(n.dataset.id)) n.classList.add('fresh');
+  if (mark && known !== null)
+    for (const n of g.querySelectorAll('.node'))
+      if (!known.has(n.dataset.id)) n.classList.add('fresh');
   known = new Set(ids);
 }
 
@@ -1524,20 +1645,21 @@ function apply(d, { first = false } = {}) {
   seen.tasks = tasksKey;
   STATE.tasks = d.tasks;
 
-  const ps = projects(STATE.tasks);
-  // The busiest project, not the first alphabetically: opening on
-  // the emptiest space is the worst possible first impression of a
-  // view whose whole point is showing how much is in flight. On a
-  // refresh the reader's own choice stands, unless the project it
-  // named has gone away.
-  if (!STATE.project || !ps.some(p => p[0] === STATE.project))
-    STATE.project = ps.length
-      ? ps.reduce((best, p) => (p[1] > best[1] ? p : best))[0]
+  const tree = scopeTree(STATE.tasks);
+  // The busiest root, not the first alphabetically: opening on the
+  // emptiest space is the worst possible first impression of a view
+  // whose whole point is showing how much is in flight. On a
+  // refresh the reader's own choice stands -- including a sub-scope
+  // -- unless the scope it named has gone away entirely.
+  if (!STATE.project || !allScopes(STATE.tasks).has(STATE.project))
+    STATE.project = tree.length
+      ? tree.reduce((best, r) => (r.total > best.total ? r : best)).name
       : null;
   // Rule 3: the tabs are rebuilt only when the tabs changed. They
   // are buttons, and rebuilding one under a cursor cancels a click
-  // already on its way down.
-  const scopeKey = JSON.stringify(ps);
+  // already on its way down. The key carries the selected root as
+  // well, since the second row's contents depend on it.
+  const scopeKey = JSON.stringify([tree, rootOf(STATE.project ?? '')]);
   if (first || scopeKey !== seen.scopes) { renderScopes(STATE.tasks); seen.scopes = scopeKey; }
   else syncScopes();
 

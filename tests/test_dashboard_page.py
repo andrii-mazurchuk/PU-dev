@@ -293,3 +293,42 @@ def test_a_vanished_selection_is_admitted_not_reassigned(html):
     describing one task while the reader believes they are reading
     another."""
     assert "no longer in the queue" in html
+
+
+# -- nested project scopes ------------------------------------------------
+#
+# A dotted project name is a path. The unit's API has always read it that
+# way -- `project:mu-spec` matches `mu-spec.behaviour` by prefix -- and
+# the page was the only layer flattening it into unrelated tabs.
+
+
+def test_a_dotted_project_is_read_as_a_path_not_a_name(html):
+    assert "const rootOf =" in html
+    assert "function scopeTree(" in html
+
+
+def test_a_scope_matches_descendants_but_not_lookalike_siblings(html):
+    """`job-search-agent` must not swallow `job-search-agent-v2`,
+    which is a different project that merely starts the same way.
+    The dot is what separates a child from a coincidence."""
+    assert "p.startsWith(scope + '.')" in html, "prefix test without the dot separator"
+
+
+def test_the_canvas_filters_by_scope_rather_than_by_equality(html):
+    """Selecting a root draws every map in its subtree. Equality
+    here is what made ten sibling scopes look like ten unrelated
+    projects."""
+    assert "tasks.filter(t => inScope(t, STATE.project))" in html
+
+
+def test_a_stored_selection_is_checked_against_every_scope(html):
+    """A refresh must not throw the reader out of a sub-scope just
+    because the flat project list never contained it."""
+    assert "allScopes(STATE.tasks).has(STATE.project)" in html
+
+
+def test_the_highlight_marks_new_work_not_a_project_switch(html):
+    """Every node is unseen after switching scope. Marking them all
+    turns the new-work highlight from information into decoration,
+    which is the same failure as colouring every blocked task."""
+    assert "markFresh(g, keepView)" in html
