@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Sequence
 
 from pu import (
-    ask, bodies, notify, pipeline, server, sessions, taskstore, typestore,
+    ask, bodies, notify, pipeline, server, sessions, taskstore, triggers,
+    typestore,
 )
 
 # Matches this unit's registered base_url. Keeping the default equal to the
@@ -163,6 +164,7 @@ def main() -> None:
     # this repo -- the four committed directories are still read from
     # `unit_root/session_types` until the migration unifies them.
     type_store = typestore.TypeStore(state)
+    trigger_store = triggers.TriggerStore(state)
 
     def tick():
         return pipeline.tick(
@@ -176,6 +178,7 @@ def main() -> None:
             # notified when a task is blocked.
             mcp_bridge_url=notify.bridge_url(),
             type_store=type_store,
+            trigger_store=trigger_store,
         ).as_dict()
 
     # A session driving this store by hand runs bare `task`, which reads a

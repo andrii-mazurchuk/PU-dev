@@ -55,7 +55,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from pu import jsonl
+from pu import jsonl, records
 
 # `schedule` fetches nothing. It is here rather than in a field of its own
 # because `source` answers one question -- what does this trigger watch --
@@ -150,6 +150,18 @@ def _validate(record: dict[str, Any]) -> dict[str, Any]:
                 "interval is the whole condition")
     elif not source.get("url"):
         raise TriggerError("a source needs a url")
+
+    emits = record.get("emits")
+    if emits is not None:
+        if not isinstance(emits, dict):
+            raise TriggerError("emits is an object")
+        # Validated here rather than at task-creation time: a trigger with
+        # an unrunnable kind would otherwise be written happily and fail
+        # only when it first fires, which could be days later and is the
+        # one moment nobody is watching.
+        records.check_kind(emits.get("kind"))
+        if not isinstance(emits.get("tags") or [], list):
+            raise TriggerError("emits.tags is a list")
 
     for clause in record.get("predicate") or ():
         if not isinstance(clause, (list, tuple)) or len(clause) != 3:

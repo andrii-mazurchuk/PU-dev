@@ -354,3 +354,139 @@ def test_a_watch_still_needs_a_url(tmp_path):
 
     with pytest.raises(triggers.TriggerError, match="needs a url"):
         store.append(a_trigger(source={"kind": "http-json"}))
+
+
+# -- the emitter: a fired trigger creates a task, and nothing else --------
+
+
+def emitting(**overrides):
+    record = a_trigger(emits={"kind": "execution", "tags": ["digest"],
+                              "project": "demo", "afk": True})
+    record.update(overrides)
+    return record
+
+
+def test_a_fired_trigger_creates_one_task_carrying_the_payload(
+        store, body_store, tmp_path):
+    """The whole loop in one assertion: a watch sees something, a task
+    exists, and the items are in its body for the session to read."""
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting())
+
+    emitted = pipeline.emit_due_work(
+        trigger_store, store, body_store, now=at(),
+        fetch=json_source([{"id": "a", "title": "deploy failed"}]))
+
+    assert len(emitted) == 1
+    task = store.get(emitted[0]["task_uuid"])
+    assert task.kind == "execution"
+    assert task.project == "demo"
+    assert "digest" in task.tags
+    assert task.runnable is True  # afk was asked for
+
+    body = body_store.get(task.uuid)
+    assert "deploy failed" in body
+    assert "## Payload" in body
+
+
+def test_firing_twice_creates_two_tasks_and_a_quiet_tick_creates_none(
+        store, body_store, tmp_path):
+    """At-least-once, with the cursor as the only thing stopping a repeat.
+    Two separate events are two tasks -- that is not a duplicate."""
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting())
+
+    first = pipeline.emit_due_work(
+        trigger_store, store, body_store, now=at(),
+        fetch=json_source([{"id": "a"}]))
+    again = pipeline.emit_due_work(
+        trigger_store, store, body_store, now=at(10),
+        fetch=json_source([{"id": "a"}]))
+    second = pipeline.emit_due_work(
+        trigger_store, store, body_store, now=at(20),
+        fetch=json_source([{"id": "a"}, {"id": "b"}]))
+
+    assert len(first) == 1 and len(second) == 1
+    assert again == ()
+    assert first[0]["task_uuid"] != second[0]["task_uuid"]
+    assert len(store.export("status:pending")) == 2
+
+
+def test_a_failed_fetch_creates_nothing_and_leaves_the_cursor_alone(
+        store, body_store, tmp_path):
+    """Transport status is not data, all the way through to the queue."""
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting())
+
+    assert pipeline.emit_due_work(
+        trigger_store, store, body_store, now=at(),
+        fetch=lambda url: (503, b"")) == ()
+    assert store.export("status:pending") == []
+    assert trigger_store.cursor("posts")["seen"] == []
+
+
+def test_one_broken_trigger_does_not_silence_the_others(
+        store, body_store, tmp_path):
+    """A single unusable regex would otherwise stop every watch in the
+    unit, and the symptom is a queue that quietly goes empty."""
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting(name="broken",
+                                  predicate=[["title", "matches", "["]]))
+    trigger_store.append(emitting(name="fine"))
+
+    emitted = pipeline.emit_due_work(
+        trigger_store, store, body_store, now=at(),
+        fetch=json_source([{"id": "a", "title": "x"}]))
+
+    by_name = {e["trigger"]: e for e in emitted}
+    assert "error" in by_name["broken"]
+    assert "task_uuid" in by_name["fine"]
+
+
+def test_a_disabled_trigger_emits_nothing(store, body_store, tmp_path):
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting(enabled=False))
+
+    assert pipeline.emit_due_work(
+        trigger_store, store, body_store, now=at(),
+        fetch=json_source([{"id": "a"}])) == ()
+
+
+def test_a_trigger_emitting_an_unrunnable_kind_is_refused_when_written(
+        tmp_path):
+    """Validated at write time, not at fire time: a trigger with a typo'd
+    kind would otherwise be written happily and fail days later, which is
+    the one moment nobody is watching."""
+    trigger_store = triggers.TriggerStore(tmp_path)
+
+    with pytest.raises(Exception, match="kind"):
+        trigger_store.append(emitting(emits={"kind": "nonsense"}))
+
+
+def test_a_schedule_emits_a_task_whose_body_states_there_is_no_payload(
+        store, body_store, tmp_path):
+    """A session that cannot tell "nothing was fetched" from "fetching was
+    not part of this" has to guess, and it will guess wrong about whether
+    to go and look."""
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting(
+        name="nightly", source={"kind": "schedule", "every_seconds": 3600}))
+
+    emitted = pipeline.emit_due_work(
+        trigger_store, store, body_store, now=at())
+
+    body = body_store.get(emitted[0]["task_uuid"])
+    assert "None. This is a schedule" in body
+    assert "nothing failed to arrive" in body

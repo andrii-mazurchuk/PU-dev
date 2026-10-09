@@ -20,11 +20,17 @@ Order of operations, and each is load-bearing:
    gate that runs after selection can be skipped by whatever selected
    differently, and a gate an external trigger can route around is not a
    gate.
-4. **Claim before work.** The claim is the store's own `+ACTIVE` state, so
+4. **Evaluate triggers and create the work they imply.** After the gates
+   so a blocked unit changes no state at all, rather than quietly
+   accumulating a night of tasks from a misfiring watch; before selection
+   so a trigger that fires can have its work run on the same tick. A
+   trigger decides that work *exists* -- starting a session is still step 6,
+   through the gates above, and there is no other door in.
+5. **Claim before work.** The claim is the store's own `+ACTIVE` state, so
    a concurrent session's frontier no longer contains the task. It is the
    session's first write for the same reason wayfinder makes it one.
-5. **Run.**
-6. **Record whatever happened** -- to local artifacts, to the logs unit,
+6. **Run.**
+7. **Record whatever happened** -- to local artifacts, to the logs unit,
    and onto the task. A session that failed leaves the task released and
    annotated rather than silently claimed forever.
 """
@@ -51,6 +57,7 @@ from pu import (
     sessions as sessions_mod,
     sops,
     taskstore,
+    triggers,
     usage_gate,
 )
 
@@ -71,6 +78,11 @@ class TickResult:
     outcome: str | None = None
     detail: str = ""
     cost_usd: float | None = None
+    # What the triggers did this tick, one entry per trigger that fired or
+    # failed. Reported even when no session ran: a tick that created three
+    # tasks and selected none did something, and `ran=False` alone would
+    # read as an idle unit.
+    emitted: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -366,6 +378,7 @@ def tick(
     stale_claim_seconds: int = guards.DEFAULT_STALE_CLAIM_SECONDS,
     mcp_bridge_url: str | None = None,
     type_store=None,
+    trigger_store=None,
 ) -> TickResult:
     """Do at most one unit of work."""
     if not _TICK_LOCK.acquire(blocking=False):
@@ -376,6 +389,7 @@ def tick(
             cost_policy_path, session_runner, now,
             tracker_path or (unit_root / "state" / "repeat_tracker.json"),
             repeat_threshold, stale_claim_seconds, mcp_bridge_url, type_store,
+            trigger_store,
         )
     finally:
         _TICK_LOCK.release()
@@ -384,7 +398,7 @@ def tick(
 def _tick(
     store, body_store, session_store, unit_root, peers_path, cost_policy_path,
     session_runner, now, tracker_path, repeat_threshold, stale_claim_seconds,
-    mcp_bridge_url, type_store=None,
+    mcp_bridge_url, type_store=None, trigger_store=None,
 ) -> TickResult:
     moment = now()
 
@@ -416,11 +430,15 @@ def _tick(
     if usage_blocked:
         return TickResult(ran=False, reason=usage_blocked)
 
+    # Step 4. Past the gates, so a blocked unit has changed nothing; before
+    # selection, so work a trigger just created is selectable on this tick.
+    emitted = emit_due_work(trigger_store, store, body_store, now)
+
     try:
         types = session_types_mod.discover(
             unit_root / "session_types", store=type_store)
     except session_types_mod.SessionTypeError as exc:
-        return TickResult(ran=False, reason=str(exc))
+        return TickResult(ran=False, reason=str(exc), emitted=emitted)
 
     for candidate in store.runnable():
         # A runtime-authored type claiming this task's kind and tags wins
@@ -454,7 +472,7 @@ def _tick(
             return TickResult(
                 ran=False, reason="blocked after repeated dispatch",
                 task_uuid=candidate.uuid, session_type=stype.name,
-                outcome="auto_blocked",
+                outcome="auto_blocked", emitted=emitted,
             )
 
         if stype.runs_in_target_repo:
@@ -479,13 +497,13 @@ def _tick(
             cwd = stype.dir
             instructions = ""
 
-        return _run(
+        return dataclasses.replace(_run(
             store, body_store, session_store, unit_root, peers_path,
             candidate, stype, cwd, instructions, session_runner,
             mcp_bridge_url,
-        )
+        ), emitted=emitted)
 
-    return TickResult(ran=False, reason="nothing runnable")
+    return TickResult(ran=False, reason="nothing runnable", emitted=emitted)
 
 
 def _run(
@@ -548,3 +566,116 @@ def _run(
         ran=True, task_uuid=task.uuid, session_type=stype.name,
         outcome=outcome, detail=detail, cost_usd=result.cost_usd,
     )
+
+
+# -- triggers: a fired trigger creates a task, and nothing else -----------
+#
+# The whole emitter. There is no event log, no event-name binding and no
+# `record_event` tool, and each of those was a settled design that the
+# 2026-09-22 amendment deleted -- a task is already a durable record with a
+# status, an atomic claim and annotations, and `kind` plus tags already bind
+# work to the session type that claims it. Building any of them back is a
+# regression, not an addition.
+#
+# Where this sits in the tick is load-bearing: **after the gates, before
+# selection.** After, so a blocked unit changes no state at all rather than
+# quietly accumulating a night's worth of tasks from a misfiring watch.
+# Before, so a trigger that fires can have its work selected on the same
+# tick instead of waiting for the next one.
+
+
+def _payload_body(trigger: dict, evaluation) -> str:
+    """The task's body: why it exists, then the payload, labelled.
+
+    The payload is a separate labelled section rather than prose woven
+    around it, and a schedule's empty payload is *stated* rather than
+    omitted -- a session that cannot tell "nothing was fetched" from
+    "fetching was not part of this" has to guess, and it will guess wrong
+    about whether to go and look.
+    """
+    source = trigger["source"]
+    lines = [
+        "## Why this exists",
+        "",
+        f"The trigger `{trigger['name']}` fired.",
+    ]
+    if trigger.get("purpose"):
+        lines += ["", trigger["purpose"]]
+
+    if source["kind"] == "schedule":
+        lines += [
+            "", "## Payload", "",
+            f"None. This is a schedule, firing every "
+            f"{source['every_seconds']}s; it watches no source, so there is "
+            f"nothing to carry and nothing failed to arrive.",
+        ]
+    else:
+        lines += [
+            "", f"## Payload — {len(evaluation.items)} item(s) from "
+            f"{source['kind']} `{source['url']}`", "",
+            "```json",
+            json.dumps(list(evaluation.items), indent=2, ensure_ascii=False),
+            "```",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def emit_due_work(
+    trigger_store, store: taskstore.TaskStore, body_store: bodies.BodyStore,
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    fetch=None,
+) -> tuple[dict[str, Any], ...]:
+    """Evaluate every enabled trigger; create a task for each that fired.
+
+    Returns one record per trigger that did something, for the tick to
+    report. A trigger that raises does not stop the others: one unusable
+    regex would otherwise silence every watch in the unit.
+    """
+    if trigger_store is None:
+        return ()
+
+    emitted: list[dict[str, Any]] = []
+    for trigger in trigger_store.enabled():
+        name = trigger["name"]
+        cursor = trigger_store.cursor(name)
+        try:
+            kwargs = {"fetch": fetch} if fetch is not None else {}
+            evaluation = triggers.evaluate(trigger, cursor, now=now, **kwargs)
+        except triggers.TriggerError as exc:
+            # ponytail: reported in the tick result and nowhere else, so a
+            # permanently broken trigger is visible only to whoever reads a
+            # tick. Notify on the transition into broken -- the usage gate's
+            # pattern -- once anything depends on a watch staying up.
+            emitted.append({"trigger": name, "error": str(exc)})
+            continue
+
+        if evaluation.fired and trigger.get("emits"):
+            emits = trigger["emits"]
+            tags = list(emits.get("tags") or ())
+            if emits.get("afk"):
+                tags.append(records.AFK_TAG)
+            # The task is created **before** the cursor advances. A crash
+            # between the two re-creates on the next tick, which is the
+            # at-least-once model this unit already owns; the other order
+            # marks the items seen and loses the work with nobody the
+            # wiser.
+            uuid = store.add(
+                emits.get("title") or f"{name}: {evaluation.reason}",
+                tags=tags,
+                kind=emits["kind"],
+                project=emits.get("project"),
+            )
+            body_store.set(uuid, _payload_body(trigger, evaluation))
+            emitted.append({"trigger": name, "task_uuid": uuid,
+                            "items": len(evaluation.items)})
+        elif evaluation.fired:
+            # Fired with nothing to emit. Recorded rather than silent: a
+            # trigger with no `emits` is almost certainly half-written, and
+            # the cursor still advances so it will not re-report.
+            emitted.append({"trigger": name, "fired": True,
+                            "note": "no emits, so no task was created"})
+
+        if evaluation.advance:
+            trigger_store.save_cursor(
+                name, triggers.advanced(cursor, evaluation, now=now))
+    return tuple(emitted)
