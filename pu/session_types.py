@@ -54,6 +54,76 @@ ALLOWED_TOOLS: dict[str, str] = {
     "execution": f"Bash,Read,Write,Edit,{LOOKUP}",
 }
 
+
+@dataclasses.dataclass(frozen=True)
+class Grant:
+    """What a session type is permitted, as one named bundle.
+
+    Named `grant` and not `role` on purpose: the node's shared glossary
+    already owns Role as a delivery-capability slot (`owner`, `logs`,
+    `thinking`, resolved at the bridge), and this is the word this file
+    already used for the other thing.
+
+    Everything in here is a permission, which is why they travel together
+    and why the set is small and fixed rather than composable: a grant is a
+    security decision and stays visible in code review rather than inferred
+    from a record someone wrote at runtime. `model` is deliberately *not* a
+    field here -- it is cost and reasoning load, not permission, so it
+    stays an ordinary field of the record.
+
+    `runs_in_target_repo` is in here because it decides *where* code runs,
+    and the system-allocated per-type directory is the scoping enforcement
+    point. A runtime-authored type able to grant itself target-repo
+    execution would walk straight out of that.
+    """
+
+    tools: str
+    reaches_peers: bool
+    runs_in_target_repo: bool
+
+
+# The four grants, which are the four already in force -- renamed from the
+# job each directory happened to do to what each actually permits, because
+# a person approving a new type judges risk in one glance and "grant: repo"
+# says it where "grant: execution" does not. They read in escalation order.
+#
+# Adding a fifth is adding one line here, visible in review. That is the
+# escape hatch, and it is the reason the set stays fixed: `read` plus peer
+# reach is the obvious gap and no type has asked for it yet.
+#
+# Each grant names its own peer reach rather than leaving it per-type:
+# handing a session a bridge URL adds `mcp__mcp-bridge__*`, every tool
+# every peer exposes, and that is not something a deployment setting should
+# widen by filling in an env var.
+GRANTS: dict[str, Grant] = {
+    "none": Grant(tools="", reaches_peers=False, runs_in_target_repo=False),
+    "read": Grant(tools=f"Read,{LOOKUP}",
+                  reaches_peers=False, runs_in_target_repo=False),
+    "web": Grant(tools=f"Read,WebSearch,WebFetch,{LOOKUP}",
+                 reaches_peers=True, runs_in_target_repo=False),
+    "repo": Grant(tools=f"Bash,Read,Write,Edit,{LOOKUP}",
+                  reaches_peers=True, runs_in_target_repo=True),
+}
+
+# Which grant each of the four directory-defined types would carry. Not
+# wired into the properties below yet, deliberately: that is the migration
+# ticket's job, and it has one trap to get right first.
+#
+# ponytail: `none` is expressed here as an empty tool string, while the
+# directory maps express it as *absence from the map* -- and those are not
+# the same thing downstream. An absent entry means `runner.build_argv`
+# emits no `--allowedTools` at all, which is not "zero tools"; an empty
+# string would emit `--allowedTools ""`. `ask` is the only type on that
+# path today. Settle which of the two actually denies everything before
+# making these maps derive from GRANTS, or the migration quietly changes
+# what the one untrusted-input session is allowed to do.
+GRANT_FOR_DIRECTORY_TYPE: dict[str, str] = {
+    "ask": "none",
+    "intake": "read",
+    "research": "web",
+    "execution": "repo",
+}
+
 # `ask` is absent from all three maps below, and from
 # records.SESSION_TYPE_FOR_KIND, and every one of those absences is
 # deliberate rather than pending.
