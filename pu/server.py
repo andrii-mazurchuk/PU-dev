@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from pu import (
     ask, bodies, docs, pipeline, records, service, session_types, sops,
-    taskstore, typestore,
+    taskstore, triggers, typestore,
 )
 
 UNIT_NAME = "pu"
@@ -279,6 +279,79 @@ TOOLS = [
         },
     },
     {
+        "name": "list_triggers",
+        "description": "Every trigger this unit holds, as its current record. A trigger watches a source and decides that work exists; it never starts a session -- the gateway's heartbeat tick does that, through the gates. Reading is open to every peer.",
+        "method": "GET",
+        "path": "/triggers",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_trigger",
+        "description": "One trigger's current record, by name. Names come from list_triggers.",
+        "method": "GET",
+        "path": "/triggers/{name}",
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "get_trigger_cursor",
+        "description": "Where a watch has got to: the item ids it has seen, when it last saw something new, how many matches are pending, and when it last fired. This is the evidence a watch is working -- a cursor that never moves means the source is not being read, and one that moves without firing means the predicate never holds.",
+        "method": "GET",
+        "path": "/triggers/{name}/cursor",
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "write_trigger",
+        "description": "Write a trigger. One call for create and update: `name` is the identity and the store is append-only, so writing an existing name adds a revision. A trigger is **created inactive** whatever `enabled` says, and **editing a live one switches it off** -- an edit can change what it watches or what it creates. A write touching only `enabled` is the activation path. `source.kind` is http-json, rss, or schedule; a schedule fetches nothing and takes no predicate, its interval is the whole condition. The predicate is a flat ANDed list of [field, operator, value]; fields are count_since_fire, age_since_last_seen, or a dotted path into one fetched item. `emits` is the task a firing creates, and `emits.afk` true means an agent may run it alone -- which is what makes a trigger spend money unattended.",
+        "method": "POST",
+        "path": "/triggers",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "the identity, immutable"},
+                "purpose": {"type": "string", "description": "what this watches and why, read by a person deciding whether to activate it"},
+                "source": {
+                    "type": "object",
+                    "description": "what this trigger watches. http-json and rss need a url; schedule needs every_seconds and fetches nothing.",
+                    "properties": {
+                        "kind": {"type": "string", "enum": list(triggers.SOURCE_KINDS)},
+                        "url": {"type": "string"},
+                        "items_path": {"type": "string", "description": "dotted path to the list of items, when a json source does not return one at the top level"},
+                        "id_path": {"type": "string", "description": "dotted path to an item's stable identity; defaults to guid, id, link or url"},
+                        "every_seconds": {"type": "number", "description": "schedule only: the interval"},
+                    },
+                    "required": ["kind"],
+                },
+                "predicate": {
+                    "type": "array",
+                    "description": "flat ANDed clauses, each [field, operator, value]. No OR, no nesting: anything richer should wake a session and decide in English.",
+                    "items": {"type": "array"},
+                },
+                "emits": {
+                    "type": "object",
+                    "description": "the task a firing creates",
+                    "properties": {
+                        "kind": {"type": "string", "enum": list(records.KINDS)},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "a session type claims work by kind and tag, so this is how a firing reaches the type written for it"},
+                        "project": {"type": "string"},
+                        "afk": {"type": "boolean", "description": "may an agent run the created task alone. False means it waits for a person."},
+                        "title": {"type": "string", "description": "the task's description; derived from the trigger name if absent"},
+                    },
+                    "required": ["kind"],
+                },
+                "enabled": {"type": "boolean", "description": "a trigger is evaluated only while this is true. Ignored on the first write -- a new trigger is always created inactive."},
+            },
+            "required": ["name", "source"],
+        },
+    },
+    {
         "name": "list_docs",
         "description": "Index of this unit's own documentation: name, title, summary and size, so a caller can decide what not to fetch.",
         "method": "GET",
@@ -308,6 +381,7 @@ def make_handler(
     tick=None,
     ask_store=None,
     type_store=None,
+    trigger_store=None,
 ):
     class Handler(BaseHTTPRequestHandler):
         server_version = "pu/0.1"
@@ -396,6 +470,24 @@ def make_handler(
             try:
                 if parts == ["health"]:
                     return self._json(200, {"status": "ok"})
+
+                if parts[:1] == ["triggers"] and len(parts) <= 3:
+                    if trigger_store is None:
+                        return self._json(503, {"error": "no trigger store wired"})
+                    if len(parts) == 1:
+                        return self._json(200,
+                                          service.list_triggers(trigger_store))
+                    name = unquote(parts[1])
+                    if len(parts) == 2:
+                        record = service.get_trigger(trigger_store, name)
+                    elif parts[2] == "cursor":
+                        record = service.get_trigger_cursor(
+                            trigger_store, name)
+                    else:
+                        return self._not_found()
+                    if record is None:
+                        return self._not_found()
+                    return self._json(200, record)
 
                 if parts[:1] == ["session-types"] and len(parts) <= 2:
                     if type_store is None:
@@ -552,7 +644,7 @@ def make_handler(
 
             except (service.ServiceError, records.RecordError) as exc:
                 return self._json(400, {"error": str(exc)})
-            except typestore.TypeStoreError as exc:
+            except (typestore.TypeStoreError, triggers.TriggerError) as exc:
                 # Not the caller's mistake: the store itself is unreadable,
                 # and the message says which line. 500 rather than 400 so a
                 # client does not retry a request that was fine.
@@ -626,6 +718,12 @@ def make_handler(
                     )
                     return self._json(202, {"id": ask_id})
 
+                if parts == ["triggers"]:
+                    if trigger_store is None:
+                        return self._json(503, {"error": "no trigger store wired"})
+                    return self._json(201, service.write_trigger(
+                        trigger_store, payload))
+
                 if parts == ["session-types"]:
                     if type_store is None:
                         return self._json(503, {"error": "no session-type store wired"})
@@ -662,7 +760,8 @@ def make_handler(
                 return self._not_found()
 
             except (service.ServiceError, records.RecordError,
-                    bodies.BodyError, typestore.TypeStoreError) as exc:
+                    bodies.BodyError, typestore.TypeStoreError,
+                    triggers.TriggerError) as exc:
                 return self._json(400, {"error": str(exc)})
             except taskstore.TaskError as exc:
                 return self._json(502, {"error": str(exc)})
@@ -681,12 +780,13 @@ def build_server(
     tick=None,
     ask_store=None,
     type_store=None,
+    trigger_store=None,
 ) -> ThreadingHTTPServer:
     return ThreadingHTTPServer(
         (host, port),
         make_handler(
             store, body_store, prompts_dir,
             Path(unit_root) if unit_root else Path("."),
-            session_store, tick, ask_store, type_store,
+            session_store, tick, ask_store, type_store, trigger_store,
         ),
     )

@@ -289,6 +289,94 @@ def push_inbox(
     return {"uuid": uuid, "accepted": True}
 
 
+# -- write door 4: trigger authoring --------------------------------------
+#
+# Symmetric with the session-type door and for the same reason: the store
+# worked and nobody could reach it. Until this existed the only way to
+# create a watch was to append a line to `triggers.jsonl` with an editor,
+# which also skipped the validation -- `TriggerStore.append` validates and
+# nothing called it, so a malformed line was not discovered until the tick
+# that read it.
+#
+# Authoring a trigger is agent work, like authoring a session type, so this
+# is in `/tools` and not behind `/actions`.
+
+
+def list_triggers(trigger_store) -> dict[str, Any]:
+    """Every trigger's current record. Reading is open to every peer."""
+    return {"triggers": list(trigger_store.current().values())}
+
+
+def get_trigger(trigger_store, name: str) -> dict[str, Any] | None:
+    """None for a name never written -- a 404 at the routing layer, the
+    same shape as `get_task` and `get_session_type`."""
+    return trigger_store.get(_require(name, "name"))
+
+
+def get_trigger_cursor(trigger_store, name: str) -> dict[str, Any] | None:
+    """Where a watch has got to.
+
+    Served apart from the trigger rather than inside it, because it is
+    *state* and the trigger is *config*: they change on different clocks,
+    one is append-only and the other is overwritten every tick, and folding
+    them together would imply a history the cursor does not have.
+
+    It is also the evidence a watch is working at all -- the milestone
+    asked for "the watch record showing the cursor before and after", and
+    before this the answer was to go and read a file.
+    """
+    if trigger_store.get(_require(name, "name")) is None:
+        return None
+    return trigger_store.cursor(name)
+
+
+def write_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
+    """Append one trigger record, under the same two activation rules.
+
+    **A trigger inherits both rules, and the reasoning is stronger than for
+    a session type rather than weaker.** A session type is inert until a
+    task reaches it; a trigger with `emits.afk` true causes spend on an
+    interval with nobody watching. So: created inactive, and an edit to a
+    live one switches it off.
+
+    Nothing here validates the record. `TriggerStore.append` does, and this
+    endpoint being its first real caller is the point -- a second copy of
+    the rules would be a second thing to keep in step.
+    """
+    if not isinstance(payload, dict):
+        raise ServiceError("a trigger is a JSON object")
+
+    previous = trigger_store.get(payload.get("name") or "")
+    record, transition = apply_activation_rules(previous, dict(payload))
+    written = trigger_store.append(record)
+
+    emits = written.get("emits") or {}
+    spends = " It emits agent-runnable work, so it will spend." \
+        if emits.get("afk") else ""
+
+    if transition == "deactivated_by_edit":
+        notify.notify_owner(
+            notify.bridge_url(),
+            f"pu deactivated a live trigger because it was edited.\n\n"
+            f"{written['name']} - {written['source'].get('kind')}\n"
+            f"{written.get('purpose', '')}\n\n"
+            f"An edit can change what it watches or what it creates, so it "
+            f"is switched off rather than left firing under new rules. Read "
+            f"the change and activate it again.",
+            source_unit="pu",
+        )
+    elif transition == "activated":
+        notify.notify_owner(
+            notify.bridge_url(),
+            f"pu activated a trigger, and nothing asked first.\n\n"
+            f"{written['name']} - {written['source'].get('kind')}\n"
+            f"{written.get('purpose', '')}\n\n"
+            f"It will now create work on every tick its condition holds."
+            f"{spends}",
+            source_unit="pu",
+        )
+    return written
+
 # -- stats ----------------------------------------------------------------
 
 
@@ -398,19 +486,11 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
     # Read before the write, so every question below is answered about the
     # state from before this call rather than the one it just created.
     previous = type_store.get(payload.get("name") or "")
-    record = dict(payload, origin="authored")
-    deactivated_by_edit = False
-
-    if previous is None:
-        record["enabled"] = False
-    elif previous.get("enabled") and _changes_more_than_enabled(
-            record, previous):
-        record["enabled"] = False
-        deactivated_by_edit = True
-
+    record, transition = apply_activation_rules(
+        previous, dict(payload, origin="authored"))
     written = type_store.append(record)
 
-    if deactivated_by_edit:
+    if transition == "deactivated_by_edit":
         notify.notify_owner(
             notify.bridge_url(),
             f"pu deactivated a live session type because it was edited.\n\n"
@@ -421,7 +501,7 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
             f"instructions. Read the change and activate it again.",
             source_unit="pu",
         )
-    elif written.get("enabled") and not previous.get("enabled", False):
+    elif transition == "activated":
         # A flip, not every save. A message per edit is noise that teaches
         # its own reader to skip it -- the same reasoning the usage gate
         # reports on transitions rather than per tick.
@@ -443,10 +523,41 @@ def _changes_more_than_enabled(
 ) -> bool:
     """Whether this write alters anything but the switch.
 
-    Compared as whole records, not as a patch, because the store holds a
+    Compared as whole records, not as a patch, because both stores hold a
     full record per line: a field the caller left out has been *removed*,
     and treating that as "unchanged" would let an edit drop a field from a
-    live type without deactivating it.
+    live record without deactivating it.
     """
     return ({k: v for k, v in record.items() if k != "enabled"}
             != {k: v for k, v in previous.items() if k != "enabled"})
+
+
+def apply_activation_rules(
+    previous: dict[str, Any] | None, record: dict[str, Any]
+) -> tuple[dict[str, Any], str | None]:
+    """The two rules from the accessibility grilling, for both doors.
+
+    Shared rather than written twice because the rules must not drift
+    between session types and triggers -- the same reason the two logs
+    share their reading. The *messages* stay per door, since what a person
+    needs to be told differs.
+
+    Returns the record to write and which transition happened, if any:
+    `activated` or `deactivated_by_edit`.
+
+    1. **Created inactive, always.** Overridden rather than refused: a
+       refusal makes every caller handle an error for something this unit
+       can simply decide.
+    2. **Editing a live record switches it off**, because an edit can
+       change what an already-approved thing does. A write touching only
+       `enabled` is honoured -- that is the activation path, and
+       deactivating in response to it would make a record impossible to
+       turn on.
+    """
+    if previous is None:
+        return dict(record, enabled=False), None
+    if previous.get("enabled") and _changes_more_than_enabled(record, previous):
+        return dict(record, enabled=False), "deactivated_by_edit"
+    if record.get("enabled") and not previous.get("enabled", False):
+        return record, "activated"
+    return record, None

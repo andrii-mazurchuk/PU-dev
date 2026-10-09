@@ -34,10 +34,11 @@ file and that one disagree, that one is right and this one is the bug.
   mirrored GitHub issue and an inbox message are the same record differing
   by field. There is no per-source partition and no priority ladder;
   ordering is Taskwarrior urgency with per-kind coefficients.
-- **Three typed write doors, no generic CRUD.** The six wayfinding
+- **Four typed write doors, no generic CRUD.** The six wayfinding
   operations; `/inbox` — which can only ever mint an `intake` record
-  for a session to convert; and `POST /session-types`, which writes a
-  session-type record and nothing else. Reading is open to every peer.
+  for a session to convert; `POST /session-types`, which writes a
+  session-type record and nothing else; and `POST /triggers`, which writes
+  a trigger. Reading is open to every peer.
 
   The third door is one endpoint for create and update rather than a
   `POST`/`PUT`/`DELETE` set, and that is what keeps it typed rather than
@@ -51,6 +52,13 @@ file and that one disagree, that one is right and this one is the bug.
   what an already-approved session does -- `prompt` is the whole behaviour
   -- so it stops rather than running under new instructions; a write that
   touches only `enabled` is the activation path and does not deactivate.
+
+  **A trigger takes both of those rules too**, and the reasoning is
+  stronger rather than weaker: a session type is inert until a task reaches
+  it, while a trigger whose `emits.afk` is true causes spend on an interval
+  with nobody watching. Its cursor is served separately from its record,
+  because one is state overwritten every tick and the other is append-only
+  config.
 
   **Activation is the owner's by design and by nothing else.** Nothing
   authenticates a caller, so an agent or any process on the host can

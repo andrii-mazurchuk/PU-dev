@@ -213,6 +213,7 @@ def main() -> None:
         args.host, args.port, store, body_store, Path(args.prompts_dir),
         unit_root=unit_root, session_store=session_store, tick=tick,
         ask_store=ask_store, type_store=type_store,
+        trigger_store=trigger_store,
     )
     # flush: stdout is a pipe whenever the gateway or a shell redirects it,
     # and a startup banner nobody sees is a path nobody can point a session

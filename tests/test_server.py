@@ -11,7 +11,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from pu import server, typestore
+from pu import server, triggers, typestore
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -25,6 +25,7 @@ def base_url(store, body_store, tmp_path):
     httpd = server.build_server(
         "127.0.0.1", 0, store, body_store, PROMPTS_DIR,
         type_store=typestore.TypeStore(tmp_path),
+        trigger_store=triggers.TriggerStore(tmp_path),
     )
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -502,3 +503,102 @@ def test_the_enable_flip_tells_the_owner_and_a_re_save_does_not(
     post(f"{base_url}/session-types", a_type(enabled=True, purpose="reworded"))
     assert len(sent) == 2
     assert "deactivated a live session type because it was edited" in sent[1]
+
+
+# -- write door 4: trigger authoring -------------------------------------
+
+
+def a_watch(**overrides):
+    payload = {
+        "name": "failed-deploys",
+        "purpose": "Watch the deploy feed for failures.",
+        "source": {"kind": "http-json", "url": "http://example/feed.json"},
+        "predicate": [["level", "==", "error"]],
+        "emits": {"kind": "execution", "tags": ["digest"], "afk": True},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_a_trigger_can_be_written_and_read_back(base_url):
+    """Before this door existed the only way to create a watch was to
+    append a line to the log with an editor -- which also skipped the
+    validation, since append is its only caller."""
+    status, created = post(f"{base_url}/triggers", a_watch())
+    assert status == 201
+    assert created["enabled"] is False
+
+    status, listed = get(f"{base_url}/triggers")
+    assert [t["name"] for t in listed["triggers"]] == ["failed-deploys"]
+
+    status, one = get(f"{base_url}/triggers/failed-deploys")
+    assert one["source"]["kind"] == "http-json"
+
+
+def test_a_trigger_inherits_both_activation_rules(base_url):
+    """Stronger here than for a session type rather than weaker: a type is
+    inert until a task reaches it, while a trigger with afk work causes
+    spend on an interval with nobody watching."""
+    post(f"{base_url}/triggers", a_watch(enabled=True))
+    _, activated = post(f"{base_url}/triggers", a_watch(enabled=True))
+    assert activated["enabled"] is True
+
+    _, edited = post(f"{base_url}/triggers",
+                     a_watch(enabled=True, predicate=[["level", "==", "warn"]]))
+    assert edited["enabled"] is False
+
+
+def test_the_cursor_is_served_apart_from_the_trigger(base_url):
+    """State, not config: they change on different clocks, and folding them
+    together would imply a history the cursor does not have. It is also the
+    evidence a watch is working at all."""
+    post(f"{base_url}/triggers", a_watch())
+
+    status, cursor = get(f"{base_url}/triggers/failed-deploys/cursor")
+    assert status == 200
+    assert cursor == {"seen": [], "last_new_at": None,
+                      "pending": 0, "fired_at": None}
+
+    with pytest.raises(HTTPError) as caught:
+        get(f"{base_url}/triggers/never-written/cursor")
+    assert caught.value.code == 404
+
+
+def test_a_malformed_trigger_is_the_caller_s_mistake(base_url):
+    """TriggerError is raised below the HTTP layer, so without it in both
+    handlers' except clauses this surfaces as a 500 and a client retries a
+    request that can never succeed."""
+    for payload, message in [
+        (a_watch(source={"kind": "ftp", "url": "u"}), "unknown source kind"),
+        (a_watch(source={"kind": "http-json"}), "needs a url"),
+        (a_watch(predicate=[["a", "~=", 1]]), "unknown operator"),
+        (a_watch(emits={"kind": "nonsense"}), "kind"),
+        (a_watch(source={"kind": "schedule", "every_seconds": 60}),
+         "takes no predicate"),
+    ]:
+        with pytest.raises(HTTPError) as caught:
+            post(f"{base_url}/triggers", payload)
+        assert caught.value.code == 400
+        assert message in json.loads(
+            caught.value.read().decode("utf-8"))["error"]
+
+
+def test_activating_a_trigger_tells_the_owner_that_it_will_spend(
+        base_url, monkeypatch):
+    """The only control there is. A trigger that emits agent-runnable work
+    spends unattended, and the message has to say so -- the person reading
+    it is deciding whether that was intended."""
+    from pu import notify
+
+    sent = []
+    monkeypatch.setattr(notify, "bridge_url", lambda *a, **k: "http://bridge")
+    monkeypatch.setattr(
+        notify, "notify_owner",
+        lambda url, text, source_unit, **k: sent.append(text) or True)
+
+    post(f"{base_url}/triggers", a_watch())
+    assert sent == []
+
+    post(f"{base_url}/triggers", a_watch(enabled=True))
+    assert len(sent) == 1
+    assert "will spend" in sent[0]
