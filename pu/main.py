@@ -175,6 +175,7 @@ def main() -> None:
             # state: sessions simply reach no peer tools, and nobody is
             # notified when a task is blocked.
             mcp_bridge_url=notify.bridge_url(),
+            type_store=type_store,
         ).as_dict()
 
     # A session driving this store by hand runs bare `task`, which reads a

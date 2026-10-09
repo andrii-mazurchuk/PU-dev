@@ -44,8 +44,13 @@ file and that one disagree, that one is right and this one is the bug.
   CRUD: `name` is the identity and the store is append-only, so a write to
   an existing name is a revision. It cannot set `origin` — a record
   arriving there is `authored` by definition, and only a peer's own
-  declaration is `declared`, which is what skips the first-enable gate. It
-  cannot enable anything while that gate is unbuilt.
+  declaration is `declared`, which is what skips the first-enable gate.
+
+  **A session type claims tasks and runs only while `enabled` is true**,
+  and that flag is the whole of the control today. The first-enable gate
+  and the auto-approve switch are not built, so nothing asks a person
+  before a type goes live and nothing notifies the owner on the flip —
+  weaker than the decided design, and owed rather than traded away.
 
 - **It takes the page tier, and only because of the graph.** Its
   dashboard is a dependency graph, which is the case the standard names

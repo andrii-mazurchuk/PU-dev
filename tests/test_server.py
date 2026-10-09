@@ -394,12 +394,18 @@ def test_a_caller_cannot_claim_the_declared_origin(base_url):
     assert record["origin"] == "authored"
 
 
-def test_enabling_through_this_door_is_refused_and_says_why(base_url):
-    """Accepting it silently would ship an ungated enable, which is the one
-    thing the gate exists to prevent. The message has to name the gate, or
-    this reads as a bug rather than as sequencing."""
-    error = _refusal(f"{base_url}/session-types", a_type(enabled=True))
-    assert "first-enable gate" in error
+def test_a_type_can_be_enabled_through_this_door(base_url):
+    """Accepted deliberately, and it is the known gap: no gate asks a
+    person first and nothing notifies the owner on the flip, both of which
+    the authoring decision requires and the auto-approve ticket owes. A
+    type that cannot be enabled cannot run, and running one is what the
+    store is for."""
+    status, record = post(f"{base_url}/session-types", a_type(enabled=True))
+    assert status == 201
+    assert record["enabled"] is True
+
+    status, stored = get(f"{base_url}/session-types/digest")
+    assert stored["enabled"] is True
 
 
 def test_a_second_write_to_one_name_is_a_revision(base_url):

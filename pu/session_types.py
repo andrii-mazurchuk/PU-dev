@@ -172,21 +172,70 @@ class SessionType:
     name: str
     dir: Path
 
+    # Set for a runtime-authored type, None for one of the four committed
+    # directories. Which source a type came from decides where every
+    # property below reads from, and nothing else in this unit has to care.
+    record: dict | None = None
+
+    @property
+    def grant(self) -> Grant | None:
+        """The permission bundle, or None for a directory-defined type --
+        those still answer from the name-keyed maps, which is the migration
+        decision rather than an oversight."""
+        if self.record is None:
+            return None
+        return GRANTS[self.record["grant"]]
+
     @property
     def allowed_tools(self) -> str | None:
+        if self.record is not None:
+            # An empty tool string returns None, which is what absence from
+            # ALLOWED_TOOLS already means downstream: `build_argv` emits no
+            # `--allowedTools` at all for a falsy value. Whether that
+            # genuinely denies everything is an open question, and this
+            # property deliberately does not answer it -- it only has to
+            # avoid changing the answer.
+            return self.grant.tools or None
         return ALLOWED_TOOLS.get(self.name)
 
     @property
     def model(self) -> str | None:
+        if self.record is not None:
+            return self.record.get("model")
         return MODELS.get(self.name)
 
     @property
     def runs_in_target_repo(self) -> bool:
+        if self.record is not None:
+            return self.grant.runs_in_target_repo
         return self.name in RUNS_IN_TARGET_REPO
 
     @property
     def reaches_peers(self) -> bool:
+        if self.record is not None:
+            return self.grant.reaches_peers
         return self.name in REACHES_PEERS
+
+    @property
+    def claim_tags(self) -> tuple[str, ...]:
+        return tuple(((self.record or {}).get("claims") or {}).get("tags") or ())
+
+    def claims(self, kind: str | None, tags) -> bool:
+        """Whether this type claims a task of this kind carrying these tags.
+
+        The settled binding is "session types claim by kind and tag", and it
+        points one way only: a type names what it claims, and a task says
+        nothing about session types. So writing a type never edits a task,
+        and a task written before a type existed becomes claimable the
+        moment that type is.
+
+        A claim with no `kind` claims nothing. Matching every kind would let
+        one careless record swallow the whole queue, and the failure would
+        look like tasks silently running under the wrong instructions."""
+        claims = (self.record or {}).get("claims") or {}
+        if not claims.get("kind") or claims["kind"] != kind:
+            return False
+        return set(self.claim_tags).issubset(set(tags or ()))
 
     def instructions(self) -> str:
         """The type's own CLAUDE.md text.
@@ -200,14 +249,58 @@ class SessionType:
             return ""
 
 
-def discover(session_types_dir: Path) -> dict[str, SessionType]:
-    """Any immediate subdirectory holding a `CLAUDE.md`. The directory name
-    is the type's name, so duplicates are impossible."""
+def discover(session_types_dir: Path, store=None) -> dict[str, SessionType]:
+    """Every session type this unit can run, from both of its sources.
+
+    **The four committed directories stay the source for themselves** and
+    the store adds runtime-authored types beside them. That is the
+    migration decision rather than a halfway state: turning the four into
+    records would mean first deciding what "no tools" actually denies, and
+    `ask` -- the one session driven by untrusted text from an
+    unauthenticated origin -- is the only type on that path.
+
+    A directory wins over a record of the same name. Such a record is
+    refused at the store, so this is defence in depth rather than the real
+    guard -- but a record able to shadow `execution` would be a record able
+    to redefine what `execution` is allowed to do.
+    """
     root = Path(session_types_dir)
     if not root.exists():
         raise SessionTypeError(f"session types directory not found: {root}")
-    return {
-        path.name: SessionType(name=path.name, dir=path)
-        for path in sorted(root.iterdir())
-        if path.is_dir() and (path / "CLAUDE.md").exists()
-    }
+
+    found: dict[str, SessionType] = {}
+    if store is not None:
+        for name, record in sorted(store.current().items()):
+            # `enabled` is the switch, and this is the only place it has
+            # teeth. A record that is written but not enabled must not
+            # claim a task: writing one would otherwise be enough to start
+            # spending money, which is what the flag exists to prevent.
+            # The four committed directories have no flag -- being
+            # committed *is* their approval.
+            if not record.get("enabled"):
+                continue
+            found[name] = SessionType(
+                name=name, dir=store.dirs / name, record=record)
+
+    for path in sorted(root.iterdir()):
+        if path.is_dir() and (path / "CLAUDE.md").exists():
+            found[path.name] = SessionType(name=path.name, dir=path)
+    return found
+
+
+def for_task(types: dict[str, SessionType], task) -> SessionType | None:
+    """Which session type runs this task.
+
+    A claiming type wins over the kind's default, because claiming is the
+    whole point: a task of kind `execution` tagged `digest` should reach the
+    type written for digests rather than the general execution session.
+
+    **Most specific wins**, by number of claim tags, then by name so the
+    outcome never depends on dict ordering. A type claiming more tags has
+    stated a narrower case, and a tie broken arbitrarily would mean one
+    task running under different instructions on different ticks.
+    """
+    claiming = [t for t in types.values() if t.claims(task.kind, task.tags)]
+    if claiming:
+        return sorted(claiming, key=lambda t: (-len(t.claim_tags), t.name))[0]
+    return types.get(task.session_type or "")

@@ -53,7 +53,7 @@ _NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # the role-filler convention. Required fields first, then the ones whose
 # absence is meaningful.
 REQUIRED = ("name", "purpose", "prompt", "grant", "origin")
-OPTIONAL = ("model", "mcp_servers", "plugins", "trigger", "enabled")
+OPTIONAL = ("model", "mcp_servers", "plugins", "trigger", "enabled", "claims")
 
 ORIGINS = ("authored", "declared")
 
@@ -84,6 +84,18 @@ def _validate(record: dict[str, Any]) -> dict[str, Any]:
     name = record["name"]
     if not isinstance(name, str) or not _NAME.match(name) or ".." in name:
         raise TypeStoreError(f"not a usable session-type name: {name!r}")
+
+    # The four committed types answer from the name-keyed maps in code, so a
+    # record of the same name would be a record that looks authoritative and
+    # is not. `discover` resolves the collision in the directories' favour,
+    # which means such a record would be silently inert -- and a silently
+    # inert security decision is worse than a refused one. Named here so the
+    # person writing it finds out immediately.
+    if name in session_types.GRANT_FOR_DIRECTORY_TYPE:
+        raise TypeStoreError(
+            f"{name!r} is a committed session type, defined by its directory "
+            f"and its grant in code. A record cannot redefine it; choose "
+            f"another name")
 
     grant = record["grant"]
     if grant not in session_types.GRANTS:

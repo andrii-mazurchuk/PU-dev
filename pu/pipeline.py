@@ -365,6 +365,7 @@ def tick(
     repeat_threshold: int = guards.DEFAULT_REPEAT_THRESHOLD,
     stale_claim_seconds: int = guards.DEFAULT_STALE_CLAIM_SECONDS,
     mcp_bridge_url: str | None = None,
+    type_store=None,
 ) -> TickResult:
     """Do at most one unit of work."""
     if not _TICK_LOCK.acquire(blocking=False):
@@ -374,7 +375,7 @@ def tick(
             store, body_store, session_store, unit_root, peers_path,
             cost_policy_path, session_runner, now,
             tracker_path or (unit_root / "state" / "repeat_tracker.json"),
-            repeat_threshold, stale_claim_seconds, mcp_bridge_url,
+            repeat_threshold, stale_claim_seconds, mcp_bridge_url, type_store,
         )
     finally:
         _TICK_LOCK.release()
@@ -383,7 +384,7 @@ def tick(
 def _tick(
     store, body_store, session_store, unit_root, peers_path, cost_policy_path,
     session_runner, now, tracker_path, repeat_threshold, stale_claim_seconds,
-    mcp_bridge_url,
+    mcp_bridge_url, type_store=None,
 ) -> TickResult:
     moment = now()
 
@@ -416,12 +417,18 @@ def _tick(
         return TickResult(ran=False, reason=usage_blocked)
 
     try:
-        types = session_types_mod.discover(unit_root / "session_types")
+        types = session_types_mod.discover(
+            unit_root / "session_types", store=type_store)
     except session_types_mod.SessionTypeError as exc:
         return TickResult(ran=False, reason=str(exc))
 
     for candidate in store.runnable():
-        stype = types.get(candidate.session_type or "")
+        # A runtime-authored type claiming this task's kind and tags wins
+        # over the kind's default. Runnability itself is unchanged and still
+        # default-deny through `records.SESSION_TYPE_FOR_KIND`: a claim
+        # chooses *which* session runs an already-runnable task, and cannot
+        # make a new kind runnable.
+        stype = session_types_mod.for_task(types, candidate)
         if stype is None:
             # A kind whose session type has no directory. Skipped and said
             # out loud rather than silently passed over.

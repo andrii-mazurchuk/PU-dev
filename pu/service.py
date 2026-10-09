@@ -357,10 +357,18 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
     gate because it arrived inside reviewed, deployed software -- so a
     caller able to claim `declared` would be claiming that exemption.
 
-    **`enabled` cannot be set true yet.** The first-enable gate is not
-    built, and accepting this silently would ship an ungated enable, which
-    is the one thing that gate exists to prevent. The refusal names the
-    gate so whoever hits it knows this is sequencing rather than a bug.
+    **`enabled` is accepted, and that is a deliberate gap.** The
+    first-enable gate and the auto-approve switch are not built, so nothing
+    here asks a person before a type becomes live, and nothing notifies the
+    owner on the flip -- which the authoring decision says must always
+    happen. Both are owed to the auto-approve ticket. Accepted anyway
+    because a type that cannot be enabled cannot run, and delegating work
+    to a session is the thing the store exists for.
+
+    What the flag does do is bind: `session_types.discover` skips a record
+    that is not enabled, so writing one is not enough to start spending
+    money. That is the whole of the control today, and it is weaker than
+    the ratified design -- not a substitute for it.
     """
     if not isinstance(payload, dict):
         raise ServiceError("a session type is a JSON object")
@@ -369,10 +377,4 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
             "origin is set by this unit, not by the caller: a record written "
             "here is `authored`. Only a peer's own declaration is `declared`, "
             "and that is what skips the first-enable gate")
-    if payload.get("enabled"):
-        raise ServiceError(
-            "a session type cannot be enabled through this door yet: the "
-            "first-enable gate and the auto-approve switch are not built, "
-            "and enabling without them is the thing they exist to prevent. "
-            "Write the record disabled, then enable it once that ticket lands")
     return type_store.append(dict(payload, origin="authored"))

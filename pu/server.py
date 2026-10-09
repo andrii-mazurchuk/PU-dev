@@ -258,7 +258,7 @@ TOOLS = [
     },
     {
         "name": "write_session_type",
-        "description": "Write a session type. One call for create and update: `name` is the identity and the store is append-only, so writing an existing name adds a revision rather than replacing one. `grant` is the permission bundle and is one of none, read, web, repo -- `repo` runs the session in a target repository. `enabled` cannot be set here yet; the first-enable gate is not built. `origin` is set by this unit and is refused if sent.",
+        "description": "Write a session type. One call for create and update: `name` is the identity and the store is append-only, so writing an existing name adds a revision rather than replacing one. `grant` is the permission bundle and is one of none, read, web, repo -- `repo` runs the session in a target repository. A type only runs once `enabled` is true -- a written but not enabled type claims nothing. `origin` is set by this unit and is refused if sent.",
         "method": "POST",
         "path": "/session-types",
         "input_schema": {
@@ -272,6 +272,8 @@ TOOLS = [
                 "mcp_servers": {"type": "array", "items": {"type": "string"}},
                 "plugins": {"type": "array", "items": {"type": "string"}},
                 "trigger": {"type": "object", "description": "what fires this type"},
+                "enabled": {"type": "boolean", "description": "a type claims tasks and runs only while this is true. No gate asks a person first yet, so set it deliberately."},
+                "claims": {"type": "object", "description": "which tasks this type runs: {\"kind\": \"execution\", \"tags\": [\"digest\"]}. A claiming type wins over the kind's default session type, and the most specific claim wins. A claim cannot make a kind runnable that was not already."},
             },
             "required": ["name", "purpose", "prompt", "grant"],
         },
