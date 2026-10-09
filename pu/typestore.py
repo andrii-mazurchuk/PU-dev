@@ -34,12 +34,11 @@ policy.
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any, Iterator
 
-from pu import session_types
+from pu import jsonl, session_types
 
 # A name is the identity and it is also a directory name, so it is built
 # into a filesystem path from input that arrives over HTTP. Strict rather
@@ -133,36 +132,10 @@ class TypeStore:
     # -- reading ---------------------------------------------------------
 
     def _lines(self) -> Iterator[dict[str, Any]]:
-        """Every record ever written, in order. A line that cannot be
-        parsed stops the read rather than being skipped: this log decides
-        tool grants, and silently ignoring a line would mean running a type
-        under a record nobody can see."""
-        try:
-            raw = self.log.read_text(encoding="utf-8")
-        except OSError:
-            return
-        for number, line in enumerate(raw.splitlines(), start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-            except ValueError as exc:
-                raise TypeStoreError(
-                    f"{self.log}:{number} is not readable JSON: {exc}") from exc
-            if not isinstance(parsed, dict):
-                raise TypeStoreError(f"{self.log}:{number} is not an object")
-            yield parsed
+        return jsonl.lines(self.log, TypeStoreError)
 
     def current(self) -> dict[str, dict[str, Any]]:
-        """Each name's latest record. Last line wins, which is the whole
-        read rule."""
-        latest: dict[str, dict[str, Any]] = {}
-        for record in self._lines():
-            name = record.get("name")
-            if isinstance(name, str):
-                latest[name] = record
-        return latest
+        return jsonl.current(self.log, TypeStoreError)
 
     def get(self, name: str) -> dict[str, Any] | None:
         return self.current().get(name)
@@ -187,10 +160,7 @@ class TypeStore:
         file, which the next write fixes. The other order would leave a
         directory no record explains."""
         validated = _validate(record)
-        self.root.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(validated, ensure_ascii=False, sort_keys=True)
-        with self.log.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(line + "\n")
+        jsonl.append(self.log, validated)
         self._generate(validated)
         return validated
 

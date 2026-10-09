@@ -1,0 +1,290 @@
+"""What pu watches, and when that counts as something happening.
+
+A trigger decides that work exists; the heartbeat tick is what starts a
+session, through the gates. So nothing here launches anything, and every
+test below is about a judgement that could have gone the other way.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from pu import triggers
+
+FIXED = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+
+
+def at(offset_seconds: float = 0):
+    return lambda: FIXED + timedelta(seconds=offset_seconds)
+
+
+def json_source(items, status=200):
+    body = json.dumps(items).encode("utf-8")
+    return lambda url: (status, body)
+
+
+def a_trigger(**overrides):
+    record = {
+        "name": "posts",
+        "source": {"kind": "http-json", "url": "http://example/feed.json"},
+        "enabled": True,
+    }
+    record.update(overrides)
+    return record
+
+
+EMPTY = {"seen": [], "last_new_at": None, "pending": 0, "fired_at": None}
+
+
+# -- transport status is not data ----------------------------------------
+
+
+def test_a_failed_fetch_neither_fires_nor_advances():
+    """The invariant this ticket lands in the standard. Advancing on a
+    failure would silently skip whatever the fetch did not return, and
+    firing on one would treat unreachability as content."""
+    result = triggers.evaluate(
+        a_trigger(), EMPTY, fetch=lambda url: (500, b""), now=at())
+
+    assert result.fired is False
+    assert result.advance is False
+    assert "status 500" in result.reason
+    assert triggers.advanced(EMPTY, result, now=at()) == EMPTY
+
+
+def test_a_2xx_carrying_something_unreadable_is_also_unknown():
+    """Not empty. Concluding "no items" would fire an absence predicate
+    against a source that is perfectly healthy and merely changed shape --
+    the failure mode is a watch that invents work from a schema change."""
+    result = triggers.evaluate(
+        a_trigger(predicate=[["age_since_last_seen", ">=", 1]]),
+        EMPTY, fetch=lambda url: (200, b"<not json"), now=at())
+
+    assert result.fired is False
+    assert result.advance is False
+    assert "unreadable" in result.reason
+
+
+# -- the ordinary case ---------------------------------------------------
+
+
+def test_new_items_fire_once_and_the_cursor_stops_them_repeating():
+    """At-least-once with an advancing cursor is the whole delivery model.
+    Without the second half, every tick re-reports the same backlog."""
+    items = [{"id": "a", "title": "one"}, {"id": "b", "title": "two"}]
+    first = triggers.evaluate(a_trigger(), EMPTY,
+                              fetch=json_source(items), now=at())
+    assert first.fired is True
+    assert len(first.items) == 2
+
+    cursor = triggers.advanced(EMPTY, first, now=at())
+    assert sorted(cursor["seen"]) == ["a", "b"]
+
+    second = triggers.evaluate(a_trigger(), cursor,
+                               fetch=json_source(items), now=at(60))
+    assert second.fired is False
+    assert second.advance is True
+
+
+def test_an_empty_predicate_does_not_fire_against_an_idle_source():
+    """`all([])` is true in both directions, so the obvious implementation
+    fires every tick forever on a source with nothing new. "No condition"
+    means every new item, not every tick."""
+    result = triggers.evaluate(a_trigger(), EMPTY,
+                               fetch=json_source([]), now=at())
+
+    assert result.fired is False
+    assert result.advance is True
+
+
+# -- the three cases the map says are WATCH with different fields --------
+
+
+def test_every_third_post_accumulates_across_ticks_and_resets_on_fire():
+    """`count_since_fire` has to mean what it says, or this case needs a
+    feature instead of a predicate. The counter is in the cursor, so it
+    survives the ticks between fires."""
+    trigger = a_trigger(predicate=[["count_since_fire", ">=", 3]])
+    cursor = EMPTY
+
+    for index, letter in enumerate("ab"):
+        result = triggers.evaluate(
+            trigger, cursor, fetch=json_source([{"id": letter}]),
+            now=at(index))
+        assert result.fired is False
+        cursor = triggers.advanced(cursor, result, now=at(index))
+    assert cursor["pending"] == 2
+
+    result = triggers.evaluate(
+        trigger, cursor, fetch=json_source([{"id": "c"}]), now=at(3))
+    assert result.fired is True
+
+    cursor = triggers.advanced(cursor, result, now=at(3))
+    assert cursor["pending"] == 0
+    assert cursor["fired_at"] is not None
+
+
+def test_absence_fires_on_nothing_new_once_enough_time_has_passed():
+    """The one case that must fire with no items at all, which is why a
+    predicate of only aggregate clauses is treated differently."""
+    trigger = a_trigger(predicate=[["age_since_last_seen", ">=", 3600]])
+
+    seeded = triggers.advanced(
+        EMPTY,
+        triggers.evaluate(trigger, EMPTY, fetch=json_source([{"id": "a"}]),
+                          now=at()),
+        now=at())
+
+    soon = triggers.evaluate(trigger, seeded, fetch=json_source([]),
+                             now=at(60))
+    assert soon.fired is False
+
+    later = triggers.evaluate(trigger, seeded, fetch=json_source([]),
+                              now=at(7200))
+    assert later.fired is True
+    assert later.items == ()
+
+
+def test_absence_does_not_fire_on_a_source_nobody_has_read_yet():
+    """A watch that has never seen an item has no age, and both zero and
+    infinity would be a claim. Otherwise every absence watch fires once on
+    the tick after it is written."""
+    trigger = a_trigger(predicate=[["age_since_last_seen", ">=", 1]])
+
+    result = triggers.evaluate(trigger, EMPTY, fetch=json_source([]), now=at())
+    assert result.fired is False
+
+
+# -- the predicate -------------------------------------------------------
+
+
+def test_per_item_clauses_filter_and_a_non_match_does_not_fire():
+    trigger = a_trigger(predicate=[["title", "contains", "deploy"]])
+    items = [{"id": "a", "title": "deploy failed"}, {"id": "b", "title": "tea"}]
+
+    result = triggers.evaluate(trigger, EMPTY, fetch=json_source(items),
+                               now=at())
+    assert result.fired is True
+    assert [i["id"] for i in result.items] == ["a"]
+
+    quiet = triggers.evaluate(trigger, EMPTY,
+                              fetch=json_source([{"id": "c", "title": "tea"}]),
+                              now=at())
+    assert quiet.fired is False
+
+
+def test_a_dotted_path_reaches_a_nested_field_and_absence_is_not_an_error():
+    """A missing field is a clause that does not match, not a broken
+    trigger -- a feed that drops a field must not take the watch down."""
+    trigger = a_trigger(predicate=[["meta.level", "==", "error"]])
+    items = [{"id": "a", "meta": {"level": "error"}},
+             {"id": "b"},
+             {"id": "c", "meta": "not-an-object"}]
+
+    result = triggers.evaluate(trigger, EMPTY, fetch=json_source(items),
+                               now=at())
+    assert [i["id"] for i in result.items] == ["a"]
+
+
+def test_an_ordering_comparison_against_a_non_number_does_not_match():
+    """There is no defensible answer to "is 'tea' >= 3", so it is False
+    rather than a guess or an exception that strands the watch."""
+    assert triggers._compare("tea", ">=", 3) is False
+    assert triggers._compare(5, ">=", 3) is True
+
+
+def test_an_unusable_pattern_is_raised_rather_than_silently_never_matching():
+    """A typo in a regex that quietly matched nothing would look exactly
+    like a quiet source."""
+    with pytest.raises(triggers.TriggerError, match="not a usable pattern"):
+        triggers._compare("x", "matches", "[")
+
+
+# -- the store -----------------------------------------------------------
+
+
+def test_only_enabled_triggers_are_evaluated(tmp_path):
+    """Same reason the flag binds for session types: writing one must not
+    be enough to start causing work."""
+    store = triggers.TriggerStore(tmp_path)
+    store.append(a_trigger(name="live", enabled=True))
+    store.append(a_trigger(name="draft", enabled=False))
+
+    assert [t["name"] for t in store.enabled()] == ["live"]
+
+
+def test_the_cursor_round_trips_and_an_unreadable_one_means_nothing_seen(
+        tmp_path):
+    """Re-reporting a batch is the recoverable direction; skipping one is
+    not. So a corrupt cursor file reads as a fresh watch."""
+    store = triggers.TriggerStore(tmp_path)
+    store.save_cursor("posts", {"seen": ["a"], "pending": 2,
+                                "last_new_at": None, "fired_at": None})
+    assert store.cursor("posts")["seen"] == ["a"]
+
+    store.cursors_path.write_text("{ broken", encoding="utf-8")
+    assert store.cursor("posts") == EMPTY
+
+
+def test_the_seen_list_is_bounded(tmp_path):
+    """Remembering ids rather than a position is what makes reordering
+    safe, and it is only affordable because the list is capped."""
+    cursor = EMPTY
+    for batch in range(3):
+        ids = [f"i{batch}-{n}" for n in range(100)]
+        result = triggers.evaluate(
+            a_trigger(), cursor,
+            fetch=json_source([{"id": i} for i in ids]), now=at(batch))
+        cursor = triggers.advanced(cursor, result, now=at(batch))
+
+    assert len(cursor["seen"]) == triggers.SEEN_LIMIT
+    # The most recent are the ones kept.
+    assert "i2-99" in cursor["seen"]
+
+
+@pytest.mark.parametrize("record, message", [
+    ({"name": "x"}, "missing required field 'source'"),
+    ({"name": "x", "source": {"kind": "ftp", "url": "u"}}, "unknown source kind"),
+    ({"name": "x", "source": {"kind": "rss"}}, "needs a url"),
+    ({"name": "x", "source": {"kind": "rss", "url": "u"},
+      "predicate": [["a", "~=", 1]]}, "unknown operator"),
+    ({"name": "x", "source": {"kind": "rss", "url": "u"},
+      "predicate": [["a", ">="]]}, "[field, operator, value]"),
+    ({"name": "x", "source": {"kind": "rss", "url": "u"}, "wat": 1},
+     "unknown field"),
+])
+def test_a_trigger_that_cannot_be_represented_is_refused(
+        tmp_path, record, message):
+    """A trigger decides that work exists, so a half-understood one would
+    invent work nobody asked for."""
+    store = triggers.TriggerStore(tmp_path)
+    with pytest.raises(triggers.TriggerError, match=message):
+        store.append(record)
+
+
+# -- rss -----------------------------------------------------------------
+
+
+RSS = b"""<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <title>a feed</title>
+  <item><title>one</title><link>http://x/1</link><guid>g1</guid></item>
+  <item><title>two</title><link>http://x/2</link><guid>g2</guid></item>
+</channel></rss>"""
+
+
+def test_rss_items_flatten_to_the_same_shape_a_predicate_sees():
+    """Deliberately shallow: a predicate over an arbitrary XML tree would
+    be a second language, and the channel's own title is not an item."""
+    trigger = a_trigger(source={"kind": "rss", "url": "http://x/feed"},
+                        predicate=[["title", "==", "two"]])
+
+    result = triggers.evaluate(trigger, EMPTY,
+                               fetch=lambda url: (200, RSS), now=at())
+
+    assert result.fired is True
+    assert [i["guid"] for i in result.items] == ["g2"]
+    assert result.seen_ids == ("g1", "g2")
