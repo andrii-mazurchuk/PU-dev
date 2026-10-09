@@ -28,12 +28,19 @@ return.
 automatic replay of one batch after a rare crash and costs a lease duration
 nobody can bound; the revisit ticket records exactly what would reopen it.
 
-Cron, absence, "every third post" and joins are all **WATCH with different
-fields**, not separate mechanisms:
+**Trigger types are plural, and the tick is not one of them.** The
+gateway's cron and interval pings are *one* type; a watch over a source is
+another; a push is another. What is singular is *starting a session*: that
+happens on a tick, through the gates, whatever the type. A trigger is a
+condition, the tick is the clock and the gate, and conflating the two reads
+as "the heartbeat is the only trigger", which it is not.
 
-    cron              a source that reports the time, predicate on it
+Absence, "every third post" and joins are **the same mechanism with
+different fields**, not separate ones:
+
     absence           age_since_last_seen >= N
     every third post  count_since_fire >= 3
+    every N seconds   source kind `schedule`, which fetches nothing
 """
 
 from __future__ import annotations
@@ -50,7 +57,17 @@ from typing import Any, Callable
 
 from pu import jsonl
 
-SOURCE_KINDS = ("http-json", "rss")
+# `schedule` fetches nothing. It is here rather than in a field of its own
+# because `source` answers one question -- what does this trigger watch --
+# and a clock is a legitimate answer. Keeping it here means one validation
+# path and one evaluation entry point instead of two shapes of trigger.
+#
+# ponytail: an interval, not a cron expression, so "every 24h from whenever
+# it last fired" is expressible and "every day at 09:00 Europe/Warsaw" is
+# not. The gateway's own static triggers support both (`{type: cron, expr,
+# tz}`), so the upgrade path is that syntax rather than a new idea. Add it
+# at the first watch that genuinely needs a wall-clock time.
+SOURCE_KINDS = ("http-json", "rss", "schedule")
 
 # The whole operator set. Adding one is a decision, not a convenience --
 # see the module docstring on why this list is the surface that grows.
@@ -114,7 +131,24 @@ def _validate(record: dict[str, Any]) -> dict[str, Any]:
         raise TriggerError(
             f"unknown source kind {source.get('kind')!r} "
             f"(allowed: {SOURCE_KINDS})")
-    if not source.get("url"):
+
+    if source["kind"] == "schedule":
+        try:
+            if float(source.get("every_seconds") or 0) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise TriggerError(
+                "a schedule needs every_seconds, a positive number") from None
+        # Nothing is fetched, so there are no items and no cursor position
+        # for a clause to be about: `count_since_fire` is always zero and
+        # `age_since_last_seen` never moves. A predicate here would read as
+        # a condition and act as a no-op, which is worse than a refusal.
+        if record.get("predicate"):
+            raise TriggerError(
+                "a schedule trigger takes no predicate: it fetches nothing, "
+                "so there is nothing for a clause to be evaluated over. The "
+                "interval is the whole condition")
+    elif not source.get("url"):
         raise TriggerError("a source needs a url")
 
     for clause in record.get("predicate") or ():
@@ -345,6 +379,21 @@ def evaluate(trigger: dict[str, Any], cursor: dict[str, Any],
     the next one should be built from, so a tick can decide not to advance.
     """
     source = trigger["source"]
+
+    if source["kind"] == "schedule":
+        # The clock is the condition, so there is no fetch that could fail
+        # and nothing to be unknown about. A trigger that has never fired
+        # fires on its first evaluation rather than waiting one interval:
+        # waiting would make "every 24h" mean "nothing for a day", and the
+        # person who wrote it is watching for it to work.
+        due = _age_seconds(cursor.get("fired_at"), now())
+        fired = due is None or due >= float(source["every_seconds"])
+        return Evaluation(
+            fired=fired,
+            reason="due" if fired else "not due yet",
+            advance=True,
+        )
+
     ok, items, reason = read_source(source, fetch)
     if not ok:
         # Unknown, not empty. No fire, no advance -- and the reason is

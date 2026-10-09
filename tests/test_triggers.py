@@ -288,3 +288,69 @@ def test_rss_items_flatten_to_the_same_shape_a_predicate_sees():
     assert result.fired is True
     assert [i["guid"] for i in result.items] == ["g2"]
     assert result.seen_ids == ("g1", "g2")
+
+
+# -- the schedule kind: the gateway's cron and pings, as one trigger type -
+
+
+def test_a_schedule_fires_on_its_first_evaluation():
+    """Waiting one interval would make "every 24h" mean "nothing for a
+    day", and the person who just wrote it is watching for it to work."""
+    trigger = a_trigger(source={"kind": "schedule", "every_seconds": 3600})
+
+    result = triggers.evaluate(trigger, EMPTY, now=at())
+
+    assert result.fired is True
+    assert result.reason == "due"
+    assert result.items == ()
+
+
+def test_a_schedule_waits_its_interval_after_firing():
+    trigger = a_trigger(source={"kind": "schedule", "every_seconds": 3600})
+
+    cursor = triggers.advanced(
+        EMPTY, triggers.evaluate(trigger, EMPTY, now=at()), now=at())
+    assert cursor["fired_at"] is not None
+
+    assert triggers.evaluate(trigger, cursor, now=at(60)).fired is False
+    assert triggers.evaluate(trigger, cursor, now=at(3600)).fired is True
+
+
+def test_a_schedule_never_fetches_anything():
+    """It is a clock, not a source. A fetch here would be a network call
+    nobody asked for, and a failing one would stop a schedule that has no
+    business depending on the network."""
+    def explode(url):
+        raise AssertionError("a schedule must not fetch")
+
+    trigger = a_trigger(source={"kind": "schedule", "every_seconds": 1})
+    assert triggers.evaluate(trigger, EMPTY, fetch=explode, now=at()).fired
+
+
+def test_a_schedule_with_a_predicate_is_refused(tmp_path):
+    """There are no items and the aggregates never move, so a clause would
+    read as a condition and act as a no-op -- worse than a refusal."""
+    store = triggers.TriggerStore(tmp_path)
+
+    with pytest.raises(triggers.TriggerError, match="takes no predicate"):
+        store.append(a_trigger(
+            source={"kind": "schedule", "every_seconds": 60},
+            predicate=[["count_since_fire", ">=", 1]]))
+
+
+def test_a_schedule_needs_a_positive_interval(tmp_path):
+    store = triggers.TriggerStore(tmp_path)
+
+    for bad in (None, 0, -5, "soon"):
+        with pytest.raises(triggers.TriggerError, match="every_seconds"):
+            store.append(a_trigger(
+                source={"kind": "schedule", "every_seconds": bad}))
+
+
+def test_a_watch_still_needs_a_url(tmp_path):
+    """The schedule branch must not have loosened validation for the two
+    kinds that do fetch."""
+    store = triggers.TriggerStore(tmp_path)
+
+    with pytest.raises(triggers.TriggerError, match="needs a url"):
+        store.append(a_trigger(source={"kind": "http-json"}))
