@@ -46,11 +46,13 @@ file and that one disagree, that one is right and this one is the bug.
   arriving there is `authored` by definition, and only a peer's own
   declaration is `declared`, which is what skips the first-enable gate.
 
-  **A session type claims tasks and runs only while `enabled` is true**,
-  and that flag is the whole of the control today. The first-enable gate
-  and the auto-approve switch are not built, so nothing asks a person
-  before a type goes live and nothing notifies the owner on the flip —
-  weaker than the decided design, and owed rather than traded away.
+  **A session type claims tasks and runs only while `enabled` is true, and
+  the flip always tells the owner.** Notification is not the configurable
+  part of that decision, and it is the only control that survives an agent
+  reaching this unit on loopback. What is still owed is the **waiting**: no
+  gate asks a person before a type goes live. So the two halves land
+  apart, and the half that is here is the one that cannot be routed
+  around.
 
 - **It takes the page tier, and only because of the graph.** Its
   dashboard is a dependency graph, which is the case the standard names

@@ -436,3 +436,31 @@ def test_an_unwritten_name_is_a_404(base_url):
     with pytest.raises(HTTPError) as caught:
         get(f"{base_url}/session-types/never-written")
     assert caught.value.code == 404
+
+
+def test_the_enable_flip_tells_the_owner_and_a_re_save_does_not(
+        base_url, monkeypatch):
+    """The authoring decision makes notification the half that is not
+    configurable -- "auto-approve suppresses the wait, never the telling" --
+    and it is the only control that survives an agent reaching this unit on
+    loopback. A message per edit would be noise that teaches its reader to
+    skip it, so it is the flip that notifies, not every save."""
+    from pu import notify
+
+    sent = []
+    monkeypatch.setattr(notify, "bridge_url", lambda *a, **k: "http://bridge")
+    monkeypatch.setattr(
+        notify, "notify_owner",
+        lambda url, text, source_unit, **k: sent.append(text) or True)
+
+    post(f"{base_url}/session-types", a_type(enabled=False))
+    assert sent == []
+
+    post(f"{base_url}/session-types", a_type(enabled=True))
+    assert len(sent) == 1
+    assert "digest" in sent[0]
+    assert "nothing asked first" in sent[0]
+
+    # Already live: editing it is ordinary work, not a new decision.
+    post(f"{base_url}/session-types", a_type(enabled=True, purpose="reworded"))
+    assert len(sent) == 1

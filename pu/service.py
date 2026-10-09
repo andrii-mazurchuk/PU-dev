@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from pu import bodies, records, taskstore
+from pu import bodies, notify, records, taskstore
 
 
 class ServiceError(ValueError):
@@ -357,18 +357,19 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
     gate because it arrived inside reviewed, deployed software -- so a
     caller able to claim `declared` would be claiming that exemption.
 
-    **`enabled` is accepted, and that is a deliberate gap.** The
-    first-enable gate and the auto-approve switch are not built, so nothing
-    here asks a person before a type becomes live, and nothing notifies the
-    owner on the flip -- which the authoring decision says must always
-    happen. Both are owed to the auto-approve ticket. Accepted anyway
-    because a type that cannot be enabled cannot run, and delegating work
-    to a session is the thing the store exists for.
+    **`enabled` is accepted, and the flip always tells the owner.** The
+    authoring decision is explicit that notification is not the
+    configurable part -- *"auto-approve suppresses the wait, never the
+    telling"* -- and it is the only control that survives an agent reaching
+    this unit on loopback, so it is here rather than waiting for the gate.
 
-    What the flag does do is bind: `session_types.discover` skips a record
-    that is not enabled, so writing one is not enough to start spending
-    money. That is the whole of the control today, and it is weaker than
-    the ratified design -- not a substitute for it.
+    What is still owed to the auto-approve ticket is the **waiting**: no
+    gate asks a person before a type goes live. So the two halves of the
+    decision land apart, and the half that is here is the one that cannot
+    be routed around.
+
+    The flag itself binds: `session_types.discover` skips a record that is
+    not enabled, so writing one is not enough to start spending money.
     """
     if not isinstance(payload, dict):
         raise ServiceError("a session type is a JSON object")
@@ -377,4 +378,24 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
             "origin is set by this unit, not by the caller: a record written "
             "here is `authored`. Only a peer's own declaration is `declared`, "
             "and that is what skips the first-enable gate")
-    return type_store.append(dict(payload, origin="authored"))
+    # Read before the write, so "was it already live" is the answer from
+    # before this call rather than the one this call just created.
+    previous = type_store.get(payload.get("name") or "")
+    written = type_store.append(dict(payload, origin="authored"))
+
+    # A flip, not every save: re-writing a type that is already enabled is
+    # ordinary editing, and a message per edit is noise that teaches its own
+    # reader to skip it -- the same reasoning the usage gate reports on
+    # transitions rather than per tick.
+    if written.get("enabled") and not (previous or {}).get("enabled"):
+        notify.notify_owner(
+            notify.bridge_url(),
+            f"pu enabled a session type, and nothing asked first.\n\n"
+            f"{written['name']} - grant {written['grant']}\n"
+            f"{written.get('purpose', '')}\n\n"
+            f"It now claims {written.get('claims') or 'nothing'} and will "
+            f"run sessions. Disable it by writing the record again with "
+            f"enabled false.",
+            source_unit="pu",
+        )
+    return written
