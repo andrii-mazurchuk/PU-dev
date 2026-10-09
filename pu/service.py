@@ -357,19 +357,35 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
     gate because it arrived inside reviewed, deployed software -- so a
     caller able to claim `declared` would be claiming that exemption.
 
-    **`enabled` is accepted, and the flip always tells the owner.** The
-    authoring decision is explicit that notification is not the
-    configurable part -- *"auto-approve suppresses the wait, never the
-    telling"* -- and it is the only control that survives an agent reaching
-    this unit on loopback, so it is here rather than waiting for the gate.
+    **A type is created inactive, always.** Settled 2026-10-09: anyone may
+    create one and it arrives switched off, so creating and activating are
+    two acts rather than one. `enabled` on a first write is overridden
+    rather than refused -- a refusal would make every caller handle an
+    error for something this unit can simply decide.
 
-    What is still owed to the auto-approve ticket is the **waiting**: no
-    gate asks a person before a type goes live. So the two halves of the
-    decision land apart, and the half that is here is the one that cannot
-    be routed around.
+    **Editing a live type deactivates it.** Andrey: *"editing a session
+    practically should either deactivate it or wait for user approval,
+    because editing a session practically may change its entire purpose and
+    it's a security breach."* Of the two, deactivating is the one available
+    today -- waiting needs the first-enable gate, which does not exist. The
+    exploit it closes is specific: `prompt` is the whole behaviour, so
+    editing the prompt of an already-approved type silently changes what an
+    approved session does, with no new approval anywhere.
+
+    A write that touches **only `enabled`** is honoured, because that *is*
+    the activation path and deactivating in response to it would make a
+    type impossible to turn on.
+
+    **Activation is the user's by design and by nothing else.** Nothing
+    authenticates a caller, so an agent or any process on the host can
+    activate a type. No gate is added to pretend otherwise; what exists is
+    that **every activation and every forced deactivation tells the
+    owner**. The whole question is deferred to the security ticket, whose
+    deferral expires the moment the node stops being loopback-only or
+    single-user.
 
     The flag itself binds: `session_types.discover` skips a record that is
-    not enabled, so writing one is not enough to start spending money.
+    not enabled, so writing one is never enough to start spending money.
     """
     if not isinstance(payload, dict):
         raise ServiceError("a session type is a JSON object")
@@ -378,24 +394,59 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
             "origin is set by this unit, not by the caller: a record written "
             "here is `authored`. Only a peer's own declaration is `declared`, "
             "and that is what skips the first-enable gate")
-    # Read before the write, so "was it already live" is the answer from
-    # before this call rather than the one this call just created.
-    previous = type_store.get(payload.get("name") or "")
-    written = type_store.append(dict(payload, origin="authored"))
 
-    # A flip, not every save: re-writing a type that is already enabled is
-    # ordinary editing, and a message per edit is noise that teaches its own
-    # reader to skip it -- the same reasoning the usage gate reports on
-    # transitions rather than per tick.
-    if written.get("enabled") and not (previous or {}).get("enabled"):
+    # Read before the write, so every question below is answered about the
+    # state from before this call rather than the one it just created.
+    previous = type_store.get(payload.get("name") or "")
+    record = dict(payload, origin="authored")
+    deactivated_by_edit = False
+
+    if previous is None:
+        record["enabled"] = False
+    elif previous.get("enabled") and _changes_more_than_enabled(
+            record, previous):
+        record["enabled"] = False
+        deactivated_by_edit = True
+
+    written = type_store.append(record)
+
+    if deactivated_by_edit:
         notify.notify_owner(
             notify.bridge_url(),
-            f"pu enabled a session type, and nothing asked first.\n\n"
+            f"pu deactivated a live session type because it was edited.\n\n"
+            f"{written['name']} - grant {written['grant']}\n"
+            f"{written.get('purpose', '')}\n\n"
+            f"An edit can change what an already-approved session does, so "
+            f"it is switched off rather than left running under new "
+            f"instructions. Read the change and activate it again.",
+            source_unit="pu",
+        )
+    elif written.get("enabled") and not previous.get("enabled", False):
+        # A flip, not every save. A message per edit is noise that teaches
+        # its own reader to skip it -- the same reasoning the usage gate
+        # reports on transitions rather than per tick.
+        notify.notify_owner(
+            notify.bridge_url(),
+            f"pu activated a session type, and nothing asked first.\n\n"
             f"{written['name']} - grant {written['grant']}\n"
             f"{written.get('purpose', '')}\n\n"
             f"It now claims {written.get('claims') or 'nothing'} and will "
-            f"run sessions. Disable it by writing the record again with "
+            f"run sessions. Switch it off by writing the record again with "
             f"enabled false.",
             source_unit="pu",
         )
     return written
+
+
+def _changes_more_than_enabled(
+    record: dict[str, Any], previous: dict[str, Any]
+) -> bool:
+    """Whether this write alters anything but the switch.
+
+    Compared as whole records, not as a patch, because the store holds a
+    full record per line: a field the caller left out has been *removed*,
+    and treating that as "unchanged" would let an edit drop a field from a
+    live type without deactivating it.
+    """
+    return ({k: v for k, v in record.items() if k != "enabled"}
+            != {k: v for k, v in previous.items() if k != "enabled"})

@@ -46,13 +46,19 @@ file and that one disagree, that one is right and this one is the bug.
   arriving there is `authored` by definition, and only a peer's own
   declaration is `declared`, which is what skips the first-enable gate.
 
-  **A session type claims tasks and runs only while `enabled` is true, and
-  the flip always tells the owner.** Notification is not the configurable
-  part of that decision, and it is the only control that survives an agent
-  reaching this unit on loopback. What is still owed is the **waiting**: no
-  gate asks a person before a type goes live. So the two halves land
-  apart, and the half that is here is the one that cannot be routed
-  around.
+  **A session type is created inactive, claims tasks only while `enabled`
+  is true, and editing a live one switches it off.** An edit can change
+  what an already-approved session does -- `prompt` is the whole behaviour
+  -- so it stops rather than running under new instructions; a write that
+  touches only `enabled` is the activation path and does not deactivate.
+
+  **Activation is the owner's by design and by nothing else.** Nothing
+  authenticates a caller, so an agent or any process on the host can
+  activate a type, and no gate pretends otherwise. What holds is that every
+  activation and every edit-forced deactivation tells the owner. The
+  arrangement is deliberate while this node is loopback-only and
+  single-user, and expires the moment either stops being true -- see the
+  system-security ticket.
 
 - **It takes the page tier, and only because of the graph.** Its
   dashboard is a dependency graph, which is the case the standard names

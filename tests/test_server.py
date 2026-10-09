@@ -394,18 +394,50 @@ def test_a_caller_cannot_claim_the_declared_origin(base_url):
     assert record["origin"] == "authored"
 
 
-def test_a_type_can_be_enabled_through_this_door(base_url):
-    """Accepted deliberately, and it is the known gap: no gate asks a
-    person first and nothing notifies the owner on the flip, both of which
-    the authoring decision requires and the auto-approve ticket owes. A
-    type that cannot be enabled cannot run, and running one is what the
-    store is for."""
-    status, record = post(f"{base_url}/session-types", a_type(enabled=True))
+def test_a_type_is_created_inactive_and_activated_by_a_second_write(base_url):
+    """Creating and activating are two acts, settled 2026-10-09: anyone may
+    create one and it arrives switched off. `enabled` on a first write is
+    overridden rather than refused, so no caller has to handle an error for
+    something this unit can simply decide."""
+    status, created = post(f"{base_url}/session-types", a_type(enabled=True))
     assert status == 201
-    assert record["enabled"] is True
+    assert created["enabled"] is False
 
-    status, stored = get(f"{base_url}/session-types/digest")
+    status, activated = post(f"{base_url}/session-types",
+                             a_type(enabled=True))
+    assert activated["enabled"] is True
+
+    _, stored = get(f"{base_url}/session-types/digest")
     assert stored["enabled"] is True
+
+
+def test_editing_a_live_type_switches_it_off(base_url):
+    """The exploit this closes is specific: `prompt` is the whole
+    behaviour, so editing it on an approved type silently changes what an
+    approved session does, with no new approval anywhere."""
+    post(f"{base_url}/session-types", a_type())
+    post(f"{base_url}/session-types", a_type(enabled=True))
+
+    _, edited = post(f"{base_url}/session-types",
+                     a_type(enabled=True, prompt="Do something else.\n"))
+
+    assert edited["enabled"] is False
+    assert edited["prompt"] == "Do something else.\n"
+
+
+def test_a_field_dropped_from_a_live_type_also_switches_it_off(base_url):
+    """Records are compared whole, not as a patch: the store holds a full
+    record per line, so a field the caller left out has been removed. Treating
+    that as unchanged would let an edit strip a field from a live type and
+    leave it running."""
+    post(f"{base_url}/session-types", a_type(model="opus"))
+    _, live = post(f"{base_url}/session-types",
+                   a_type(model="opus", enabled=True))
+    assert live["enabled"] is True
+
+    _, edited = post(f"{base_url}/session-types", a_type(enabled=True))
+    assert "model" not in edited
+    assert edited["enabled"] is False
 
 
 def test_a_second_write_to_one_name_is_a_revision(base_url):
@@ -440,11 +472,10 @@ def test_an_unwritten_name_is_a_404(base_url):
 
 def test_the_enable_flip_tells_the_owner_and_a_re_save_does_not(
         base_url, monkeypatch):
-    """The authoring decision makes notification the half that is not
-    configurable -- "auto-approve suppresses the wait, never the telling" --
-    and it is the only control that survives an agent reaching this unit on
-    loopback. A message per edit would be noise that teaches its reader to
-    skip it, so it is the flip that notifies, not every save."""
+    """Nothing authenticates a caller, so notification is the only control
+    that survives an agent reaching this unit on loopback. Both transitions
+    that change what runs are told; an idempotent re-save is not, because a
+    message per write is noise that teaches its reader to skip it."""
     from pu import notify
 
     sent = []
@@ -453,7 +484,8 @@ def test_the_enable_flip_tells_the_owner_and_a_re_save_does_not(
         notify, "notify_owner",
         lambda url, text, source_unit, **k: sent.append(text) or True)
 
-    post(f"{base_url}/session-types", a_type(enabled=False))
+    # Created inactive, and silent: nothing runs, so nothing happened.
+    post(f"{base_url}/session-types", a_type(enabled=True))
     assert sent == []
 
     post(f"{base_url}/session-types", a_type(enabled=True))
@@ -461,6 +493,12 @@ def test_the_enable_flip_tells_the_owner_and_a_re_save_does_not(
     assert "digest" in sent[0]
     assert "nothing asked first" in sent[0]
 
-    # Already live: editing it is ordinary work, not a new decision.
-    post(f"{base_url}/session-types", a_type(enabled=True, purpose="reworded"))
+    # Re-writing the identical record changes nothing and says nothing.
+    post(f"{base_url}/session-types", a_type(enabled=True))
     assert len(sent) == 1
+
+    # Editing it while live is the other transition worth telling: it was
+    # switched off, and the owner has to know why it stopped running.
+    post(f"{base_url}/session-types", a_type(enabled=True, purpose="reworded"))
+    assert len(sent) == 2
+    assert "deactivated a live session type because it was edited" in sent[1]
