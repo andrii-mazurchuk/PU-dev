@@ -13,7 +13,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from pu import ask, bodies, docs, pipeline, records, service, sops, taskstore
+from pu import (
+    ask, bodies, docs, pipeline, records, service, session_types, sops,
+    taskstore, typestore,
+)
 
 UNIT_NAME = "pu"
 PROMPT_TIERS = ("default", "reference", "insights")
@@ -236,6 +239,44 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "list_session_types",
+        "description": "Every session type this unit holds, as its current record. A session type is what a session runs as: its instructions, its grant, and what fires it. Reading is open to every peer.",
+        "method": "GET",
+        "path": "/session-types",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_session_type",
+        "description": "One session type's current record, by name. Names come from list_session_types.",
+        "method": "GET",
+        "path": "/session-types/{name}",
+        "input_schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "write_session_type",
+        "description": "Write a session type. One call for create and update: `name` is the identity and the store is append-only, so writing an existing name adds a revision rather than replacing one. `grant` is the permission bundle and is one of none, read, web, repo -- `repo` runs the session in a target repository. `enabled` cannot be set here yet; the first-enable gate is not built. `origin` is set by this unit and is refused if sent.",
+        "method": "POST",
+        "path": "/session-types",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "the identity, immutable; lowercase, and a dot namespaces a peer-declared type"},
+                "purpose": {"type": "string", "description": "what this type is for, in one line, read by a person approving it"},
+                "prompt": {"type": "string", "description": "the type's instructions; pu generates its CLAUDE.md from this on every write"},
+                "grant": {"type": "string", "enum": sorted(session_types.GRANTS), "description": "the permission bundle: none, read, web or repo"},
+                "model": {"type": "string", "description": "absent means whatever the CLI defaults to; set it only where the work differs in reasoning load"},
+                "mcp_servers": {"type": "array", "items": {"type": "string"}},
+                "plugins": {"type": "array", "items": {"type": "string"}},
+                "trigger": {"type": "object", "description": "what fires this type"},
+            },
+            "required": ["name", "purpose", "prompt", "grant"],
+        },
+    },
+    {
         "name": "list_docs",
         "description": "Index of this unit's own documentation: name, title, summary and size, so a caller can decide what not to fetch.",
         "method": "GET",
@@ -264,6 +305,7 @@ def make_handler(
     session_store=None,
     tick=None,
     ask_store=None,
+    type_store=None,
 ):
     class Handler(BaseHTTPRequestHandler):
         server_version = "pu/0.1"
@@ -352,6 +394,18 @@ def make_handler(
             try:
                 if parts == ["health"]:
                     return self._json(200, {"status": "ok"})
+
+                if parts[:1] == ["session-types"] and len(parts) <= 2:
+                    if type_store is None:
+                        return self._json(503, {"error": "no session-type store wired"})
+                    if len(parts) == 1:
+                        return self._json(200,
+                                          service.list_session_types(type_store))
+                    record = service.get_session_type(
+                        type_store, unquote(parts[1]))
+                    if record is None:
+                        return self._not_found()
+                    return self._json(200, record)
 
                 if parts == ["stats"]:
                     metrics = service.stats(store, body_store)
@@ -496,6 +550,11 @@ def make_handler(
 
             except (service.ServiceError, records.RecordError) as exc:
                 return self._json(400, {"error": str(exc)})
+            except typestore.TypeStoreError as exc:
+                # Not the caller's mistake: the store itself is unreadable,
+                # and the message says which line. 500 rather than 400 so a
+                # client does not retry a request that was fine.
+                return self._json(500, {"error": str(exc)})
             except taskstore.TaskError as exc:
                 return self._json(502, {"error": str(exc)})
 
@@ -565,6 +624,12 @@ def make_handler(
                     )
                     return self._json(202, {"id": ask_id})
 
+                if parts == ["session-types"]:
+                    if type_store is None:
+                        return self._json(503, {"error": "no session-type store wired"})
+                    return self._json(201, service.write_session_type(
+                        type_store, payload))
+
                 if parts == ["inbox"]:
                     return self._json(202, service.push_inbox(
                         store, body_store,
@@ -594,7 +659,8 @@ def make_handler(
 
                 return self._not_found()
 
-            except (service.ServiceError, records.RecordError, bodies.BodyError) as exc:
+            except (service.ServiceError, records.RecordError,
+                    bodies.BodyError, typestore.TypeStoreError) as exc:
                 return self._json(400, {"error": str(exc)})
             except taskstore.TaskError as exc:
                 return self._json(502, {"error": str(exc)})
@@ -612,12 +678,13 @@ def build_server(
     session_store=None,
     tick=None,
     ask_store=None,
+    type_store=None,
 ) -> ThreadingHTTPServer:
     return ThreadingHTTPServer(
         (host, port),
         make_handler(
             store, body_store, prompts_dir,
             Path(unit_root) if unit_root else Path("."),
-            session_store, tick, ask_store,
+            session_store, tick, ask_store, type_store,
         ),
     )

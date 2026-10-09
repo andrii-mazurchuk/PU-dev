@@ -13,7 +13,9 @@ import threading
 from pathlib import Path
 from typing import Sequence
 
-from pu import ask, bodies, notify, pipeline, server, sessions, taskstore
+from pu import (
+    ask, bodies, notify, pipeline, server, sessions, taskstore, typestore,
+)
 
 # Matches this unit's registered base_url. Keeping the default equal to the
 # registered port is deliberate: a sibling unit ships a main.py defaulting
@@ -157,6 +159,10 @@ def main() -> None:
     body_store = bodies.BodyStore(state / "bodies")
     session_store = sessions.SessionStore(state / "sessions")
     ask_store = ask.AskStore(state / "asks")
+    # Runtime-authored session types live in private storage, not in
+    # this repo -- the four committed directories are still read from
+    # `unit_root/session_types` until the migration unifies them.
+    type_store = typestore.TypeStore(state)
 
     def tick():
         return pipeline.tick(
@@ -202,7 +208,7 @@ def main() -> None:
     httpd = server.build_server(
         args.host, args.port, store, body_store, Path(args.prompts_dir),
         unit_root=unit_root, session_store=session_store, tick=tick,
-        ask_store=ask_store,
+        ask_store=ask_store, type_store=type_store,
     )
     # flush: stdout is a pipe whenever the gateway or a shell redirects it,
     # and a startup banner nobody sees is a path nobody can point a session

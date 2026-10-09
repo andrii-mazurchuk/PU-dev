@@ -318,3 +318,61 @@ def stats(
         "bodies": body_store.count(),
         "body_bytes": body_store.total_bytes(),
     }
+
+
+# -- write door 3: session-type authoring ---------------------------------
+#
+# A third typed door, and still not generic CRUD. The shape is the
+# permission here too: this endpoint writes a session-type record and
+# nothing else, it cannot set `origin`, and it cannot enable anything.
+#
+# It is the agent-facing door on purpose. The authoring decision put the
+# human-only half -- approve, reject, the auto-approve switch -- behind
+# `/actions`, which discovery never reads; creating a type is explicitly
+# something an agent may do, so it lives in `/tools` with everything else.
+
+
+def list_session_types(type_store) -> dict[str, Any]:
+    """Every type's current record. Reading is open to every peer."""
+    return {"session_types": list(type_store.current().values())}
+
+
+def get_session_type(type_store, name: str) -> dict[str, Any] | None:
+    """None for a name that has never been written, matching `get_task`:
+    a missing named resource is a 404 at the routing layer, not a 400 --
+    the caller's request was well formed, the thing simply is not there."""
+    return type_store.get(_require(name, "name"))
+
+
+def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
+    """Append one session-type record, as the `authored` origin.
+
+    Two refusals live here rather than in the store, because both are
+    about who is calling rather than about whether the record is
+    representable:
+
+    **`origin` is set here and never accepted from the caller.** A record
+    arriving at this endpoint is authored by definition. The two origins
+    differ in exactly one thing -- a declared type skips the first-enable
+    gate because it arrived inside reviewed, deployed software -- so a
+    caller able to claim `declared` would be claiming that exemption.
+
+    **`enabled` cannot be set true yet.** The first-enable gate is not
+    built, and accepting this silently would ship an ungated enable, which
+    is the one thing that gate exists to prevent. The refusal names the
+    gate so whoever hits it knows this is sequencing rather than a bug.
+    """
+    if not isinstance(payload, dict):
+        raise ServiceError("a session type is a JSON object")
+    if "origin" in payload:
+        raise ServiceError(
+            "origin is set by this unit, not by the caller: a record written "
+            "here is `authored`. Only a peer's own declaration is `declared`, "
+            "and that is what skips the first-enable gate")
+    if payload.get("enabled"):
+        raise ServiceError(
+            "a session type cannot be enabled through this door yet: the "
+            "first-enable gate and the auto-approve switch are not built, "
+            "and enabling without them is the thing they exist to prevent. "
+            "Write the record disabled, then enable it once that ticket lands")
+    return type_store.append(dict(payload, origin="authored"))

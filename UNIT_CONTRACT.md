@@ -34,9 +34,18 @@ file and that one disagree, that one is right and this one is the bug.
   mirrored GitHub issue and an inbox message are the same record differing
   by field. There is no per-source partition and no priority ladder;
   ordering is Taskwarrior urgency with per-kind coefficients.
-- **Two typed write doors, no generic CRUD.** The six wayfinding
-  operations, and `/inbox` — which can only ever mint an `intake` record
-  for a session to convert. Reading is open to every peer.
+- **Three typed write doors, no generic CRUD.** The six wayfinding
+  operations; `/inbox` — which can only ever mint an `intake` record
+  for a session to convert; and `POST /session-types`, which writes a
+  session-type record and nothing else. Reading is open to every peer.
+
+  The third door is one endpoint for create and update rather than a
+  `POST`/`PUT`/`DELETE` set, and that is what keeps it typed rather than
+  CRUD: `name` is the identity and the store is append-only, so a write to
+  an existing name is a revision. It cannot set `origin` — a record
+  arriving there is `authored` by definition, and only a peer's own
+  declaration is `declared`, which is what skips the first-enable gate. It
+  cannot enable anything while that gate is unbuilt.
 
 - **It takes the page tier, and only because of the graph.** Its
   dashboard is a dependency graph, which is the case the standard names

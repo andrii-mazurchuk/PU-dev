@@ -11,14 +11,21 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from pu import server
+from pu import server, typestore
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 
 @pytest.fixture
-def base_url(store, body_store):
-    httpd = server.build_server("127.0.0.1", 0, store, body_store, PROMPTS_DIR)
+def base_url(store, body_store, tmp_path):
+    # The session-type store is wired here and not treated as optional:
+    # `main` always creates one, the same as the body store, so a server
+    # without one is not a configuration this unit ships. The handler keeps
+    # its 503 for that case anyway, since a build_server caller can omit it.
+    httpd = server.build_server(
+        "127.0.0.1", 0, store, body_store, PROMPTS_DIR,
+        type_store=typestore.TypeStore(tmp_path),
+    )
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
@@ -352,3 +359,74 @@ def test_every_declared_prompt_tier_ships_a_file():
     prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
     missing = [t for t in PROMPT_TIERS if not (prompts_dir / f"{t}.md").is_file()]
     assert not missing, f"declared but not shipped: {missing}"
+
+
+# -- write door 3: session-type authoring --------------------------------
+
+
+def a_type(**overrides):
+    payload = {
+        "name": "digest",
+        "purpose": "Summarise what the watch brought in.",
+        "prompt": "You summarise.\n",
+        "grant": "read",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _refusal(url, payload):
+    with pytest.raises(HTTPError) as caught:
+        post(url, payload)
+    assert caught.value.code == 400
+    return json.loads(caught.value.read().decode("utf-8"))["error"]
+
+
+def test_a_caller_cannot_claim_the_declared_origin(base_url):
+    """The two origins differ in exactly one thing -- a declared type skips
+    the first-enable gate, because it arrived inside reviewed software. So a
+    caller able to set `origin` is a caller claiming that exemption."""
+    error = _refusal(f"{base_url}/session-types", a_type(origin="declared"))
+    assert "set by this unit" in error
+
+    status, record = post(f"{base_url}/session-types", a_type())
+    assert status == 201
+    assert record["origin"] == "authored"
+
+
+def test_enabling_through_this_door_is_refused_and_says_why(base_url):
+    """Accepting it silently would ship an ungated enable, which is the one
+    thing the gate exists to prevent. The message has to name the gate, or
+    this reads as a bug rather than as sequencing."""
+    error = _refusal(f"{base_url}/session-types", a_type(enabled=True))
+    assert "first-enable gate" in error
+
+
+def test_a_second_write_to_one_name_is_a_revision(base_url):
+    """`name` is the identity and the store is append-only, so there is one
+    endpoint for create and update rather than a POST/PUT pair -- the
+    generic CRUD the unit contract rules out."""
+    post(f"{base_url}/session-types", a_type(prompt="first\n"))
+    post(f"{base_url}/session-types", a_type(prompt="second\n"))
+
+    status, record = get(f"{base_url}/session-types/digest")
+    assert status == 200
+    assert record["prompt"] == "second\n"
+
+    status, listing = get(f"{base_url}/session-types")
+    assert [t["name"] for t in listing["session_types"]] == ["digest"]
+
+
+def test_a_bad_grant_is_the_caller_s_mistake_not_a_server_fault(base_url):
+    """`TypeStoreError` is raised below the HTTP layer, so without it in the
+    handler's except clause this would surface as a 500 and a client would
+    retry a request that can never succeed."""
+    assert "unknown grant" in _refusal(
+        f"{base_url}/session-types", a_type(grant="admin"))
+
+
+def test_an_unwritten_name_is_a_404(base_url):
+    """Well-formed request, absent thing -- the same shape as `get_task`."""
+    with pytest.raises(HTTPError) as caught:
+        get(f"{base_url}/session-types/never-written")
+    assert caught.value.code == 404
