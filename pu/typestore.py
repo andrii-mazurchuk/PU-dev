@@ -63,6 +63,68 @@ _GENERATED_HEADER = (
 )
 
 
+def contract_preamble(grant_name: str) -> str:
+    """What pu owes a session, above whatever its author wrote.
+
+    Every hand-written session type in this repo states that the final
+    message is the resolution -- `research/CLAUDE.md` says it outright and
+    `execution/CLAUDE.md` gives it a section. A generated file used to
+    carry the author's prompt and nothing else, so the one thing every
+    committed type teaches its session was the one thing a runtime type
+    could not know. The first real runtime session proved it: its prompt
+    said "resolve the task", it had no peer reach, so it spent part of a
+    paid turn attempting `pu_resolve_task`, was refused, and reported that
+    the task was still open -- while pu took that complaint as the answer
+    and completed the task.
+
+    **Derived from the grant, not templated per grant.** The reach sentence
+    follows from `Grant.reaches_peers`, so a fifth grant inherits this
+    rather than needing a fifth paragraph somebody has to remember to
+    write.
+
+    This goes **above** the author's prompt, and it wins. A prompt telling
+    the session to call `pu_resolve_task` is wrong whatever its author
+    intended, and the point of the preamble is that this is visible before
+    the session wastes a turn discovering it.
+    """
+    grant = session_types.GRANTS[grant_name]
+
+    if grant.reaches_peers:
+        reach = (
+            "You can reach other units' tools through the bridge "
+            "(`mcp__mcp-bridge__*`). **Do not resolve this task yourself "
+            "even though you can** -- this unit does it from your final "
+            "message, and doing both records the answer twice."
+        )
+    else:
+        reach = (
+            "You have no way back into this unit. There are no `pu_*` tools "
+            "in this session, and attempting one is refused rather than "
+            "queued -- it only costs you part of the turn."
+        )
+
+    return "\n".join([
+        "## How this session ends",
+        "",
+        "**Your final message is the resolution.** It is recorded against "
+        "the task and the task is then closed. There is nothing else to do "
+        "and no tool to call to make that happen.",
+        "",
+        reach,
+        "",
+        f"Tools granted: {grant.tools or 'none'}.",
+        "",
+        "If the task carries a `## Payload` section, that is what the "
+        "trigger which created it fetched. A failed or absent fetch is "
+        "**stated** there rather than left out, so an empty payload is a "
+        "fact you can act on and not a gap to go and fill.",
+        "",
+        "---",
+        "",
+        "",
+    ])
+
+
 class TypeStoreError(ValueError):
     """A record that cannot be represented, or a name that cannot be a
     path. Raised rather than degraded: a session type decides what tools a
@@ -175,6 +237,8 @@ class TypeStore:
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / "CLAUDE.md"
         target.write_text(
-            _GENERATED_HEADER + record["prompt"].rstrip("\n") + "\n",
+            _GENERATED_HEADER
+            + contract_preamble(record["grant"])
+            + record["prompt"].rstrip("\n") + "\n",
             encoding="utf-8", newline="\n")
         return target

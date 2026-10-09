@@ -47,14 +47,20 @@ def test_the_generated_claude_md_carries_the_record_s_prompt(tmp_path):
     show."""
     store = typestore.TypeStore(tmp_path)
 
-    store.append(record(prompt="one\n"))
-    store.append(record(prompt="two\n"))
+    store.append(record(prompt="the first prompt\n"))
+    store.append(record(prompt="the second prompt\n"))
 
     generated = (tmp_path / "session_types" / "digest" / "CLAUDE.md")
     text = generated.read_text(encoding="utf-8")
-    assert "two" in text
-    assert "one" not in text
     assert "Generated from this unit's session-type store" in text
+
+    # The author's prompt is everything below pu's own preamble, and it is
+    # checked as the whole of that rather than as a substring of the file:
+    # a bare `in` against short prose collides with the preamble's own
+    # words, which is how the first version of this test broke when the
+    # preamble arrived.
+    body = text.rsplit("\n---\n\n", 1)[-1]
+    assert body == "the second prompt\n"
 
 
 def test_the_generated_file_uses_unix_line_endings(tmp_path):
@@ -138,3 +144,49 @@ def test_an_unparseable_line_stops_the_read(tmp_path):
 
     with pytest.raises(typestore.TypeStoreError, match="not readable JSON"):
         store.current()
+
+
+def test_the_generated_file_states_the_contract_above_the_author_s_prompt(
+        tmp_path):
+    """Every committed type states that the final message is the
+    resolution; a generated file used to carry only the author's prompt, so
+    the one thing each hand-written type teaches its session was the one
+    thing a runtime type could not know. The first real runtime session
+    spent part of a paid turn proving it."""
+    store = typestore.TypeStore(tmp_path)
+    store.append(record(prompt="Summarise the payload.\n"))
+
+    text = (tmp_path / "session_types" / "digest" / "CLAUDE.md").read_text(
+        encoding="utf-8")
+
+    assert "Your final message is the resolution" in text
+    # Above the prompt, and it wins: a prompt saying "call pu_resolve_task"
+    # is wrong whatever its author intended.
+    assert text.index("final message") < text.index("Summarise the payload")
+
+
+def test_the_reach_sentence_is_derived_from_the_grant(tmp_path):
+    """Derived rather than templated per grant, so a fifth grant inherits
+    it instead of needing a paragraph somebody remembers to write."""
+    store = typestore.TypeStore(tmp_path)
+    store.append(record(name="quiet", grant="read"))
+    store.append(record(name="reaching", grant="web"))
+
+    def generated(name):
+        return (tmp_path / "session_types" / name / "CLAUDE.md").read_text(
+            encoding="utf-8")
+
+    assert "no way back into this unit" in generated("quiet")
+    assert "no way back into this unit" not in generated("reaching")
+    assert "mcp__mcp-bridge__*" in generated("reaching")
+    assert "Do not resolve this task yourself" in generated("reaching")
+
+
+def test_a_grant_with_no_tools_says_so_rather_than_leaving_it_blank(tmp_path):
+    """"Tools granted:" followed by nothing reads as a truncated file."""
+    store = typestore.TypeStore(tmp_path)
+    store.append(record(name="mute", grant="none"))
+
+    text = (tmp_path / "session_types" / "mute" / "CLAUDE.md").read_text(
+        encoding="utf-8")
+    assert "Tools granted: none." in text
