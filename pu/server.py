@@ -352,6 +352,33 @@ TOOLS = [
         },
     },
     {
+        "name": "list_session_runs",
+        "description": "Recorded session runs, most recent first: which session type ran, against which task, what it cost, how long it took, how many turns, which tools it was refused, and what it concluded. This is the history of what this unit's agents have actually done. Filter by `task` for one task's runs.",
+        "method": "GET",
+        "path": "/sessions",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "most recent first; default 50, capped at 500"},
+                "task": {"type": "string", "description": "only runs against this task uuid"},
+            },
+        },
+    },
+    {
+        "name": "get_session_run",
+        "description": "One recorded run, with the full prompt it was given. The raw stream is deliberately not returned -- it is the largest thing this unit keeps and nothing on the other end can render it.",
+        "method": "GET",
+        "path": "/sessions/{task_uuid}/{run_id}",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_uuid": {"type": "string"},
+                "run_id": {"type": "string"},
+            },
+            "required": ["task_uuid", "run_id"],
+        },
+    },
+    {
         "name": "list_docs",
         "description": "Index of this unit's own documentation: name, title, summary and size, so a caller can decide what not to fetch.",
         "method": "GET",

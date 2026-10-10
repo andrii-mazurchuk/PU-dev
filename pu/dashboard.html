@@ -436,24 +436,26 @@
      has and the strip below it belongs to whichever view is showing.
      Two tabs and not a dropdown: with two destinations a select costs
      a click to reveal what a pair of tabs already shows. */
+  .statusbar {
+    display: flex; align-items: stretch; flex: 0 0 auto;
+    background: var(--panel); border-bottom: 1px solid var(--rule);
+  }
+  .statusbar .strip { flex: 1; border-bottom: 0; min-width: 0; }
   .views {
-    display: flex; align-items: stretch; gap: 0;
-    background: var(--panel-alt); border-bottom: 1px solid var(--rule);
-    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 2px;
+    padding: 0 12px 0 8px; flex: 0 0 auto;
+    border-left: 1px solid var(--rule-soft);
   }
   .view-tab {
-    border: 0; border-bottom: 2px solid transparent; background: none;
-    cursor: pointer; padding: 7px 14px 6px;
+    border: 1px solid transparent; border-radius: var(--radius);
+    background: none; cursor: pointer; padding: 4px 11px;
     font: 400 12.5px var(--sans); color: var(--ink-soft);
   }
   .view-tab:hover { color: var(--ink); }
   .view-tab[aria-selected="true"] {
-    color: var(--ink); border-bottom-color: var(--brand); font-weight: 500;
+    color: var(--ink); background: var(--brand-soft);
+    border-color: var(--rule); font-weight: 500;
   }
-  .view-tab .n {
-    font: 400 10.5px var(--mono); color: var(--dim); margin-left: 5px;
-  }
-  .view-tab[aria-selected="true"] .n { color: var(--ink-soft); }
 
   /* ---- the sessions view ---- */
   .sessions {
@@ -461,14 +463,95 @@
     padding: 14px 16px 40px;
   }
   .sessions[hidden] { display: none; }
-  .sessions h2 {
-    margin: 0 0 2px; font: 500 13px var(--sans); color: var(--ink);
+  .sessions { padding: 0; }
+  .sess { display: flex; height: 100%; min-height: 0; }
+
+  /* The list is the index and the detail is the page. Fixed width so a
+     long type name cannot push the thing you came to read off-screen. */
+  .sess-list {
+    flex: 0 0 258px; overflow-y: auto; padding: 12px 10px 40px;
+    background: var(--panel-alt); border-right: 1px solid var(--rule);
+  }
+  .sess-group + .sess-group { margin-top: 20px; }
+  .sess-group h3 {
+    margin: 0 0 7px; padding: 0 6px;
+    font: 500 10.5px var(--sans); letter-spacing: .05em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  .sess-group h3 .q { float: right; text-transform: none; letter-spacing: 0; }
+
+  .sess-row {
+    display: block; width: 100%; text-align: left; cursor: pointer;
+    border: 1px solid transparent; border-radius: var(--radius);
+    background: none; padding: 6px 7px; margin-bottom: 1px;
+  }
+  .sess-row:hover { background: var(--panel); }
+  .sess-row.on { background: var(--brand-soft); border-color: var(--rule); }
+  .sess-row-top { display: flex; align-items: center; gap: 6px; }
+  .sess-row-top .nm {
+    font: 400 12px var(--mono); color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* In the list the dot carries the state and the word would crowd the
+     name out; the word is restored in the detail header, which is where
+     the state is actually read rather than scanned. */
+  .sess-row .state { font-size: 0; gap: 0; }
+  .sess-row .state i { width: 6px; height: 6px; }
+  .sess-row-sub {
+    display: block; padding-left: 12px; margin-top: 1px;
+    font: 400 10.5px var(--mono); color: var(--dim);
+  }
+
+  .sess-detail { flex: 1; min-width: 0; overflow-y: auto; padding: 16px 20px 56px; }
+  .sess-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--rule);
+  }
+  .sess-head h2 { margin: 0 0 3px; font: 500 15px var(--sans); }
+  .sess-head h2 code { font: 500 14.5px var(--mono); color: var(--ink); }
+  .sess-head-state { flex: 0 0 auto; padding-top: 3px; }
+
+  .sess-tiles { display: flex; gap: 0; margin: 14px 0 4px; flex-wrap: wrap; }
+  .tile {
+    flex: 1 1 130px; padding: 8px 14px 9px;
+    border-left: 1px solid var(--rule-soft);
+  }
+  .tile:first-child { border-left: 0; padding-left: 0; }
+  .tile b { display: block; font: 400 17px/1.15 var(--mono); color: var(--ink); }
+  .tile span { font-size: 10.5px; color: var(--dim); }
+  .tile.warn b { color: var(--human); }
+
+  .sessions h2 { margin: 0 0 2px; font: 500 13px var(--sans); color: var(--ink); }
+  .sessions h3 {
+    margin: 0 0 6px; font: 500 12.5px var(--sans); color: var(--ink);
   }
   .sessions .q { color: var(--dim); font-weight: 400; }
   .sessions .note {
-    margin: 0 0 10px; font-size: 11.5px; color: var(--dim); max-width: 78ch;
+    margin: 0 0 10px; font-size: 11.5px; color: var(--dim); max-width: 82ch;
   }
-  .sessions section + section { margin-top: 26px; }
+  .sessions .warnish { color: var(--human); }
+  .sessions section { margin-top: 24px; }
+  .empty-note { padding: 14px 2px; color: var(--dim); font-size: 12px; }
+
+  .kvs { margin: 0; display: grid; grid-template-columns: 150px 1fr; gap: 0; }
+  .kv { display: contents; }
+  .kv dt {
+    padding: 5px 10px 5px 0; font-size: 11.5px; color: var(--dim);
+    border-top: 1px solid var(--rule-soft);
+  }
+  .kv dd {
+    margin: 0; padding: 5px 0; font-size: 12px; color: var(--ink);
+    border-top: 1px solid var(--rule-soft);
+  }
+  .kvs .kv:first-child dt, .kvs .kv:first-child dd { border-top: 0; }
+
+  .prompt {
+    margin: 0; padding: 10px 12px; max-height: 260px; overflow: auto;
+    background: var(--panel); border: 1px solid var(--rule-soft);
+    border-radius: var(--radius); white-space: pre-wrap;
+    font: 400 11.5px/1.55 var(--mono); color: var(--ink-soft);
+  }
+  .state.stuck i { background: var(--stuck); }
 
   .tbl { width: 100%; border-collapse: collapse; background: var(--panel); }
   .tbl caption { text-align: left; caption-side: top; padding: 0 0 6px; }
@@ -507,15 +590,15 @@
 <div class="wrap">
   <div class="offline" id="offline" hidden></div>
 
-  <div class="views" role="tablist" aria-label="What this page is showing">
-    <button class="view-tab" id="tab-tasks" role="tab"
-            aria-selected="true" aria-controls="stage">Tasks</button>
-    <button class="view-tab" id="tab-sessions" role="tab"
-            aria-selected="false" aria-controls="sessions">Sessions<span
-            class="n" id="tab-sessions-n"></span></button>
+  <div class="statusbar">
+    <div class="strip" id="strip"></div>
+    <div class="views" role="tablist" aria-label="What this page is showing">
+      <button class="view-tab" id="tab-tasks" role="tab"
+              aria-selected="true" aria-controls="stage">Tasks</button>
+      <button class="view-tab" id="tab-sessions" role="tab"
+              aria-selected="false" aria-controls="sessions">Sessions</button>
+    </div>
   </div>
-
-  <div class="strip" id="strip"></div>
 
   <div class="scopes" id="scoperow">
     <div id="scopes" style="display:flex;gap:4px"></div>
@@ -823,7 +906,7 @@ const NODE_W = 176, NODE_H = 36;
 const MAP_PAD = 26, MAP_GAP = 44;
 
 let STATE = { tasks: [], live: false, project: null, selected: null, chat: [],
-              view: 'tasks' };
+              view: 'tasks', sel: null };
 
 /* Relative, never leading-slash: at this unit's /dashboard that
    lands on its own root; behind the node's /dashboard/pu/ it
@@ -868,8 +951,9 @@ async function loadSessions() {
   const soft = async (path, key) => {
     try { return (await getJSON(path))[key] ?? []; } catch { return []; }
   };
-  const [types, triggers] = await Promise.all([
+  const [types, triggers, runs] = await Promise.all([
     soft('session-types', 'session_types'), soft('triggers', 'triggers'),
+    soft('sessions?limit=200', 'sessions'),
   ]);
   // ponytail: one request per trigger for its cursor, because a cursor
   // is state served apart from its record. Fine at a handful; if this
@@ -880,7 +964,7 @@ async function loadSessions() {
     try { cursors[t.name] = await getJSON(`triggers/${encodeURIComponent(t.name)}/cursor`); }
     catch { cursors[t.name] = null; }
   }));
-  return { types, triggers, cursors };
+  return { types, triggers, cursors, runs };
 }
 
 function sample() {
@@ -1135,6 +1219,27 @@ function stateCell(enabled, { spends = false } = {}) {
     : `<span class="state live"><i></i>live</span>`;
 }
 
+/* An ISO timestamp cut to a fixed width lands mid-second and reads as
+   corrupt -- "2026-10-10T12:23:3…" looks like a bug rather than a time.
+   Cut at a field boundary instead, and drop the `T` that only a machine
+   wanted. */
+function when(iso) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(String(iso ?? ''));
+  return m ? `${m[1]} ${m[2]}` : '';
+}
+
+/* "1 run(s)" is the sound of a template nobody finished. */
+function plural(n, one, many) {
+  return `${num(n)} ${Number(n) === 1 ? one : many}`;
+}
+
+function dur(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  return n < 60_000 ? `${(n / 1000).toFixed(1)}s`
+                    : `${Math.floor(n / 60_000)}m ${Math.round((n % 60_000) / 1000)}s`;
+}
+
 function claimCell(claims) {
   if (!claims || !claims.kind) return '<span class="muted">claims nothing</span>';
   const tags = (claims.tags ?? []).map(t => escapeText(t)).join(', ');
@@ -1145,8 +1250,8 @@ function sourceCell(source) {
   const kind = source?.kind ?? '';
   if (kind === 'schedule')
     return `<code>schedule</code> every ${num(source.every_seconds)}s`;
-  return `<code>${escapeText(kind)}</code><br>`
-       + `<span class="muted">${escapeText(clip(source?.url ?? '', 52))}</span>`;
+  return `<code>${escapeText(kind)}</code> `
+       + `<span class="muted">${escapeText(clip(source?.url ?? '', 46))}</span>`;
 }
 
 function predicateCell(predicate) {
@@ -1154,108 +1259,286 @@ function predicateCell(predicate) {
     return '<span class="muted">anything new</span>';
   return predicate
     .map(([f, op, v]) => `<code>${escapeText(f)} ${escapeText(op)} ${escapeText(String(v))}</code>`)
-    .join('<br>');
+    .join(' ');
 }
 
-/* The cursor is the only evidence a watch is working, so it reads as
-   a sentence rather than a field dump: a cursor that never moves
-   means the source is not being read, and one that moves without
-   firing means the predicate never holds. Both are invisible if you
-   only print the numbers. */
-/* An ISO timestamp cut to a fixed width lands mid-second and reads as
-   corrupt -- "2026-10-10T12:23:3…" looks like a bug rather than a time.
-   Cut at a field boundary instead, and drop the `T` that only a machine
-   wanted. */
-function when(iso) {
-  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(String(iso ?? ''));
-  return m ? `${m[1]} ${m[2]}` : '';
+/* What a grant actually permits, spelled out. The grant's *name* is the
+   thing to scan a list by; what it allows is the thing to read before
+   activating one, and leaving it as a word means looking it up elsewhere
+   -- which in practice means not looking it up. */
+const GRANTS = {
+  none: { tools: 'none', peers: false, repo: false },
+  read: { tools: 'Read + the SOP lookup', peers: false, repo: false },
+  web:  { tools: 'Read, WebSearch, WebFetch + the SOP lookup', peers: true, repo: false },
+  repo: { tools: 'Bash, Read, Write, Edit + the SOP lookup', peers: true, repo: true },
+};
+
+/* =============================================================
+   THE SESSIONS VIEW
+
+   Secondary on purpose -- tasks are what this page is for -- but a
+   session type is much closer to an agent than to a row in a table:
+   it has instructions, a permission set, a model, and a history of
+   runs. So the shape is the one every agent console converges on, a
+   list beside a detail: pick a thing on the left, read everything
+   about it on the right.
+
+   The detail's sections are the four questions actually asked of an
+   agent, in the order they are asked: what is it, what may it do,
+   what is it told, and what has it done.
+   ============================================================= */
+
+let SESS = { types: [], triggers: [], cursors: {}, runs: [] };
+
+function runsFor(name) {
+  return (SESS.runs ?? []).filter(r => r.session_type === name);
 }
 
-function cursorCell(cursor) {
-  if (!cursor) return '<span class="muted">never evaluated</span>';
-  const seen = (cursor.seen ?? []).length;
-  const bits = [`${num(seen)} seen`];
-  if (cursor.pending) bits.push(`${num(cursor.pending)} pending`);
-  const fired = when(cursor.fired_at);
-  bits.push(fired ? `fired ${escapeText(fired)}` : 'never fired');
-  return bits.join(' · ');
+function listRow(item, kind, label, sub, state) {
+  const on = STATE.sel && STATE.sel.kind === kind && STATE.sel.name === item.name;
+  return `<button class="sess-row${on ? ' on' : ''}" data-kind="${escapeText(kind)}"
+      data-name="${escapeText(item.name)}" aria-current="${on ? 'true' : 'false'}">
+      <span class="sess-row-top">${state}<span class="nm">${escapeText(label)}</span></span>
+      <span class="sess-row-sub">${sub}</span>
+    </button>`;
 }
 
-function renderSessions(d) {
-  const types = d.types ?? [], triggers = d.triggers ?? [];
-  const cursors = d.cursors ?? {};
+function renderSessionList() {
+  const types = SESS.types ?? [], triggers = SESS.triggers ?? [];
+  const typeRows = types.length
+    ? types.map(t => listRow(t, 'type', t.name,
+        `${escapeText(t.grant)} · ${plural(runsFor(t.name).length, 'run', 'runs')}`,
+        stateCell(t.enabled))).join('')
+    : '<p class="empty-note">No session types yet.</p>';
+  const trigRows = triggers.length
+    ? triggers.map(t => listRow(t, 'trigger', t.name,
+        escapeText(t.source?.kind ?? ''),
+        stateCell(t.enabled, { spends: !!t.emits?.afk }))).join('')
+    : '<p class="empty-note">No triggers yet.</p>';
 
-  const typeRows = types.length ? types.map(t => `
-    <tr>
-      <td><code>${escapeText(t.name)}</code>${
-        t.origin === 'declared'
-          ? ' <span class="muted">declared by a peer</span>' : ''}</td>
-      <td><code>${escapeText(t.grant)}</code></td>
-      <td>${claimCell(t.claims)}</td>
-      <td>${stateCell(t.enabled)}</td>
-      <td>${escapeText(clip(t.purpose ?? '', 90))}</td>
-    </tr>`).join('') : `
-    <tr><td colspan="5" class="muted">No session types yet. Writing one
-      creates it switched off; activating it is a second step.</td></tr>`;
+  return `
+    <div class="sess-group">
+      <h3>What can run <span class="q">${num(types.filter(t => t.enabled).length)} live</span></h3>
+      ${typeRows}
+    </div>
+    <div class="sess-group">
+      <h3>What starts work <span class="q">${num(triggers.filter(t => t.enabled).length)} live</span></h3>
+      ${trigRows}
+    </div>`;
+}
 
-  const triggerRows = triggers.length ? triggers.map(t => `
-    <tr>
-      <td><code>${escapeText(t.name)}</code></td>
-      <td>${sourceCell(t.source)}</td>
-      <td>${predicateCell(t.predicate)}</td>
-      <td><code>${escapeText(t.emits?.kind ?? '—')}</code>${
-        (t.emits?.tags ?? []).length
-          ? ' + ' + escapeText((t.emits.tags ?? []).join(', ')) : ''}</td>
-      <td>${stateCell(t.enabled, { spends: !!t.emits?.afk })}</td>
-      <td class="muted">${cursorCell(cursors[t.name])}</td>
-    </tr>`).join('') : `
-    <tr><td colspan="6" class="muted">No triggers yet. Nothing creates
-      work on its own.</td></tr>`;
+function kv(label, value) {
+  return `<div class="kv"><dt>${escapeText(label)}</dt><dd>${value}</dd></div>`;
+}
 
-  const liveTypes = types.filter(t => t.enabled).length;
-  const liveSpenders = triggers.filter(t => t.enabled && t.emits?.afk).length;
+function runsTable(name) {
+  const runs = runsFor(name);
+  if (!runs.length)
+    return `<p class="empty-note">No runs recorded. This type has never been
+      selected for a task — either nothing it claims has reached the queue,
+      or it has not been live when something did.</p>`;
+  return `<table class="tbl">
+    <caption class="note">${plural(runs.length, 'recorded run', 'recorded runs')}, most recent first</caption>
+    <thead><tr>
+      <th scope="col">outcome</th><th scope="col">when</th>
+      <th scope="col">cost</th><th scope="col">took</th>
+      <th scope="col">turns</th><th scope="col">refused</th>
+      <th scope="col">what it said</th>
+    </tr></thead>
+    <tbody>${runs.map(r => `
+      <tr>
+        <td>${r.outcome === 'resolved'
+              ? '<span class="state live"><i></i>resolved</span>'
+              : `<span class="state stuck"><i></i>${escapeText(r.outcome ?? '?')}</span>`}</td>
+        <td class="muted">${escapeText(when(r.recorded_at))}</td>
+        <td>$${num(r.cost_usd, 4)}</td>
+        <td class="muted">${escapeText(dur(r.duration_ms))}</td>
+        <td class="muted">${num(r.num_turns)}</td>
+        <td>${(r.permission_denials ?? []).length
+              ? `<span class="warnish">${num((r.permission_denials ?? []).length)}</span>`
+              : '<span class="muted">—</span>'}</td>
+        <td class="muted">${escapeText(clip(r.detail ?? '', 110))}</td>
+      </tr>`).join('')}</tbody>
+  </table>`;
+}
 
-  $('sessions').innerHTML = `
+function typeDetail(t) {
+  const g = GRANTS[t.grant] ?? { tools: 'unknown', peers: false, repo: false };
+  const runs = runsFor(t.name);
+  const spent = runs.reduce((a, r) => a + (Number(r.cost_usd) || 0), 0);
+  const denials = runs.flatMap(r => r.permission_denials ?? []);
+
+  return `
+    <header class="sess-head">
+      <div>
+        <h2><code>${escapeText(t.name)}</code></h2>
+        <p class="note">${escapeText(t.purpose ?? '')}</p>
+      </div>
+      <div class="sess-head-state">${stateCell(t.enabled)}</div>
+    </header>
+
+    <div class="sess-tiles">
+      <div class="tile"><b>${num(runs.length)}</b><span>runs</span></div>
+      <div class="tile"><b>$${num(spent, 2)}</b><span>spent, all time</span></div>
+      <div class="tile"><b>${escapeText(when(runs[0]?.recorded_at) || '—')}</b><span>last run</span></div>
+      <div class="tile ${denials.length ? 'warn' : ''}"><b>${num(denials.length)}</b><span>refused tool calls</span></div>
+    </div>
+
     <section>
-      <h2>What can run <span class="q">— the session types</span></h2>
-      <p class="note">${num(liveTypes)} of ${num(types.length)} are live.
-        A type runs only while it is live, and a live one picks up any task
-        whose kind and tags it claims. The grant is what it is allowed to
-        do, and it is the thing worth reading before activating one.</p>
-      <table class="tbl">
-        <caption class="note">Session types held by this unit</caption>
-        <thead><tr>
-          <th scope="col">name</th><th scope="col">grant</th>
-          <th scope="col">claims</th><th scope="col">state</th>
-          <th scope="col">purpose</th>
-        </tr></thead>
-        <tbody>${typeRows}</tbody>
-      </table>
+      <h3>What it may do <span class="q">— the grant</span></h3>
+      <dl class="kvs">
+        ${kv('grant', `<code>${escapeText(t.grant)}</code>`)}
+        ${kv('tools', escapeText(g.tools))}
+        ${kv('other units', g.peers
+            ? 'may reach every peer through the bridge'
+            : '<span class="muted">no way back into this unit, or any other</span>')}
+        ${kv('where it runs', g.repo
+            ? 'in the target repository named by the task'
+            : '<span class="muted">in its own allocated directory</span>')}
+        ${kv('model', t.model
+            ? `<code>${escapeText(t.model)}</code>`
+            : '<span class="muted">whatever the CLI defaults to</span>')}
+        ${kv('origin', t.origin === 'declared'
+            ? 'declared by a peer unit, in its own source'
+            : 'authored here, at runtime')}
+      </dl>
     </section>
 
     <section>
-      <h2>What starts work <span class="q">— the triggers</span></h2>
-      <p class="note">${liveSpenders === 1
-          ? 'One live trigger creates'
-          : num(liveSpenders) + ' live triggers create'} work an agent may
-        run alone, which is the only way this unit spends money without
-        being asked.
-        A trigger never starts a session itself — it creates a task, and
-        the next tick decides, through the gates.</p>
-      <table class="tbl">
-        <caption class="note">Triggers held by this unit</caption>
-        <thead><tr>
-          <th scope="col">name</th><th scope="col">watches</th>
-          <th scope="col">fires when</th><th scope="col">creates</th>
-          <th scope="col">state</th><th scope="col">cursor</th>
-        </tr></thead>
-        <tbody>${triggerRows}</tbody>
-      </table>
-    </section>`;
+      <h3>What it picks up <span class="q">— the claim</span></h3>
+      <p class="note">A live type runs any task whose kind and tags it claims,
+        and the most specific claim wins. ${t.enabled
+          ? 'It is live, so it is picking these up now.'
+          : 'It is off, so it is picking up nothing.'}</p>
+      <dl class="kvs">${kv('claims', claimCell(t.claims))}</dl>
+    </section>
 
-  const n = $('tab-sessions-n');
-  n.textContent = types.length || triggers.length
-    ? `${liveTypes}/${types.length}` : '';
+    <section>
+      <h3>What it is told <span class="q">— the instructions</span></h3>
+      <p class="note">pu generates this type's <code>CLAUDE.md</code> from the
+        record on every write, above a preamble stating that the final message
+        is the resolution. Editing it switches the type off.</p>
+      <pre class="prompt">${escapeText(t.prompt ?? '')}</pre>
+    </section>
+
+    <section>
+      <h3>What it has done <span class="q">— the runs</span></h3>
+      ${runsTable(t.name)}
+      ${denials.length ? `<p class="note warnish">Refused tool calls:
+        ${escapeText(clip([...new Set(denials)].join(', '), 160))}.
+        A session reaching for a tool its grant does not include spends part
+        of a turn finding out.</p>` : ''}
+    </section>`;
+}
+
+function triggerDetail(t) {
+  const c = SESS.cursors?.[t.name];
+  const seen = (c?.seen ?? []).length;
+  return `
+    <header class="sess-head">
+      <div>
+        <h2><code>${escapeText(t.name)}</code></h2>
+        <p class="note">${escapeText(t.purpose ?? '')}</p>
+      </div>
+      <div class="sess-head-state">${stateCell(t.enabled, { spends: !!t.emits?.afk })}</div>
+    </header>
+
+    <div class="sess-tiles">
+      <div class="tile"><b>${num(seen)}</b><span>items seen</span></div>
+      <div class="tile"><b>${num(c?.pending)}</b><span>pending toward next fire</span></div>
+      <div class="tile"><b>${escapeText(when(c?.fired_at) || 'never')}</b><span>last fired</span></div>
+      <div class="tile ${t.emits?.afk ? 'warn' : ''}"><b>${t.emits?.afk ? 'yes' : 'no'}</b><span>spends unattended</span></div>
+    </div>
+
+    <section>
+      <h3>What it watches <span class="q">— the source</span></h3>
+      <dl class="kvs">
+        ${kv('source', sourceCell(t.source))}
+        ${kv('fires when', predicateCell(t.predicate))}
+      </dl>
+      <p class="note">A failed fetch is <em>unknown</em>, not empty: it never
+        fires and never advances the cursor, so a source that is down cannot
+        look like a source that went quiet.</p>
+    </section>
+
+    <section>
+      <h3>What it creates <span class="q">— the task</span></h3>
+      <dl class="kvs">
+        ${kv('kind', `<code>${escapeText(t.emits?.kind ?? '—')}</code>`)}
+        ${kv('tags', (t.emits?.tags ?? []).length
+            ? escapeText((t.emits.tags ?? []).join(', '))
+            : '<span class="muted">none</span>')}
+        ${kv('project', t.emits?.project
+            ? `<code>${escapeText(t.emits.project)}</code>`
+            : '<span class="muted">none</span>')}
+        ${kv('who it is for', t.emits?.afk
+            ? 'an agent may run it alone — this is how it spends'
+            : 'it waits for a person')}
+      </dl>
+      <p class="note">A trigger never starts a session. It creates a task, and
+        the next tick decides, through the gates.</p>
+    </section>
+
+    <section>
+      <h3>Where it has got to <span class="q">— the cursor</span></h3>
+      <p class="note">The only evidence a watch is working. A cursor that never
+        moves means the source is not being read; one that moves without firing
+        means the predicate never holds.</p>
+      <dl class="kvs">
+        ${kv('items seen', `${num(seen)} <span class="muted">(the most recent are remembered, not all of them)</span>`)}
+        ${kv('pending', num(c?.pending))}
+        ${kv('last new item', c?.last_new_at
+            ? escapeText(when(c.last_new_at))
+            : '<span class="muted">nothing has ever arrived</span>')}
+        ${kv('last fired', c?.fired_at
+            ? escapeText(when(c.fired_at))
+            : '<span class="muted">never</span>')}
+      </dl>
+    </section>`;
+}
+
+function renderDetail() {
+  const sel = STATE.sel;
+  const list = sel?.kind === 'trigger' ? SESS.triggers : SESS.types;
+  const item = (list ?? []).find(x => x.name === sel?.name);
+  $('sess-detail').innerHTML = item
+    ? (sel.kind === 'trigger' ? triggerDetail(item) : typeDetail(item))
+    : `<p class="empty-note">Nothing selected. Pick a session type or a trigger
+       on the left.</p>`;
+  for (const b of document.querySelectorAll('.sess-row'))
+    b.classList.toggle('on',
+      b.dataset.kind === sel?.kind && b.dataset.name === sel?.name);
+}
+
+function renderSessions(d) {
+  SESS = { types: d.types ?? [], triggers: d.triggers ?? [],
+           cursors: d.cursors ?? {}, runs: d.runs ?? [] };
+
+  // A selection that survives a refresh, and falls back to the first
+  // thing rather than to nothing: an empty right-hand pane reads as a
+  // broken page rather than as a page waiting to be told what to show.
+  const all = [...SESS.types.map(t => ({ kind: 'type', name: t.name })),
+               ...SESS.triggers.map(t => ({ kind: 'trigger', name: t.name }))];
+  const stillThere = STATE.sel
+    && all.some(x => x.kind === STATE.sel.kind && x.name === STATE.sel.name);
+  if (!stillThere) STATE.sel = all[0] ?? null;
+
+  $('sessions').innerHTML = `
+    <div class="sess">
+      <div class="sess-list" id="sess-list" role="group"
+           aria-label="Session types and triggers"></div>
+      <div class="sess-detail" id="sess-detail"></div>
+    </div>`;
+  $('sess-list').innerHTML = renderSessionList();
+  renderDetail();
+
+  // Delegated, so rebuilding the list never leaves a dead handler behind.
+  $('sess-list').onclick = e => {
+    const row = e.target.closest('.sess-row');
+    if (!row) return;
+    STATE.sel = { kind: row.dataset.kind, name: row.dataset.name };
+    renderDetail();
+  };
 }
 
 /* Tasks is the default and stays the default: it is what this page
