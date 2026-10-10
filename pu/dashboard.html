@@ -533,6 +533,66 @@
   .sessions section { margin-top: 24px; }
   .empty-note { padding: 14px 2px; color: var(--dim); font-size: 12px; }
 
+  /* ---- writing: forms, and the controls that open them ---- */
+  .btn {
+    border: 1px solid var(--rule); background: var(--panel); color: var(--ink);
+    border-radius: var(--radius); cursor: pointer;
+    font: 400 11.5px var(--sans); padding: 3px 9px;
+  }
+  .btn:hover { border-color: var(--ink-soft); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+  .acts { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; }
+
+  .add {
+    border: 1px solid var(--rule); background: var(--panel); color: var(--ink-soft);
+    border-radius: var(--radius); cursor: pointer; margin-left: auto;
+    font: 400 13px/1 var(--mono); padding: 1px 7px 3px;
+  }
+  .add:hover { border-color: var(--ink-soft); color: var(--ink); }
+
+  .sess-form { padding: 4px 0 30px; max-width: 70ch; }
+  .fld { margin-bottom: 13px; }
+  .fld-row { display: flex; gap: 14px; }
+  .fld-row .fld { flex: 1; }
+  .fld label {
+    display: block; margin-bottom: 3px;
+    font: 500 10.5px var(--sans); letter-spacing: .04em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  .fld input[type=text], .fld input:not([type]), .fld input[type=number],
+  .fld select, .fld textarea {
+    width: 100%; box-sizing: border-box;
+    border: 1px solid var(--rule); border-radius: var(--radius);
+    background: var(--panel); color: var(--ink);
+    font: 400 12.5px var(--sans); padding: 5px 7px;
+  }
+  .fld textarea { font-family: var(--mono); font-size: 11.5px; resize: vertical; }
+  .fld input:focus, .fld select:focus, .fld textarea:focus {
+    outline: 2px solid var(--brand); outline-offset: -1px;
+  }
+  .fld input:disabled, .fld textarea:disabled { background: var(--panel-alt); color: var(--dim); }
+  .fld .chk { display: flex; align-items: center; gap: 6px;
+              font: 400 12.5px var(--sans); color: var(--ink);
+              text-transform: none; letter-spacing: 0; margin-top: 6px; }
+  .fld .chk input { width: auto; }
+  .hint-row { margin: 3px 0 0; font-size: 11px; color: var(--dim); }
+
+  /* The one line that says whether any of this will do anything. */
+  .form-wiring {
+    margin: 16px 0 14px; padding: 8px 10px;
+    background: var(--panel-alt); border-left: 2px solid var(--brand);
+    font-size: 12px; color: var(--ink-soft);
+  }
+  /* The error wraps onto its own line rather than squeezing the button
+     into three: a refusal is usually a sentence, and the control it sits
+     beside must stay the size it was. */
+  .form-actions { display: flex; align-items: center; gap: 8px; margin-top: 18px;
+                  flex-wrap: wrap; }
+  .btn { white-space: nowrap; }
+  .form-error { color: var(--down); font-size: 11.5px; flex: 1 1 100%; }
+  .acts .form-error { flex: 0 1 auto; }
+
   .kvs { margin: 0; display: grid; grid-template-columns: 150px 1fr; gap: 0; }
   .kv { display: contents; }
   .kv dt {
@@ -1290,6 +1350,96 @@ const GRANTS = {
 
 let SESS = { types: [], triggers: [], cursors: {}, runs: [] };
 
+/* ---- writing, and the one condition under which it is offered ----
+
+   The node's dashboard proxy forwards GET and refuses everything else
+   with 405, so a write from inside the frame cannot arrive -- and
+   pretending otherwise would be a button that fails for a reason the
+   reader cannot see. It becomes possible the day pu declares an
+   `/actions` manifest; that is its own ticket and is not this page's to
+   assume.
+
+   So the controls appear only when this page is served straight from pu
+   -- opened at its own port rather than framed by the node. That is the
+   real condition, not a flag: the same file is read-only in the frame
+   and writable on the unit, because that is what the two contexts
+   actually permit. */
+const DIRECT = (() => {
+  try { return window.top === window; } catch { return false; }
+})();
+
+async function postJSON(path, payload) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error(text || String(r.status));
+  return text ? JSON.parse(text) : {};
+}
+
+/* Which session type would run the work a trigger creates.
+
+   This mirrors `session_types.for_task` deliberately and must keep
+   mirroring it: a claim preview that disagrees with the selector is
+   worse than no preview, because it is believed. Most specific wins by
+   number of claim tags, then by name, and only live types are in the
+   running -- an unenabled one is not discovered at all. */
+const DEFAULT_FOR_KIND = {
+  execution: 'execution', research: 'research', intake: 'intake',
+};
+
+function claimerFor(emits) {
+  if (!emits || !emits.kind) return null;
+  const tags = new Set(emits.tags ?? []);
+  const claiming = (SESS.types ?? []).filter(t =>
+    t.enabled && t.claims && t.claims.kind === emits.kind
+    && (t.claims.tags ?? []).every(x => tags.has(x)));
+  claiming.sort((a, b) =>
+    (b.claims.tags ?? []).length - (a.claims.tags ?? []).length
+    || a.name.localeCompare(b.name));
+  return claiming[0] ?? null;
+}
+
+/* The sentence that wires the two halves together, and the only place
+   this view tells you whether a trigger will actually do anything. Three
+   failures it makes visible, each of which otherwise looks like silence:
+   a kind nothing can run, work no agent may pick up, and a tag that
+   matches no live type. */
+function wiringNote(emits) {
+  if (!emits || !emits.kind)
+    return '<span class="warnish">creates nothing — no kind set</span>';
+  const claimer = claimerFor(emits);
+  const fallback = DEFAULT_FOR_KIND[emits.kind];
+
+  let who;
+  if (claimer) who = `<code>${escapeText(claimer.name)}</code> picks it up`;
+  else if (fallback)
+    who = `the built-in <code>${escapeText(fallback)}</code> session picks it up`;
+  else
+    who = `<span class="warnish">nothing runs ${escapeText(emits.kind)} tasks,
+           so this work would sit in the queue</span>`;
+
+  const whom = emits.afk
+    ? 'an agent may run it alone'
+    : '<span class="muted">it waits for a person — no agent will take it</span>';
+  return `${who} · ${whom}`;
+}
+
+/* The same relationship read from the other end. A type with no feeders
+   only ever runs what a person queues by hand, which is worth knowing
+   before wondering why it has no runs. */
+function triggersFeeding(type) {
+  if (!type?.claims?.kind) return [];
+  return (SESS.triggers ?? []).filter(tr => {
+    const e = tr.emits;
+    if (!e || e.kind !== type.claims.kind) return false;
+    const tags = new Set(e.tags ?? []);
+    return (type.claims.tags ?? []).every(x => tags.has(x));
+  });
+}
+
 function runsFor(name) {
   return (SESS.runs ?? []).filter(r => r.session_type === name);
 }
@@ -1316,15 +1466,22 @@ function renderSessionList() {
         stateCell(t.enabled, { spends: !!t.emits?.afk }))).join('')
     : '<p class="empty-note">No triggers yet.</p>';
 
+  const add = kind => DIRECT
+    ? `<button class="add" data-new="${escapeText(kind)}" title="Create one">+</button>`
+    : '';
+
   return `
     <div class="sess-group">
-      <h3>What can run <span class="q">${num(types.filter(t => t.enabled).length)} live</span></h3>
+      <h3>Sessions <span class="q">${num(types.filter(t => t.enabled).length)} live</span>${add('type')}</h3>
       ${typeRows}
     </div>
     <div class="sess-group">
-      <h3>What starts work <span class="q">${num(triggers.filter(t => t.enabled).length)} live</span></h3>
+      <h3>Triggers <span class="q">${num(triggers.filter(t => t.enabled).length)} live</span>${add('trigger')}</h3>
       ${trigRows}
-    </div>`;
+    </div>
+    ${DIRECT ? '' : `<p class="empty-note">Read-only inside the node's frame:
+      the dashboard proxy forwards GET and refuses everything else. Open this
+      page from pu directly to create or change one.</p>`}`;
 }
 
 function kv(label, value) {
@@ -1374,7 +1531,14 @@ function typeDetail(t) {
         <h2><code>${escapeText(t.name)}</code></h2>
         <p class="note">${escapeText(t.purpose ?? '')}</p>
       </div>
-      <div class="sess-head-state">${stateCell(t.enabled)}</div>
+      <div class="sess-head-state">
+        ${stateCell(t.enabled)}
+        ${DIRECT ? `<span class="acts">
+          <button class="btn" id="act-toggle">${escapeText(t.enabled ? 'Switch off' : 'Activate')}</button>
+          <button class="btn" id="act-edit">Edit</button>
+          <span class="form-error" id="act-error"></span>
+        </span>` : ''}
+      </div>
     </header>
 
     <div class="sess-tiles">
@@ -1385,7 +1549,7 @@ function typeDetail(t) {
     </div>
 
     <section>
-      <h3>What it may do <span class="q">— the grant</span></h3>
+      <h3>Grant <span class="q">— what it may do</span></h3>
       <dl class="kvs">
         ${kv('grant', `<code>${escapeText(t.grant)}</code>`)}
         ${kv('tools', escapeText(g.tools))}
@@ -1405,16 +1569,24 @@ function typeDetail(t) {
     </section>
 
     <section>
-      <h3>What it picks up <span class="q">— the claim</span></h3>
+      <h3>Claim <span class="q">— what it picks up</span></h3>
       <p class="note">A live type runs any task whose kind and tags it claims,
         and the most specific claim wins. ${t.enabled
           ? 'It is live, so it is picking these up now.'
           : 'It is off, so it is picking up nothing.'}</p>
-      <dl class="kvs">${kv('claims', claimCell(t.claims))}</dl>
+      <dl class="kvs">${kv('claims', claimCell(t.claims))}
+        ${kv('fed by', (() => {
+          const feeders = triggersFeeding(t);
+          return feeders.length
+            ? feeders.map(f => `<code>${escapeText(f.name)}</code>`).join(', ')
+            : '<span class="muted">no trigger creates work matching this — it '
+              + 'runs only what a person queues</span>';
+        })())}
+      </dl>
     </section>
 
     <section>
-      <h3>What it is told <span class="q">— the instructions</span></h3>
+      <h3>Instructions <span class="q">— what it is told</span></h3>
       <p class="note">pu generates this type's <code>CLAUDE.md</code> from the
         record on every write, above a preamble stating that the final message
         is the resolution. Editing it switches the type off.</p>
@@ -1422,7 +1594,7 @@ function typeDetail(t) {
     </section>
 
     <section>
-      <h3>What it has done <span class="q">— the runs</span></h3>
+      <h3>Runs <span class="q">— what it has done</span></h3>
       ${runsTable(t.name)}
       ${denials.length ? `<p class="note warnish">Refused tool calls:
         ${escapeText(clip([...new Set(denials)].join(', '), 160))}.
@@ -1440,7 +1612,14 @@ function triggerDetail(t) {
         <h2><code>${escapeText(t.name)}</code></h2>
         <p class="note">${escapeText(t.purpose ?? '')}</p>
       </div>
-      <div class="sess-head-state">${stateCell(t.enabled, { spends: !!t.emits?.afk })}</div>
+      <div class="sess-head-state">
+        ${stateCell(t.enabled, { spends: !!t.emits?.afk })}
+        ${DIRECT ? `<span class="acts">
+          <button class="btn" id="act-toggle">${escapeText(t.enabled ? 'Switch off' : 'Activate')}</button>
+          <button class="btn" id="act-edit">Edit</button>
+          <span class="form-error" id="act-error"></span>
+        </span>` : ''}
+      </div>
     </header>
 
     <div class="sess-tiles">
@@ -1451,7 +1630,7 @@ function triggerDetail(t) {
     </div>
 
     <section>
-      <h3>What it watches <span class="q">— the source</span></h3>
+      <h3>Source <span class="q">— what it watches</span></h3>
       <dl class="kvs">
         ${kv('source', sourceCell(t.source))}
         ${kv('fires when', predicateCell(t.predicate))}
@@ -1462,7 +1641,7 @@ function triggerDetail(t) {
     </section>
 
     <section>
-      <h3>What it creates <span class="q">— the task</span></h3>
+      <h3>Creates <span class="q">— the task it makes</span></h3>
       <dl class="kvs">
         ${kv('kind', `<code>${escapeText(t.emits?.kind ?? '—')}</code>`)}
         ${kv('tags', (t.emits?.tags ?? []).length
@@ -1475,12 +1654,13 @@ function triggerDetail(t) {
             ? 'an agent may run it alone — this is how it spends'
             : 'it waits for a person')}
       </dl>
+      <p class="form-wiring">${wiringNote(t.emits)}</p>
       <p class="note">A trigger never starts a session. It creates a task, and
         the next tick decides, through the gates.</p>
     </section>
 
     <section>
-      <h3>Where it has got to <span class="q">— the cursor</span></h3>
+      <h3>Cursor <span class="q">— where it has got to</span></h3>
       <p class="note">The only evidence a watch is working. A cursor that never
         moves means the source is not being read; one that moves without firing
         means the predicate never holds.</p>
@@ -1497,17 +1677,360 @@ function triggerDetail(t) {
     </section>`;
 }
 
+/* ---- the forms ----
+
+   Fields are rendered empty and filled afterwards through `.value`,
+   never interpolated into markup. A DOM property cannot become markup
+   whatever it holds, so a prompt containing a quote or a tag is simply a
+   string -- and the page keeps exactly two doors into innerHTML instead
+   of growing an attribute-escaping third.  */
+
+function field(id, label, control, hint = '') {
+  return `<div class="fld">
+    <label for="${escapeText(id)}">${escapeText(label)}</label>
+    ${control}
+    ${hint ? `<p class="hint-row">${hint}</p>` : ''}
+  </div>`;
+}
+
+function options(values, { blank = '' } = {}) {
+  return (blank ? `<option value="">${escapeText(blank)}</option>` : '')
+    + values.map(v => `<option value="${escapeText(v)}">${escapeText(v)}</option>`).join('');
+}
+
+function typeForm(existing) {
+  const isNew = !existing;
+  return `
+    <header class="sess-head">
+      <div>
+        <h2>${escapeText(isNew ? 'New session' : existing.name)}</h2>
+        <p class="note">${escapeText(isNew
+          ? 'It is created switched off. Activating it is a second, separate act.'
+          : 'Saving a live session switches it off — an edit can change what an already-approved session does.')}</p>
+      </div>
+    </header>
+    <form class="sess-form" id="type-form" novalidate>
+      ${field('f-name', 'name',
+        `<input id="f-name" name="name" ${isNew ? '' : 'disabled'}
+                placeholder="deploy-digest" autocomplete="off">`,
+        'The identity, and immutable. Lowercase; a dot namespaces a peer.')}
+      ${field('f-purpose', 'purpose',
+        `<input id="f-purpose" name="purpose" autocomplete="off">`,
+        'One line, read by whoever decides whether to activate it.')}
+      ${field('f-grant', 'grant',
+        `<select id="f-grant" name="grant">${options(Object.keys(GRANTS))}</select>`,
+        '<span id="grant-explains"></span>')}
+      <div class="fld-row">
+        ${field('f-kind', 'claims kind',
+          `<select id="f-kind" name="kind">${options(Object.keys(DEFAULT_FOR_KIND), { blank: '— claims nothing —' })}</select>`)}
+        ${field('f-tags', 'claims tags',
+          `<input id="f-tags" name="tags" placeholder="digest, nightly" autocomplete="off">`,
+          'Comma separated. A task must carry all of them.')}
+      </div>
+      ${field('f-model', 'model',
+        `<input id="f-model" name="model" placeholder="(the CLI default)" autocomplete="off">`,
+        'Leave empty unless the work genuinely differs in reasoning load.')}
+      ${field('f-prompt', 'instructions',
+        `<textarea id="f-prompt" name="prompt" rows="7"></textarea>`,
+        'pu writes this into the generated <code>CLAUDE.md</code>, under a preamble it adds itself.')}
+      <p class="form-wiring" id="type-wiring"></p>
+      <div class="form-actions">
+        <button type="submit" class="btn primary">${escapeText(isNew ? 'Create, switched off' : 'Save')}</button>
+        <button type="button" class="btn" data-cancel>Cancel</button>
+        <span class="form-error" id="type-error"></span>
+      </div>
+    </form>`;
+}
+
+function triggerForm(existing) {
+  const isNew = !existing;
+  return `
+    <header class="sess-head">
+      <div>
+        <h2>${escapeText(isNew ? 'New trigger' : existing.name)}</h2>
+        <p class="note">${escapeText(isNew
+          ? 'It is created switched off. A trigger that is live creates work on its own.'
+          : 'Saving a live trigger switches it off — an edit can change what it watches or what it creates.')}</p>
+      </div>
+    </header>
+    <form class="sess-form" id="trigger-form" novalidate>
+      ${field('g-name', 'name',
+        `<input id="g-name" name="name" ${isNew ? '' : 'disabled'}
+                placeholder="failed-deploys" autocomplete="off">`)}
+      ${field('g-purpose', 'purpose',
+        `<input id="g-purpose" name="purpose" autocomplete="off">`)}
+      ${field('g-kind', 'watches',
+        `<select id="g-kind" name="skind">${options(['http-json', 'rss', 'schedule'])}</select>`,
+        'A schedule fetches nothing — its interval is the whole condition.')}
+      <div id="src-url">
+        ${field('g-url', 'url',
+          `<input id="g-url" name="url" placeholder="http://127.0.0.1:9011/feed.json" autocomplete="off">`)}
+      </div>
+      <div id="src-every" hidden>
+        ${field('g-every', 'every (seconds)',
+          `<input id="g-every" name="every_seconds" type="number" min="1" placeholder="86400">`)}
+      </div>
+      ${field('g-pred', 'fires when',
+        `<textarea id="g-pred" name="predicate" rows="3"
+                   placeholder="level == error"></textarea>`,
+        'One clause per line, <code>field operator value</code>, all of them ANDed. Empty means anything new. Fields are <code>count_since_fire</code>, <code>age_since_last_seen</code>, or a dotted path into an item.')}
+      <div class="fld-row">
+        ${field('g-ekind', 'creates kind',
+          `<select id="g-ekind" name="ekind">${options(Object.keys(DEFAULT_FOR_KIND))}</select>`)}
+        ${field('g-etags', 'creates tags',
+          `<input id="g-etags" name="etags" placeholder="digest" autocomplete="off">`,
+          'This is the wire: a session claiming these picks the work up.')}
+      </div>
+      <div class="fld-row">
+        ${field('g-project', 'project',
+          `<input id="g-project" name="project" placeholder="demo" autocomplete="off">`)}
+        ${field('g-afk', 'who it is for',
+          `<label class="chk"><input id="g-afk" name="afk" type="checkbox">
+             an agent may run it alone</label>`,
+          'Unticked, the task waits for a person. Ticked is how this unit spends unattended.')}
+      </div>
+      <p class="form-wiring" id="trigger-wiring"></p>
+      <div class="form-actions">
+        <button type="submit" class="btn primary">${escapeText(isNew ? 'Create, switched off' : 'Save')}</button>
+        <button type="button" class="btn" data-cancel>Cancel</button>
+        <span class="form-error" id="trigger-error"></span>
+      </div>
+    </form>`;
+}
+
+/* Reading a form back. The predicate is a textarea rather than a row of
+   widgets: a clause is three short words and a line of text edits faster
+   than three inputs, which for a prototype is the whole argument. The
+   operator set is closed, so "everything after the operator" is the
+   value and a value with spaces survives. */
+function parsePredicate(text) {
+  const OPS = ['>=', '>', '==', '!=', 'contains', 'matches'];
+  return String(text ?? '').split('\n').map(l => l.trim()).filter(Boolean)
+    .map(line => {
+      for (const op of OPS) {
+        const at = line.indexOf(` ${op} `);
+        if (at > 0) {
+          const raw = line.slice(at + op.length + 2).trim();
+          const n = Number(raw);
+          return [line.slice(0, at).trim(), op,
+                  raw !== '' && Number.isFinite(n) ? n : raw];
+        }
+      }
+      throw new Error(`cannot read the clause "${line}" — it needs `
+        + `field, operator and value, separated by spaces`);
+    });
+}
+
+function tagList(text) {
+  return String(text ?? '').split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function fillTypeForm(t) {
+  const set = (id, v) => { $(id).value = v ?? ''; };
+  set('f-name', t?.name); set('f-purpose', t?.purpose);
+  set('f-grant', t?.grant ?? 'read'); set('f-model', t?.model);
+  set('f-kind', t?.claims?.kind); set('f-tags', (t?.claims?.tags ?? []).join(', '));
+  set('f-prompt', t?.prompt);
+
+  const explain = () => {
+    const g = GRANTS[$('f-grant').value] ?? {};
+    $('grant-explains').textContent = `${g.tools ?? '—'}`
+      + (g.peers ? ' · may reach other units' : ' · no way back into this unit')
+      + (g.repo ? ' · runs in the task’s repository' : '');
+  };
+  const wire = () => {
+    const kind = $('f-kind').value;
+    const el = $('type-wiring');
+    if (!kind) { el.textContent = 'Claims nothing, so no task will ever reach it.'; return; }
+    const tags = tagList($('f-tags').value);
+    const feeders = (SESS.triggers ?? []).filter(tr =>
+      tr.emits?.kind === kind && tags.every(x => (tr.emits.tags ?? []).includes(x)));
+    el.textContent = feeders.length
+      ? `Fed by ${feeders.map(f => f.name).join(', ')}.`
+      : 'No trigger creates work matching this yet — it will only run what a person queues.';
+  };
+  $('f-grant').onchange = explain;
+  for (const id of ['f-kind', 'f-tags']) $(id).oninput = wire;
+  $('f-kind').onchange = wire;
+  explain(); wire();
+}
+
+function fillTriggerForm(t) {
+  const set = (id, v) => { $(id).value = v ?? ''; };
+  set('g-name', t?.name); set('g-purpose', t?.purpose);
+  set('g-kind', t?.source?.kind ?? 'http-json');
+  set('g-url', t?.source?.url); set('g-every', t?.source?.every_seconds);
+  set('g-pred', (t?.predicate ?? []).map(c => c.join(' ')).join('\n'));
+  set('g-ekind', t?.emits?.kind ?? 'execution');
+  set('g-etags', (t?.emits?.tags ?? []).join(', '));
+  set('g-project', t?.emits?.project);
+  $('g-afk').checked = !!t?.emits?.afk;
+
+  const shape = () => {
+    const schedule = $('g-kind').value === 'schedule';
+    $('src-url').hidden = schedule;
+    $('src-every').hidden = !schedule;
+    // A schedule takes no predicate: there are no items and the
+    // aggregates never move, so pu refuses one rather than ignoring it.
+    $('g-pred').disabled = schedule;
+    $('g-pred').placeholder = schedule
+      ? 'a schedule takes no predicate — the interval is the condition'
+      : 'level == error';
+  };
+  const wire = () => {
+    $('trigger-wiring').innerHTML = wiringNote({
+      kind: $('g-ekind').value,
+      tags: tagList($('g-etags').value),
+      afk: $('g-afk').checked,
+    });
+  };
+  $('g-kind').onchange = () => { shape(); };
+  for (const id of ['g-ekind', 'g-etags']) $(id).oninput = wire;
+  $('g-ekind').onchange = wire;
+  $('g-afk').onchange = wire;
+  shape(); wire();
+}
+
+async function submitType(existing) {
+  const payload = {
+    name: existing ? existing.name : $('f-name').value.trim(),
+    purpose: $('f-purpose').value.trim(),
+    grant: $('f-grant').value,
+    prompt: $('f-prompt').value,
+  };
+  const kind = $('f-kind').value;
+  if (kind) payload.claims = { kind, tags: tagList($('f-tags').value) };
+  const model = $('f-model').value.trim();
+  if (model) payload.model = model;
+  // Carried through an edit, because a write is a whole record: omitting
+  // it would read as "the field was removed", which is a change, which
+  // would switch the session off for no reason the reader asked for.
+  if (existing?.enabled) payload.enabled = true;
+  await postJSON('session-types', payload);
+  STATE.sel = { kind: 'type', name: payload.name };
+}
+
+async function submitTrigger(existing) {
+  const skind = $('g-kind').value;
+  const source = { kind: skind };
+  if (skind === 'schedule') source.every_seconds = Number($('g-every').value);
+  else source.url = $('g-url').value.trim();
+
+  const payload = {
+    name: existing ? existing.name : $('g-name').value.trim(),
+    purpose: $('g-purpose').value.trim(),
+    source,
+    emits: {
+      kind: $('g-ekind').value,
+      tags: tagList($('g-etags').value),
+      afk: $('g-afk').checked,
+    },
+  };
+  const project = $('g-project').value.trim();
+  if (project) payload.emits.project = project;
+  if (skind !== 'schedule') {
+    const predicate = parsePredicate($('g-pred').value);
+    if (predicate.length) payload.predicate = predicate;
+  }
+  if (existing?.enabled) payload.enabled = true;
+  await postJSON('triggers', payload);
+  STATE.sel = { kind: 'trigger', name: payload.name };
+}
+
+/* Activation is its own write touching only `enabled`, which is the one
+   shape pu honours without switching the thing off: that is the
+   activation path, and sending the whole record would read as an edit. */
+async function setEnabled(kind, item, on) {
+  const path = kind === 'trigger' ? 'triggers' : 'session-types';
+  await postJSON(path, { ...stripped(item), enabled: on });
+}
+
+function stripped(item) {
+  const { origin, ...rest } = item;   // pu sets origin; sending it is refused
+  return rest;
+}
+
 function renderDetail() {
   const sel = STATE.sel;
   const list = sel?.kind === 'trigger' ? SESS.triggers : SESS.types;
   const item = (list ?? []).find(x => x.name === sel?.name);
-  $('sess-detail').innerHTML = item
-    ? (sel.kind === 'trigger' ? triggerDetail(item) : typeDetail(item))
-    : `<p class="empty-note">Nothing selected. Pick a session type or a trigger
-       on the left.</p>`;
+  const pane = $('sess-detail');
+
+  if (sel?.mode === 'new' || sel?.mode === 'edit') {
+    const editing = sel.mode === 'edit' ? item : null;
+    pane.innerHTML = sel.kind === 'trigger'
+      ? triggerForm(editing) : typeForm(editing);
+    if (sel.kind === 'trigger') fillTriggerForm(editing);
+    else fillTypeForm(editing);
+    wireForm(sel, editing);
+  } else {
+    pane.innerHTML = item
+      ? (sel.kind === 'trigger' ? triggerDetail(item) : typeDetail(item))
+      : `<p class="empty-note">Nothing selected. Pick a session or a trigger
+         on the left.</p>`;
+    if (item) wireDetailActions(sel, item);
+  }
+
   for (const b of document.querySelectorAll('.sess-row'))
     b.classList.toggle('on',
-      b.dataset.kind === sel?.kind && b.dataset.name === sel?.name);
+      b.dataset.kind === sel?.kind && b.dataset.name === sel?.name
+      && sel?.mode !== 'new');
+}
+
+function wireForm(sel, existing) {
+  const form = $(sel.kind === 'trigger' ? 'trigger-form' : 'type-form');
+  const err = $(sel.kind === 'trigger' ? 'trigger-error' : 'type-error');
+  form.querySelector('[data-cancel]').onclick = () => {
+    STATE.sel = existing
+      ? { kind: sel.kind, name: existing.name }
+      : (SESS.types[0] ? { kind: 'type', name: SESS.types[0].name } : null);
+    renderDetail();
+  };
+  form.onsubmit = async e => {
+    e.preventDefault();
+    err.textContent = '';
+    const button = form.querySelector('[type=submit]');
+    button.disabled = true;
+    try {
+      if (sel.kind === 'trigger') await submitTrigger(existing);
+      else await submitType(existing);
+      await refreshNow();
+    } catch (ex) {
+      // pu's own refusal, shown as it came. Its messages name the rule
+      // that refused -- "a schedule trigger takes no predicate" -- and
+      // rewording them here would lose exactly the useful half.
+      err.textContent = readError(ex);
+      button.disabled = false;
+    }
+  };
+}
+
+function readError(ex) {
+  const raw = String(ex?.message ?? ex);
+  try { return JSON.parse(raw).error ?? raw; } catch { return raw; }
+}
+
+function wireDetailActions(sel, item) {
+  const toggle = $('act-toggle'), edit = $('act-edit');
+  if (!toggle) return;
+  toggle.onclick = async () => {
+    toggle.disabled = true;
+    try { await setEnabled(sel.kind, item, !item.enabled); await refreshNow(); }
+    catch (ex) { $('act-error').textContent = readError(ex); toggle.disabled = false; }
+  };
+  edit.onclick = () => {
+    STATE.sel = { kind: sel.kind, name: item.name, mode: 'edit' };
+    renderDetail();
+  };
+}
+
+/* A write has to be visible immediately. Waiting up to ten seconds for
+   the poll would make every button feel broken, and re-rendering from
+   the response alone would show a record the store has not confirmed. */
+async function refreshNow() {
+  const d = await loadLive();
+  STATE.live = true;
+  apply(d);
 }
 
 function renderSessions(d) {
@@ -1534,6 +2057,12 @@ function renderSessions(d) {
 
   // Delegated, so rebuilding the list never leaves a dead handler behind.
   $('sess-list').onclick = e => {
+    const add = e.target.closest('[data-new]');
+    if (add) {
+      STATE.sel = { kind: add.dataset.new, name: null, mode: 'new' };
+      renderDetail();
+      return;
+    }
     const row = e.target.closest('.sess-row');
     if (!row) return;
     STATE.sel = { kind: row.dataset.kind, name: row.dataset.name };

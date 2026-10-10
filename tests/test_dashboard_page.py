@@ -88,13 +88,41 @@ def test_the_paths_it_fetches_are_ones_this_unit_serves(html):
 # -- read-only ------------------------------------------------------------
 
 
-def test_the_page_never_writes(html):
-    """The node's dashboard proxy forwards GET and refuses
-    everything else with 405, so a write from inside the frame
-    cannot arrive. The ask panel is deliberately layout-only
-    until there is a submit path that goes through the bridge's
-    audited write door rather than around it."""
-    assert not re.search(r"method:\s*['\"]POST", html, re.I)
+def test_the_page_writes_only_where_a_write_can_land(html):
+    """The node's dashboard proxy forwards GET and refuses everything
+    else with 405, so a write from inside the frame cannot arrive. It
+    can when the page is served straight from pu, which is where the
+    session-type and trigger doors already answer.
+
+    This test used to say "never writes", which was the right rule for
+    a read-only page and the wrong one for this: a button that silently
+    fails in the frame is worse than no button, and so is no button at
+    all on the unit where it works. The rule that actually holds is
+    about *where*, so that is what is checked -- one helper does every
+    write, and the controls that reach it are gated on not being
+    framed."""
+    # Exactly one place issues a write, so there is one thing to audit.
+    assert len(re.findall(r"method:\s*['\"]POST", html, re.I)) == 1
+    assert "async function postJSON(" in html
+
+    # And the controls are offered only outside the frame.
+    assert "window.top === window" in html
+    for control in ("data-new=", "id=\"act-toggle\"", "id=\"act-edit\""):
+        for line in html.splitlines():
+            if control in line:
+                break
+        else:  # pragma: no cover - the loop above always finds it
+            raise AssertionError(f"{control} vanished from the page")
+    # Every one of them renders inside a DIRECT guard.
+    for guard in ("${DIRECT ?", "DIRECT\n", "const add = kind => DIRECT"):
+        assert guard in html
+
+
+def test_the_ask_panel_still_submits_nothing(html):
+    """Separate from the write door above, and still true: wiring it
+    needs a path through the bridge's audited door rather than around
+    it, which is a different ticket from authoring a session type."""
+    assert "ask()" in html
 
 
 # -- degradation ----------------------------------------------------------
