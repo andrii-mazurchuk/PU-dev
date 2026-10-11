@@ -352,6 +352,34 @@ TOOLS = [
         },
     },
     {
+        "name": "rename_session_type",
+        "description": "Change a session type's name. Nothing routes by name -- a trigger reaches a session through the kind and tags it emits -- so a rename cannot unwire anything. It costs history: runs are recorded against the name, so this type's past runs stay under the old one. The old name is retired, not deleted, and stops appearing in listings. A rename does not switch the type off, because a name changes nothing about what it does.",
+        "method": "POST",
+        "path": "/session-types/{name}/rename",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "the name it has now"},
+                "to": {"type": "string", "description": "the name it should have; refused if something already holds it"},
+            },
+            "required": ["name", "to"],
+        },
+    },
+    {
+        "name": "rename_trigger",
+        "description": "Change a trigger's name, carrying its cursor across so it does not re-report everything its source is still serving. Nothing routes by name, so a rename cannot unwire anything. The old name is retired rather than deleted.",
+        "method": "POST",
+        "path": "/triggers/{name}/rename",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "the name it has now"},
+                "to": {"type": "string", "description": "the name it should have"},
+            },
+            "required": ["name", "to"],
+        },
+    },
+    {
         "name": "dry_run_trigger",
         "description": "Evaluate a draft trigger now and report what it would do, writing nothing: no record, no task, no cursor advance. Returns whether the fetch succeeded, how many items it returned, how many are new, which ones match the predicate, whether it would fire, and the exact task it would create. The only way to find out whether a predicate holds against what a source is actually serving, short of activating the trigger and waiting. Takes the same body as write_trigger; `enabled` is ignored.",
         "method": "POST",
@@ -760,6 +788,17 @@ def make_handler(
                         gate_reason=gate.get("reason", ""),
                     )
                     return self._json(202, {"id": ask_id})
+
+                if (len(parts) == 3 and parts[2] == "rename"
+                        and parts[0] in ("triggers", "session-types")):
+                    target = (trigger_store if parts[0] == "triggers"
+                              else type_store)
+                    if target is None:
+                        return self._json(503, {"error": "no store wired"})
+                    rename = (service.rename_trigger if parts[0] == "triggers"
+                              else service.rename_session_type)
+                    return self._json(200, rename(
+                        target, parts[1], payload.get("to") or ""))
 
                 if parts == ["triggers", "dry-run"]:
                     # Before the bare `triggers` branch is irrelevant --

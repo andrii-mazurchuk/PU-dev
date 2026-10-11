@@ -592,3 +592,227 @@ def test_a_dry_run_uses_the_saved_cursor_without_moving_it(
 
     assert result["fresh"] == 0 and result["fired"] is False
     assert trigger_store.cursors()["posts"]["seen"] == ["a"]
+
+
+# -- the calendar ---------------------------------------------------------
+#
+# An interval cannot say "every morning at eight", and it drifts against
+# the clock the moment a tick is late. So a schedule may carry a cron
+# expression instead. The tests that matter are the two the interval gets
+# wrong: a named minute that has already passed, and a schedule written
+# after today's slot.
+
+
+def cron(expression, tz="Europe/Warsaw", **overrides):
+    record = a_trigger(source={"kind": "schedule", "cron": expression,
+                               "tz": tz})
+    record.update(overrides)
+    return record
+
+
+def utc(year, month, day, hour, minute=0):
+    return lambda: datetime(year, month, day, hour, minute,
+                            tzinfo=timezone.utc)
+
+
+def test_a_calendar_schedule_fires_on_the_minute_it_names():
+    # 06:00Z is 08:00 in Warsaw.
+    out = triggers.evaluate(cron("0 8 * * *"), EMPTY, now=utc(2026, 10, 12, 6))
+    assert out.fired is True and out.advance is True
+
+
+def test_a_calendar_schedule_written_after_its_slot_waits_for_the_next():
+    """The one thing an interval gets backwards. `every 24h` fires
+    immediately because the person is watching for it; `every day at
+    08:00` written at ten in the morning must not fire at ten."""
+    assert triggers.evaluate(
+        cron("0 8 * * *"), EMPTY, now=utc(2026, 10, 12, 8)).fired is False
+
+
+def test_a_missed_slot_still_fires_once_late():
+    """pu is not running when the host is asleep. A schedule matched
+    against the current minute would drop every slot it was down for;
+    walking forward from the last fire catches it, once."""
+    out = triggers.evaluate(
+        cron("0 8 * * *"), dict(EMPTY, fired_at="2026-10-11T06:00:00+00:00"),
+        now=utc(2026, 10, 12, 10))
+    assert out.fired is True
+    assert "late" in out.reason
+
+
+def test_a_calendar_schedule_does_not_fire_twice_for_one_slot():
+    fired_at = "2026-10-12T06:00:00+00:00"
+    assert triggers.evaluate(
+        cron("0 8 * * *"), dict(EMPTY, fired_at=fired_at),
+        now=utc(2026, 10, 12, 6, 30)).fired is False
+
+
+def test_a_weekday_schedule_only_fires_on_that_weekday():
+    # 2026-10-12 is a Monday, 2026-10-13 a Tuesday. 07:00Z is 09:00 Warsaw.
+    monday = triggers.evaluate(cron("0 9 * * mon"), EMPTY,
+                               now=utc(2026, 10, 12, 7))
+    tuesday = triggers.evaluate(cron("0 9 * * mon"), EMPTY,
+                                now=utc(2026, 10, 13, 7))
+    assert monday.fired is True and tuesday.fired is False
+
+
+def test_the_timezone_is_the_one_written_not_the_hosts():
+    """A wall-clock schedule without a zone moves twice a year. 06:00Z
+    is 08:00 in Warsaw and 07:00 in London."""
+    assert triggers.evaluate(cron("0 8 * * *", tz="Europe/Warsaw"), EMPTY,
+                             now=utc(2026, 10, 12, 6)).fired is True
+    assert triggers.evaluate(cron("0 8 * * *", tz="Europe/London"), EMPTY,
+                             now=utc(2026, 10, 12, 6)).fired is False
+
+
+def test_day_of_month_and_day_of_week_are_ored():
+    """Cron's own rule, and the reason `0 9 1 * mon` means the first and
+    every Monday rather than a Monday that is the first."""
+    fields = triggers.parse_cron("0 9 1 * mon")
+    first_a_thursday = datetime(2026, 10, 1, 9, 0)
+    a_monday = datetime(2026, 10, 12, 9, 0)
+    a_plain_tuesday = datetime(2026, 10, 13, 9, 0)
+    assert triggers.cron_matches(fields, first_a_thursday) is True
+    assert triggers.cron_matches(fields, a_monday) is True
+    assert triggers.cron_matches(fields, a_plain_tuesday) is False
+
+
+@pytest.mark.parametrize("expression", [
+    "0 8 * *", "60 8 * * *", "0 25 * * *", "0 8 * * funday",
+    "*/0 8 * * *", "9-5 8 * * *",
+])
+def test_an_unparseable_cron_is_refused_rather_than_never_firing(expression):
+    with pytest.raises(triggers.TriggerError):
+        triggers.parse_cron(expression)
+
+
+def test_a_schedule_is_an_interval_or_a_calendar_but_not_both(tmp_path):
+    store = triggers.TriggerStore(tmp_path)
+    with pytest.raises(triggers.TriggerError):
+        store.append(a_trigger(source={"kind": "schedule", "cron": "0 8 * * *",
+                                       "every_seconds": 3600}))
+
+
+def test_an_unknown_timezone_is_refused_at_the_door(tmp_path):
+    store = triggers.TriggerStore(tmp_path)
+    with pytest.raises(triggers.TriggerError):
+        store.append(cron("0 8 * * *", tz="Mars/Olympus"))
+
+
+# -- the title the task gets ----------------------------------------------
+
+
+def test_a_title_takes_fields_from_the_item_that_matched():
+    assert triggers.fill_title(
+        "deploy failed: {title}", {"title": "migration 0042"}
+    ) == "deploy failed: migration 0042"
+
+
+def test_a_path_that_is_not_there_stays_visible():
+    """An empty string would turn a typo into a title that looks
+    deliberate, in the one field a person reads in a list of thirty."""
+    assert triggers.fill_title("x {titel}", {"title": "y"}) == "x {titel}"
+
+
+def test_a_title_is_collapsed_and_clipped():
+    long = triggers.fill_title("{summary}", {"summary": "a\n  b" + "c" * 300})
+    assert "\n" not in long and len(long) <= 140
+    assert long.startswith("a bc")
+
+
+def test_a_fired_trigger_titles_its_task_from_the_payload(
+        store, body_store, tmp_path):
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting(
+        emits={"kind": "execution", "tags": [], "afk": True,
+               "title": "fix: {title}"}))
+
+    emitted = pipeline.emit_due_work(
+        trigger_store, store, body_store, now=at(),
+        fetch=json_source([{"id": "a", "title": "the nightly build"}]))
+
+    assert store.get(emitted[0]["task_uuid"]).description \
+        == "fix: the nightly build"
+
+
+# -- renaming -------------------------------------------------------------
+
+
+def test_renaming_a_trigger_keeps_its_cursor(tmp_path):
+    """The one thing that must move with it. An empty `seen` list would
+    re-report every item the source is still serving, which for a watch
+    emitting agent-runnable work is a pile of paid sessions for things
+    already dealt with."""
+    from pu import service
+
+    store = triggers.TriggerStore(tmp_path)
+    store.append(emitting(enabled=True))
+    store.save_cursor("posts", dict(EMPTY, seen=["a", "b"], pending=2))
+
+    written = service.rename_trigger(store, "posts", "deploy-watch")
+
+    assert written["name"] == "deploy-watch"
+    assert store.cursor("deploy-watch")["seen"] == ["a", "b"]
+    # Still live: a name changes nothing about what it does, so the edit
+    # rule has nothing to protect against here.
+    assert written["enabled"] is True
+
+
+def test_a_renamed_trigger_leaves_the_old_name_retired_not_deleted(tmp_path):
+    from pu import service
+
+    store = triggers.TriggerStore(tmp_path)
+    store.append(emitting())
+    service.rename_trigger(store, "posts", "deploy-watch")
+
+    assert store.get("posts")["retired"] is True
+    assert store.get("posts")["enabled"] is False
+    # And gone from what anyone reads.
+    listed = [t["name"] for t in service.list_triggers(store)["triggers"]]
+    assert listed == ["deploy-watch"]
+
+
+def test_a_retired_trigger_is_never_evaluated(tmp_path):
+    from pu import service
+
+    store = triggers.TriggerStore(tmp_path)
+    store.append(emitting(enabled=True))
+    service.rename_trigger(store, "posts", "deploy-watch")
+
+    assert [t["name"] for t in store.enabled()] == ["deploy-watch"]
+
+
+def test_a_rename_may_not_write_over_an_existing_name(tmp_path):
+    from pu import service
+
+    store = triggers.TriggerStore(tmp_path)
+    store.append(emitting())
+    store.append(a_trigger(name="other"))
+
+    with pytest.raises(service.ServiceError):
+        service.rename_trigger(store, "posts", "other")
+    with pytest.raises(service.ServiceError):
+        service.rename_trigger(store, "nobody", "whatever")
+
+
+def test_a_retired_name_can_be_taken_again(tmp_path):
+    """Otherwise every name ever used is spent forever -- including the
+    one you renamed away from and want back thirty seconds later. The
+    cursor goes with the rename, so the name does not come back carrying
+    a stale `seen` list."""
+    from pu import service
+
+    store = triggers.TriggerStore(tmp_path)
+    store.append(emitting(enabled=True))
+    store.save_cursor("posts", dict(EMPTY, seen=["a"]))
+
+    service.rename_trigger(store, "posts", "watch")
+    back = service.rename_trigger(store, "watch", "posts")
+
+    assert back["name"] == "posts" and back["enabled"] is True
+    assert store.get("posts").get("retired") is not True
+    assert [t["name"] for t in service.list_triggers(store)["triggers"]] \
+        == ["posts"]
+    assert store.cursor("posts")["seen"] == ["a"]

@@ -564,6 +564,9 @@
   .bar span { font: 400 9px var(--mono); color: var(--dim);
               text-align: center; padding-top: 3px; }
 
+  .days { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .days .chk { margin-top: 2px; }
+
   .sess-table tr.pick { cursor: pointer; }
   .sess-table tr.pick:hover { background: var(--panel-alt); }
 
@@ -1373,8 +1376,11 @@ function claimCell(claims) {
 
 function sourceCell(source) {
   const kind = source?.kind ?? '';
+  if (kind === 'schedule' && source.cron)
+    return `<code>calendar</code> ${escapeText(cronPhrase(source.cron))}`
+         + ` <span class="muted">${escapeText(source.tz ?? 'UTC')}</span>`;
   if (kind === 'schedule')
-    return `<code>schedule</code> every ${num(source.every_seconds)}s`;
+    return `<code>schedule</code> ${escapeText(everyPhrase(source.every_seconds))}`;
   return `<code>${escapeText(kind)}</code> `
        + `<span class="muted">${escapeText(clip(source?.url ?? '', 46))}</span>`;
 }
@@ -1827,9 +1833,13 @@ function typeForm(existing) {
     </header>
     <form class="sess-form" id="type-form" novalidate>
       ${field('f-name', 'name',
-        `<input id="f-name" name="name" ${isNew ? '' : 'disabled'}
-                placeholder="deploy-digest" autocomplete="off">`,
-        'The identity, and immutable. Lowercase; a dot namespaces a peer.')}
+        `<input id="f-name" name="name" placeholder="deploy-digest" autocomplete="off">`,
+        isNew
+          ? 'Lowercase; a dot namespaces a peer-declared type.'
+          : 'Changing it renames the session. Nothing routes by name, so '
+            + 'this unwires nothing — but its recorded runs stay under the '
+            + 'old name, because the run log is written as it happens and '
+            + 'is not rewritten.')}
       ${field('f-purpose', 'purpose',
         `<input id="f-purpose" name="purpose" autocomplete="off">`,
         'One line, read by whoever decides whether to activate it.')}
@@ -1878,20 +1888,45 @@ function triggerForm(existing) {
     </header>
     <form class="sess-form" id="trigger-form" novalidate>
       ${field('g-name', 'name',
-        `<input id="g-name" name="name" ${isNew ? '' : 'disabled'}
-                placeholder="failed-deploys" autocomplete="off">`)}
+        `<input id="g-name" name="name" placeholder="failed-deploys" autocomplete="off">`,
+        isNew ? '' : 'Changing it renames the trigger. Nothing routes by '
+          + 'name — a trigger reaches a session through the kind and tags '
+          + 'it creates — so this unwires nothing. Its cursor comes with it.')}
       ${field('g-purpose', 'purpose',
         `<input id="g-purpose" name="purpose" autocomplete="off">`)}
       ${field('g-kind', 'watches',
         `<select id="g-kind" name="skind">${options(['http-json', 'rss', 'schedule'])}</select>`,
-        'A schedule fetches nothing — its interval is the whole condition.')}
+        'A schedule fetches nothing — the clock is the whole condition.')}
       <div id="src-url">
         ${field('g-url', 'url',
           `<input id="g-url" name="url" placeholder="http://127.0.0.1:9011/feed.json" autocomplete="off">`)}
       </div>
       <div id="src-every" hidden>
-        ${field('g-every', 'every (seconds)',
-          `<input id="g-every" name="every_seconds" type="number" min="1" placeholder="86400">`)}
+        ${field('g-smode', 'how it is timed',
+          `<select id="g-smode" name="smode">
+             <option value="every">every so often — an interval</option>
+             <option value="at">at a time of day — a calendar</option>
+           </select>`,
+          'An interval counts from the last firing. A calendar names a wall-clock time, so it holds across a restart and across the clocks changing.')}
+        <div id="src-interval">
+          ${field('g-every', 'every',
+            `<input id="g-every" name="every_seconds" placeholder="6h" autocomplete="off">`,
+            'A number with a unit — <code>45s</code>, <code>30m</code>, <code>6h</code>, <code>2d</code>, <code>1w</code>. A bare number is seconds. <span id="g-every-echo" class="echo"></span>')}
+        </div>
+        <div id="src-cron" hidden>
+          <div class="fld-row">
+            ${field('g-time', 'at',
+              `<input id="g-time" name="time" type="time" value="08:00">`)}
+            ${field('g-tz', 'in timezone',
+              `<input id="g-tz" name="tz" placeholder="Europe/Warsaw" autocomplete="off">`,
+              'A wall-clock time without one moves twice a year.')}
+          </div>
+          ${field('g-days', 'on',
+            `<div class="days" id="g-days">${WEEKDAYS.map(([v, label]) =>
+              `<label class="chk"><input type="checkbox" value="${escapeText(v)}">
+                 ${escapeText(label)}</label>`).join('')}</div>`,
+            'None ticked means every day. <span id="g-cron-echo" class="echo"></span>')}
+        </div>
       </div>
       ${field('g-pred', 'fires when',
         `<textarea id="g-pred" name="predicate" rows="3"
@@ -1903,7 +1938,7 @@ function triggerForm(existing) {
           and these are that task's fields.</p>
         ${field('g-etitle', 'title',
           `<input id="g-etitle" name="etitle" autocomplete="off">`,
-          'What it is called in the queue. Empty derives one from the trigger name.')}
+          'What it is called in the queue. Empty derives one from the trigger name. <code>{field}</code> is filled from the item that matched — <code>deploy failed: {title}</code> — using a dotted path, and a path that is not there is left visible rather than blanked.')}
         <div class="fld-row">
           ${field('g-ekind', 'kind',
             `<select id="g-ekind" name="ekind">${kindOptions()}</select>`,
@@ -1960,6 +1995,61 @@ function tagList(text) {
   return String(text ?? '').split(',').map(s => s.trim()).filter(Boolean);
 }
 
+/* `6h`, `30m`, `2d`. The record stores seconds and always will -- one
+   number, no parsing on the way out -- but nobody should have to work
+   out that six hours is 21600, and someone who does will one day type a
+   zero too many and buy themselves a session every six minutes. */
+const UNITS = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+
+function seconds(text) {
+  const m = /^(\d+(?:\.\d+)?)\s*([smhdw])?$/i.exec(String(text ?? '').trim());
+  if (!m) return null;
+  return Math.round(parseFloat(m[1]) * UNITS[(m[2] || 's').toLowerCase()]);
+}
+
+function everyPhrase(n) {
+  if (!n || n <= 0) return '';
+  for (const [unit, size] of [['week', 604800], ['day', 86400],
+                              ['hour', 3600], ['minute', 60]]) {
+    if (n % size === 0) return `every ${plural(n / size, unit, unit + 's')}`;
+  }
+  return `every ${plural(n, 'second', 'seconds')}`;
+}
+
+/* The shortest shorthand that round-trips, so an interval written as
+   `6h` comes back as `6h` and not as `21600`. */
+function shorthand(n) {
+  if (!n || n <= 0) return '';
+  for (const unit of ['w', 'd', 'h', 'm']) {
+    if (n % UNITS[unit] === 0) return `${n / UNITS[unit]}${unit}`;
+  }
+  return `${n}s`;
+}
+
+const WEEKDAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'],
+                  ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'],
+                  ['sun', 'Sun']];
+
+/* A time of day and some weekdays, as the five-field expression pu
+   parses. The builder exists because nobody should have to know cron to
+   say "every morning at eight" -- but the expression it writes is shown,
+   because what gets stored is what gets run. */
+function cronFrom(time, days) {
+  const [h, m] = String(time || '08:00').split(':');
+  const dow = days.length === WEEKDAYS.length || !days.length
+    ? '*' : days.join(',');
+  return `${Number(m) || 0} ${Number(h) || 0} * * ${dow}`;
+}
+
+function cronPhrase(expression) {
+  const [m, h, , , dow] = String(expression ?? '').split(' ');
+  const at = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  if (!dow || dow === '*') return `every day at ${at}`;
+  const names = dow.split(',')
+    .map(d => (WEEKDAYS.find(w => w[0] === d) ?? [d, d])[1]);
+  return `${names.join(', ')} at ${at}`;
+}
+
 function fillTypeForm(t) {
   const set = (id, v) => { $(id).value = v ?? ''; };
   set('f-name', t?.name); set('f-purpose', t?.purpose);
@@ -2011,7 +2101,20 @@ function fillTriggerForm(t) {
   const set = (id, v) => { $(id).value = v ?? ''; };
   set('g-name', t?.name); set('g-purpose', t?.purpose);
   set('g-kind', t?.source?.kind ?? 'http-json');
-  set('g-url', t?.source?.url); set('g-every', t?.source?.every_seconds);
+  set('g-url', t?.source?.url);
+  set('g-every', shorthand(t?.source?.every_seconds));
+
+  const expression = t?.source?.cron;
+  set('g-smode', expression ? 'at' : 'every');
+  set('g-tz', t?.source?.tz
+      ?? (expression ? '' : Intl.DateTimeFormat().resolvedOptions().timeZone));
+  if (expression) {
+    const [m, h, , , dow] = expression.split(' ');
+    set('g-time', `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    const chosen = new Set(dow === '*' ? [] : dow.split(','));
+    for (const box of $('g-days').querySelectorAll('input'))
+      box.checked = chosen.has(box.value);
+  }
   set('g-pred', (t?.predicate ?? []).map(c => c.join(' ')).join('\n'));
   set('g-ekind', t?.emits?.kind ?? 'execution');
   set('g-etitle', t?.emits?.title);
@@ -2019,15 +2122,28 @@ function fillTriggerForm(t) {
   set('g-project', t?.emits?.project);
   $('g-afk').checked = !!t?.emits?.afk;
 
+  const pickedDays = () => [...$('g-days').querySelectorAll('input')]
+    .filter(b => b.checked).map(b => b.value);
+
   const shape = () => {
     const schedule = $('g-kind').value === 'schedule';
+    const calendar = schedule && $('g-smode').value === 'at';
     $('src-url').hidden = schedule;
     $('src-every').hidden = !schedule;
+    $('src-interval').hidden = calendar;
+    $('src-cron').hidden = !calendar;
+
+    const parsed = seconds($('g-every').value);
+    $('g-every-echo').textContent = $('g-every').value.trim() === '' ? ''
+      : parsed === null ? 'not a duration'
+      : `${everyPhrase(parsed)} · ${num(parsed)}s`;
+    const expression = cronFrom($('g-time').value, pickedDays());
+    $('g-cron-echo').textContent = `${cronPhrase(expression)} · ${expression}`;
     // A schedule takes no predicate: there are no items and the
     // aggregates never move, so pu refuses one rather than ignoring it.
     $('g-pred').disabled = schedule;
     $('g-pred').placeholder = schedule
-      ? 'a schedule takes no predicate — the interval is the condition'
+      ? 'a schedule takes no predicate — the clock is the condition'
       : 'level == error';
   };
   const wire = () => {
@@ -2041,16 +2157,20 @@ function fillTriggerForm(t) {
       afk: $('g-afk').checked,
     });
   };
-  $('g-kind').onchange = () => { shape(); };
+  $('g-kind').onchange = shape;
+  $('g-smode').onchange = shape;
+  $('g-every').oninput = shape;
+  $('g-time').oninput = shape;
+  for (const box of $('g-days').querySelectorAll('input')) box.onchange = shape;
   for (const id of ['g-ekind', 'g-etags']) $(id).oninput = wire;
   $('g-ekind').onchange = wire;
   $('g-afk').onchange = wire;
   shape(); wire();
 }
 
-async function submitType(existing) {
+function typeDraft() {
   const payload = {
-    name: existing ? existing.name : $('f-name').value.trim(),
+    name: $('f-name').value.trim(),
     purpose: $('f-purpose').value.trim(),
     grant: $('f-grant').value,
     prompt: $('f-prompt').value,
@@ -2060,6 +2180,16 @@ async function submitType(existing) {
   const picked = $('f-model').value;
   const model = (picked === '__other' ? $('f-model-other').value : picked).trim();
   if (model) payload.model = model;
+  return payload;
+}
+
+async function submitType(original) {
+  const existing = await renameFirst('type', original);
+  const payload = typeDraft();
+  if (existing && untouched(payload)) {
+    STATE.sel = { kind: 'type', name: payload.name };
+    return;
+  }
   // Carried through an edit, because a write is a whole record: omitting
   // it would read as "the field was removed", which is a change, which
   // would switch the session off for no reason the reader asked for.
@@ -2072,14 +2202,27 @@ async function submitType(existing) {
    dry run has to be sent the record Save would send, or the preview is a
    preview of something else -- which is the one failure that makes a test
    button worse than no test button. */
-function triggerDraft(existing) {
+function triggerDraft() {
   const skind = $('g-kind').value;
   const source = { kind: skind };
-  if (skind === 'schedule') source.every_seconds = Number($('g-every').value);
-  else source.url = $('g-url').value.trim();
+  if (skind !== 'schedule') {
+    source.url = $('g-url').value.trim();
+  } else if ($('g-smode').value === 'at') {
+    source.cron = cronFrom($('g-time').value,
+      [...$('g-days').querySelectorAll('input')]
+        .filter(b => b.checked).map(b => b.value));
+    const tz = $('g-tz').value.trim();
+    if (tz) source.tz = tz;
+  } else {
+    const every = seconds($('g-every').value);
+    if (every === null)
+      throw new Error(`"${$('g-every').value}" is not a duration — `
+        + 'try 45s, 30m, 6h, 2d or 1w');
+    source.every_seconds = every;
+  }
 
   const payload = {
-    name: existing ? existing.name : $('g-name').value.trim(),
+    name: $('g-name').value.trim(),
     purpose: $('g-purpose').value.trim(),
     source,
     emits: {
@@ -2099,9 +2242,50 @@ function triggerDraft(existing) {
   return payload;
 }
 
+/* What the form held the moment it opened, as the draft it would have
+   submitted. Captured so "did anything change" can be answered by
+   comparing like with like.
+
+   Comparing the draft to the *record* does not work and failed in
+   exactly the way worth remembering: an old trigger with no `afk` key
+   and a form that always writes `afk: false` differ as objects while
+   meaning the same thing, so renaming a live trigger and changing
+   nothing else read as an edit and switched it off. Both sides of this
+   comparison come out of the same function, so there is no shape to
+   disagree about. */
+let FORM_OPENED = null;
+
+function untouched(payload) {
+  if (FORM_OPENED === null) return false;
+  const bare = o => JSON.stringify({ ...o, name: '' });
+  return bare(payload) === bare(JSON.parse(FORM_OPENED));
+}
+
+/* A rename is its own door, and it goes first.
+
+   It has to: the write that follows is addressed by name, so sending it
+   under the new one before the rename would create a second record
+   rather than edit the existing one. Running it first means the save
+   that follows lands on the renamed record, and -- because the rename
+   carried every other field across unchanged -- that save usually
+   changes nothing and so does not trip the deactivate-on-edit rule. */
+async function renameFirst(kind, existing) {
+  const typed = $(kind === 'trigger' ? 'g-name' : 'f-name').value.trim();
+  if (!existing || !typed || typed === existing.name) return existing;
+  const path = kind === 'trigger' ? 'triggers' : 'session-types';
+  await postJSON(`${path}/${encodeURIComponent(existing.name)}/rename`,
+                 { to: typed });
+  return { ...existing, name: typed };
+}
+
 async function submitTrigger(existing) {
-  const payload = triggerDraft(existing);
-  if (existing?.enabled) payload.enabled = true;
+  const renamed = await renameFirst('trigger', existing);
+  const payload = triggerDraft();
+  if (renamed && untouched(payload)) {
+    STATE.sel = { kind: 'trigger', name: payload.name };
+    return;
+  }
+  if (renamed?.enabled) payload.enabled = true;
   await postJSON('triggers', payload);
   STATE.sel = { kind: 'trigger', name: payload.name };
 }
@@ -2424,6 +2608,12 @@ function renderDetail() {
       ? triggerForm(editing) : typeForm(editing);
     if (sel.kind === 'trigger') fillTriggerForm(editing);
     else fillTypeForm(editing);
+    // Read back through the same function the submit uses, so "nothing
+    // changed" is a comparison of two drafts and not of a draft with a
+    // record that spells the same thing differently.
+    FORM_OPENED = editing
+      ? JSON.stringify(sel.kind === 'trigger' ? triggerDraft() : typeDraft())
+      : null;
     wireForm(sel, editing);
   } else if (sel?.kind === 'overview') {
     pane.innerHTML = overviewDetail();
@@ -2471,7 +2661,7 @@ function wireForm(sel, existing) {
     out.innerHTML = '<p class="empty-note">Reading the source…</p>';
     try {
       out.innerHTML = testResult(
-        await postJSON('triggers/dry-run', triggerDraft(existing)));
+        await postJSON('triggers/dry-run', triggerDraft()));
       // The detail pane scrolls on its own, so the answer lands below the
       // fold of a container the reader is not looking at -- which reads
       // as a button that did nothing.

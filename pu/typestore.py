@@ -52,7 +52,8 @@ _NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # the role-filler convention. Required fields first, then the ones whose
 # absence is meaningful.
 REQUIRED = ("name", "purpose", "prompt", "grant", "origin")
-OPTIONAL = ("model", "mcp_servers", "plugins", "trigger", "enabled", "claims")
+OPTIONAL = ("model", "mcp_servers", "plugins", "trigger", "enabled", "claims",
+            "retired")
 
 ORIGINS = ("authored", "declared")
 

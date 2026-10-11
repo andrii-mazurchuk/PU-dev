@@ -303,8 +303,10 @@ def push_inbox(
 
 
 def list_triggers(trigger_store) -> dict[str, Any]:
-    """Every trigger's current record. Reading is open to every peer."""
-    return {"triggers": list(trigger_store.current().values())}
+    """Every trigger's current record, minus the retired half of a
+    rename. Reading is open to every peer."""
+    return {"triggers": [r for r in trigger_store.current().values()
+                         if not r.get("retired")]}
 
 
 def get_trigger(trigger_store, name: str) -> dict[str, Any] | None:
@@ -377,6 +379,74 @@ def write_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
         )
     return written
 
+def _renamed(store, old: str, new: str, kind: str) -> dict[str, Any]:
+    """Write the record under a new name and retire the old one.
+
+    **A name was immutable because the log is keyed by it, not because
+    anything downstream depends on it.** That is worth stating, because
+    the obvious fear is wrong: a trigger reaches a session through the
+    kind and tags it emits, never through either name, so renaming
+    either side cannot unwire anything. What it does cost is history --
+    runs are recorded against the session-type *name*, so a renamed
+    session's past runs stay under the old one. Stated rather than
+    hidden; the alternative is rewriting a log that is append-only
+    precisely so it cannot be rewritten.
+
+    Two appends and no deletion, for the same reason. The old name gets
+    a final line carrying `retired`, which is what keeps it out of the
+    listings while leaving the history readable.
+
+    **The rename does not deactivate.** The edit rule exists because an
+    edit can change what an approved thing *does*, and a name changes
+    nothing it does -- not its grant, not its prompt, not what it
+    watches or creates. Switching it off here would be ceremony.
+    """
+    record = store.get(old)
+    if record is None:
+        raise ServiceError(f"no {kind} named {old!r}")
+    if not new or not isinstance(new, str):
+        raise ServiceError("a rename needs a new name")
+    new = new.strip()
+    if new == old:
+        raise ServiceError("that is the name it already has")
+    # A retired name is free again. It is the old half of some earlier
+    # rename, and refusing it would mean every name ever used is spent
+    # forever -- including the one you just renamed away from and want
+    # back thirty seconds later.
+    held = store.get(new)
+    if held is not None and not held.get("retired"):
+        raise ServiceError(
+            f"there is already a {kind} named {new!r}; a rename may not "
+            f"write over one")
+
+    written = store.append(dict(record, name=new))
+    store.append({**{k: v for k, v in record.items() if k != "enabled"},
+                  "enabled": False, "retired": True})
+    return written
+
+
+def rename_session_type(type_store, name: str, to: str) -> dict[str, Any]:
+    """Rename a session type. Its runs stay under the old name."""
+    return _renamed(type_store, _require(name, "name"), to, "session type")
+
+
+def rename_trigger(trigger_store, name: str, to: str) -> dict[str, Any]:
+    """Rename a trigger, carrying its cursor across.
+
+    The cursor is the one thing that must move with it. Leaving it
+    behind would hand the renamed trigger an empty `seen` list, and it
+    would re-report every item its source is still serving -- which for
+    a watch that emits agent-runnable work is a pile of paid sessions
+    for things already dealt with.
+    """
+    old = _require(name, "name")
+    written = _renamed(trigger_store, old, to, "trigger")
+    cursor = trigger_store.cursors().get(old)
+    if cursor is not None:
+        trigger_store.save_cursor(written["name"], cursor)
+    return written
+
+
 def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
     """Evaluate a draft trigger now, and report what it would do.
 
@@ -437,7 +507,9 @@ def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
         if emits.get("afk"):
             tags.append(records.AFK_TAG)
         would_create = {
-            "title": emits.get("title") or f"{name}: {evaluation.reason}",
+            "title": triggers.fill_title(
+                emits.get("title") or f"{name}: {evaluation.reason}",
+                evaluation.items[0] if evaluation.items else None),
             "kind": emits["kind"],
             "tags": tags,
             "project": emits.get("project"),
@@ -505,8 +577,13 @@ def stats(
 
 
 def list_session_types(type_store) -> dict[str, Any]:
-    """Every type's current record. Reading is open to every peer."""
-    return {"session_types": list(type_store.current().values())}
+    """Every type's current record. Reading is open to every peer.
+
+    A retired name is left out. It is the old half of a rename, kept in
+    the log so the history stays readable and kept out of here so the
+    listing is what exists rather than what has ever existed."""
+    return {"session_types": [r for r in type_store.current().values()
+                              if not r.get("retired")]}
 
 
 def get_session_type(type_store, name: str) -> dict[str, Any] | None:

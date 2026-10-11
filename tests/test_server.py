@@ -617,3 +617,22 @@ def test_the_dry_run_route_previews_without_writing(base_url):
 
     _, listed = get(f"{base_url}/triggers")
     assert listed["triggers"] == []
+
+
+def test_the_rename_routes_answer_and_the_old_name_leaves_the_listing(base_url):
+    post(f"{base_url}/session-types", {
+        "name": "digest", "purpose": "p", "prompt": "x", "grant": "read"})
+    status, body = post(f"{base_url}/session-types/digest/rename",
+                        {"to": "deploy-digest"})
+    assert status == 200 and body["name"] == "deploy-digest"
+    _, listed = get(f"{base_url}/session-types")
+    assert [t["name"] for t in listed["session_types"]] == ["deploy-digest"]
+
+    post(f"{base_url}/triggers", {
+        "name": "posts",
+        "source": {"kind": "schedule", "every_seconds": 60},
+        "emits": {"kind": "execution"}})
+    status, body = post(f"{base_url}/triggers/posts/rename", {"to": "nightly"})
+    assert status == 200 and body["name"] == "nightly"
+    _, listed = get(f"{base_url}/triggers")
+    assert [t["name"] for t in listed["triggers"]] == ["nightly"]

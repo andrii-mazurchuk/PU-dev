@@ -190,3 +190,38 @@ def test_a_grant_with_no_tools_says_so_rather_than_leaving_it_blank(tmp_path):
     text = (tmp_path / "session_types" / "mute" / "CLAUDE.md").read_text(
         encoding="utf-8")
     assert "Tools granted: none." in text
+
+
+def test_renaming_a_session_type_retires_the_old_name(tmp_path):
+    """A name was immutable because the log is keyed by it, not because
+    anything routes by it: a trigger reaches a session through the kind
+    and tags it emits. What it costs is history, which stays under the
+    old name -- stated rather than hidden, since the log is append-only
+    precisely so it cannot be rewritten."""
+    from pu import service
+
+    store = typestore.TypeStore(tmp_path)
+    store.append({"name": "digest", "purpose": "p", "prompt": "do it",
+                  "grant": "read", "origin": "authored", "enabled": True})
+
+    written = service.rename_session_type(store, "digest", "deploy-digest")
+
+    assert written["name"] == "deploy-digest"
+    assert written["enabled"] is True
+    assert store.get("digest")["retired"] is True
+    listed = [t["name"] for t in
+              service.list_session_types(store)["session_types"]]
+    assert listed == ["deploy-digest"]
+    # The generated file follows the record, as every write does.
+    assert (tmp_path / "session_types" / "deploy-digest"
+            / "CLAUDE.md").read_text(encoding="utf-8").endswith("do it\n")
+
+
+def test_a_rename_is_still_refused_a_committed_name(tmp_path):
+    from pu import service
+
+    store = typestore.TypeStore(tmp_path)
+    store.append({"name": "digest", "purpose": "p", "prompt": "x",
+                  "grant": "read", "origin": "authored"})
+    with pytest.raises(typestore.TypeStoreError):
+        service.rename_session_type(store, "digest", "execution")

@@ -660,7 +660,9 @@ def emit_due_work(
             # marks the items seen and loses the work with nobody the
             # wiser.
             uuid = store.add(
-                emits.get("title") or f"{name}: {evaluation.reason}",
+                triggers.fill_title(
+                    emits.get("title") or f"{name}: {evaluation.reason}",
+                    evaluation.items[0] if evaluation.items else None),
                 tags=tags,
                 kind=emits["kind"],
                 project=emits.get("project"),

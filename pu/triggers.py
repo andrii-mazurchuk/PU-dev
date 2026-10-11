@@ -51,7 +51,8 @@ import re
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ElementTree
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Callable
 
@@ -78,7 +79,7 @@ OPERATORS = (">=", ">", "==", "!=", "contains", "matches")
 AGGREGATE_FIELDS = ("count_since_fire", "age_since_last_seen")
 
 REQUIRED = ("name", "source")
-OPTIONAL = ("purpose", "predicate", "emits", "enabled")
+OPTIONAL = ("purpose", "predicate", "emits", "enabled", "retired")
 
 # ponytail: the cursor remembers the last 200 item ids rather than a
 # position, so ordering assumptions cannot bite -- a feed that reorders or
@@ -136,12 +137,22 @@ def validated(record: dict[str, Any]) -> dict[str, Any]:
             f"(allowed: {SOURCE_KINDS})")
 
     if source["kind"] == "schedule":
-        try:
-            if float(source.get("every_seconds") or 0) <= 0:
-                raise ValueError
-        except (TypeError, ValueError):
+        if source.get("cron") and source.get("every_seconds"):
             raise TriggerError(
-                "a schedule needs every_seconds, a positive number") from None
+                "a schedule is either an interval or a calendar, not both: "
+                "drop every_seconds or drop cron")
+        if source.get("cron"):
+            parse_cron(source["cron"])
+            if source.get("tz"):
+                _zone(source["tz"])
+        else:
+            try:
+                if float(source.get("every_seconds") or 0) <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise TriggerError(
+                    "a schedule needs every_seconds, a positive number, "
+                    "or a cron expression") from None
         # Nothing is fetched, so there are no items and no cursor position
         # for a clause to be about: `count_since_fire` is always zero and
         # `age_since_last_seen` never moves. A predicate here would read as
@@ -176,6 +187,157 @@ def validated(record: dict[str, Any]) -> dict[str, Any]:
     return dict(record)
 
 
+# -- the calendar ---------------------------------------------------------
+#
+# "Every day at 08:00" and "every Monday" are not intervals. An interval
+# drifts against the clock the moment a tick is late, and no arithmetic
+# on seconds expresses "the first of the month". So a schedule may carry
+# a cron expression instead, in the gateway's own syntax -- `{cron, tz}`
+# -- which was already named as the upgrade path when the interval was
+# the only option.
+#
+# Five fields, `*`, lists, ranges and steps. No `@weekly`, no `L`, no
+# `#`: this is a filter over a minute, and the exotic syntax exists for
+# cases nobody here has.
+
+_CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 6))
+_CRON_NAMES = {
+    "sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+# A cron can be satisfiable on paper and never occur -- 31 February. Two
+# weeks of minutes is the scan budget; anything that has not come round
+# by then is treated as never.
+_CRON_HORIZON_MINUTES = 14 * 24 * 60
+
+
+def parse_cron(expression: str) -> tuple[frozenset[int], ...]:
+    """`minute hour day-of-month month day-of-week` into five sets.
+
+    Raised rather than degraded, like everything else here: a cron
+    nobody can parse would otherwise mean a trigger that silently never
+    fires, which looks exactly like a source that went quiet.
+    """
+    if not isinstance(expression, str):
+        raise TriggerError(f"not a cron expression: {expression!r}")
+    fields = expression.split()
+    if len(fields) != 5:
+        raise TriggerError(
+            f"a cron expression has five fields -- minute hour day-of-month "
+            f"month day-of-week -- and {expression!r} has {len(fields)}")
+
+    out = []
+    for field, (low, high) in zip(fields, _CRON_RANGES):
+        allowed: set[int] = set()
+        for part in field.split(","):
+            step = 1
+            if "/" in part:
+                part, _, raw_step = part.partition("/")
+                if not raw_step.isdigit() or int(raw_step) < 1:
+                    raise TriggerError(f"not a usable step in {field!r}")
+                step = int(raw_step)
+            if part in ("*", ""):
+                first, last = low, high
+            else:
+                bounds = part.split("-")
+                if len(bounds) > 2:
+                    raise TriggerError(f"not a usable range in {field!r}")
+                try:
+                    first = _cron_number(bounds[0])
+                    last = _cron_number(bounds[-1])
+                except KeyError:
+                    raise TriggerError(
+                        f"not a usable value in {field!r}") from None
+            if not (low <= first <= high and low <= last <= high) \
+                    or first > last:
+                raise TriggerError(
+                    f"{field!r} is outside {low}-{high}")
+            allowed.update(range(first, last + 1, step))
+        out.append(frozenset(allowed))
+    # Sunday is both 0 and 7 everywhere else; accepted on input above as
+    # 0 only, so `7` is refused rather than quietly meaning Monday.
+    return tuple(out)
+
+
+def _cron_number(token: str) -> int:
+    token = token.strip().lower()
+    if token in _CRON_NAMES:
+        return _CRON_NAMES[token]
+    if not token.lstrip("-").isdigit():
+        raise KeyError(token)
+    return int(token)
+
+
+def _zone(name: str):
+    """The timezone a cron is read in. A wall-clock schedule without one
+    is a schedule that moves twice a year."""
+    try:
+        return ZoneInfo(name)
+    except Exception as exc:                       # noqa: BLE001
+        raise TriggerError(f"not a known timezone {name!r}: {exc}") from None
+
+
+def cron_matches(fields: tuple[frozenset[int], ...], moment: datetime) -> bool:
+    """Whether this minute is one the expression names.
+
+    Day-of-month and day-of-week are ORed when both are restricted,
+    which is cron's own rule and the reason `0 9 1 * mon` means "the
+    first, and every Monday" rather than "a Monday the first".
+    """
+    minute, hour, dom, month, dow = fields
+    day_ok = (moment.day in dom) if dom != frozenset(range(1, 32)) else True
+    week_ok = ((moment.weekday() + 1) % 7) in dow \
+        if dow != frozenset(range(0, 7)) else True
+    both_restricted = (dom != frozenset(range(1, 32))
+                       and dow != frozenset(range(0, 7)))
+    when = (day_ok or week_ok) if both_restricted else (day_ok and week_ok)
+    return (moment.minute in minute and moment.hour in hour
+            and moment.month in month and when)
+
+
+def cron_due(source: dict[str, Any], cursor: dict[str, Any],
+             moment: datetime) -> tuple[bool, str]:
+    """Whether a named minute has passed since this last fired.
+
+    **Scanned minute by minute rather than matched against now.** A tick
+    is every thirty seconds when everything is well and not at all when
+    the host was asleep, so "does this minute match" would silently drop
+    the 08:00 run of any morning pu happened to be down for. Walking
+    forward from the last fire catches it, once, late -- which for a
+    daily digest is the right answer and for nothing here is the wrong
+    one.
+
+    With no previous fire there is no window, and a schedule written at
+    ten in the morning must not immediately fire its eight o'clock. So
+    the baseline is a minute ago: it fires now only if a named minute
+    has just gone by.
+    """
+    fields = parse_cron(source["cron"])
+    zone = _zone(source["tz"]) if source.get("tz") else timezone.utc
+    now_local = moment.astimezone(zone)
+
+    last = cursor.get("fired_at")
+    try:
+        since = (datetime.fromisoformat(last).astimezone(zone) if last
+                 else now_local - timedelta(minutes=1))
+    except ValueError:
+        since = now_local - timedelta(minutes=1)
+
+    # From the minute after the last fire, up to and including this one.
+    step = since.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    scanned = 0
+    while step <= now_local and scanned < _CRON_HORIZON_MINUTES:
+        if cron_matches(fields, step):
+            late = (now_local - step).total_seconds()
+            return True, ("due" if late < 120
+                          else f"due, and {int(late // 60)}m late")
+        step += timedelta(minutes=1)
+        scanned += 1
+    return False, "not due yet"
+
+
 # -- reading a source -----------------------------------------------------
 
 
@@ -201,6 +363,32 @@ def dotted(item: Any, path: str) -> Any:
             return None
         value = value.get(part)
     return value
+
+
+# `{dotted.path}` in a title, filled from the item that matched. The
+# body already carries every item in full, so this exists for one reason:
+# a queue of tasks all called "failed-deploys: fired" cannot be read, and
+# the thing that tells them apart is in the payload.
+_PLACEHOLDER = re.compile(r"\{([a-zA-Z0-9_.]+)\}")
+
+
+def fill_title(template: str, item: dict[str, Any] | None) -> str:
+    """Substitute the item's fields into a title. One level, no logic.
+
+    **A path that is not there is left as it was written.** The
+    alternative -- an empty string -- turns a typo into a title that
+    looks deliberate, and this is the one field a person reads in a list
+    of thirty. A visible `{titel}` is a bug report.
+
+    Whitespace is collapsed and the result clipped, because a title goes
+    into Taskwarrior's description and a feed's summary field can be a
+    paragraph.
+    """
+    def one(match: "re.Match[str]") -> str:
+        value = dotted(item or {}, match.group(1))
+        return match.group(0) if value is None else str(value)
+
+    return " ".join(_PLACEHOLDER.sub(one, template).split())[:140]
 
 
 def _json_items(raw: bytes, source: dict[str, Any]) -> list[dict[str, Any]]:
@@ -397,10 +585,16 @@ def evaluate(trigger: dict[str, Any], cursor: dict[str, Any],
 
     if source["kind"] == "schedule":
         # The clock is the condition, so there is no fetch that could fail
-        # and nothing to be unknown about. A trigger that has never fired
-        # fires on its first evaluation rather than waiting one interval:
-        # waiting would make "every 24h" mean "nothing for a day", and the
-        # person who wrote it is watching for it to work.
+        # and nothing to be unknown about.
+        if source.get("cron"):
+            fired, reason = cron_due(source, cursor, now())
+            return Evaluation(fired=fired, reason=reason, advance=True)
+        # An interval, where a trigger that has never fired fires on its
+        # first evaluation rather than waiting: waiting would make "every
+        # 24h" mean "nothing for a day", and the person who wrote it is
+        # watching for it to work. A calendar is the opposite case and is
+        # handled as such above -- "every day at 08:00" written at ten in
+        # the morning must not fire at ten.
         due = _age_seconds(cursor.get("fired_at"), now())
         fired = due is None or due >= float(source["every_seconds"])
         return Evaluation(
