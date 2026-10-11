@@ -520,6 +520,52 @@
   .tile b { display: block; font: 400 17px/1.15 var(--mono); color: var(--ink); }
   .tile span { font-size: 10.5px; color: var(--dim); }
   .tile.warn b { color: var(--human); }
+  .tile .of { font-size: 12px; color: var(--dim); }
+
+  /* The overview sits above the two groups rather than inside either,
+     because it is about both of them. */
+  .sess-row.overview { margin-bottom: 10px; }
+  .sess-row.overview .nm { font-family: var(--sans); font-weight: 500; }
+
+  /* The wiring map. Two columns and a handful of nodes, so the layout is
+     arithmetic in the renderer and this only has to colour it. */
+  /* Capped, because the viewBox is small and a full-width SVG scales the
+     type up with it -- a 100%-wide map renders its node labels at twice
+     the size of every other label on the page. */
+  .map { width: 100%; max-width: 740px; height: auto; display: block;
+         margin: 2px 0 6px; }
+  .map-col { font: 500 9px var(--sans); letter-spacing: .1em; fill: var(--dim); }
+  .wire { fill: none; stroke: var(--rule); stroke-width: 1; }
+  /* Thicker for work an agent may take alone: that is the line that
+     spends money, and it should be the one the eye lands on. */
+  .wire.afk { stroke: var(--brand); stroke-width: 1.8; }
+  .wire.off { stroke-dasharray: 3 3; opacity: .45; }
+  .wire-label { font: 400 9px var(--mono); fill: var(--dim); }
+  .map-node rect {
+    fill: var(--panel); stroke: var(--rule); stroke-width: 1;
+  }
+  .map-node text { font: 400 11px var(--mono); fill: var(--ink); }
+  .map-node .map-sub { font-size: 9px; fill: var(--dim); }
+  .map-node { cursor: pointer; }
+  .map-node:hover rect { stroke: var(--brand); }
+  .map-node:focus { outline: none; }
+  .map-node:focus rect { stroke: var(--brand); stroke-width: 2; }
+  .map-node.off rect { fill: var(--panel-alt); stroke-dasharray: 3 3; }
+  .map-node.off text { fill: var(--dim); }
+
+  /* Fourteen bars. A chart library for this would be a dependency that
+     draws fewer rectangles than the code it replaces. */
+  .bars { display: flex; align-items: flex-end; gap: 4px; height: 90px;
+          margin: 6px 0 8px; }
+  .bar { flex: 1; display: flex; flex-direction: column;
+         justify-content: flex-end; height: 100%; }
+  .bar i { display: block; background: var(--brand); min-height: 1px;
+           border-radius: 2px 2px 0 0; }
+  .bar span { font: 400 9px var(--mono); color: var(--dim);
+              text-align: center; padding-top: 3px; }
+
+  .sess-table tr.pick { cursor: pointer; }
+  .sess-table tr.pick:hover { background: var(--panel-alt); }
 
   .sessions h2 { margin: 0 0 2px; font: 500 13px var(--sans); color: var(--ink); }
   .sessions h3 {
@@ -1528,7 +1574,14 @@ function renderSessionList() {
     ? `<button class="add" data-new="${escapeText(kind)}" title="Create one">+</button>`
     : '';
 
+  const onOverview = STATE.sel?.kind === 'overview';
   return `
+    <button class="sess-row overview${onOverview ? ' on' : ''}"
+            data-kind="overview" data-name="overview"
+            aria-current="${onOverview ? 'true' : 'false'}">
+      <span class="sess-row-top"><span class="nm">Overview</span></span>
+      <span class="sess-row-sub">how it is all wired, and what it has cost</span>
+    </button>
     <div class="sess-group">
       <h3>Sessions <span class="q">${num(types.filter(t => t.enabled).length)} live</span>${add('type')}</h3>
       ${typeRows}
@@ -2053,6 +2106,244 @@ async function submitTrigger(existing) {
   STATE.sel = { kind: 'trigger', name: payload.name };
 }
 
+/* =============================================================
+   THE OVERVIEW
+
+   The hub of the sessions view: every trigger and every session in one
+   picture, with the lines that connect them, and what the whole thing
+   has cost. The detail panes answer "what is this one"; this answers
+   the two questions you cannot ask of one record at a time -- what is
+   wired to what, and where is the money going.
+
+   The map is hand-drawn SVG rather than a graph library. It has two
+   columns and at most a few dozen nodes, so a layout engine would be a
+   dependency earning nothing; the task graph next door already proves
+   this unit draws its own.
+   ============================================================= */
+
+/* Every session a trigger could reach, records and built-in directories
+   alike. The built-ins are not in the store -- they are directories in
+   this repo -- so a map drawn only from records would show a trigger
+   wired to nothing while it is in fact feeding `execution` every tick. */
+function allSessionNodes() {
+  const nodes = (SESS.types ?? []).map(t => ({
+    name: t.name, builtin: false, enabled: !!t.enabled, record: t,
+  }));
+  const have = new Set(nodes.map(n => n.name));
+  for (const trigger of SESS.triggers ?? []) {
+    const fallback = DEFAULT_FOR_KIND[trigger.emits?.kind ?? ''];
+    if (fallback && !claimerFor(trigger.emits) && !have.has(fallback)) {
+      have.add(fallback);
+      nodes.push({ name: fallback, builtin: true, enabled: true, record: null });
+    }
+  }
+  return nodes;
+}
+
+/* One line per trigger: which session it reaches, and whether anything
+   would actually run. `to` null means the work would sit in the queue. */
+function wiring() {
+  return (SESS.triggers ?? []).map(trigger => {
+    const emits = trigger.emits ?? {};
+    const claimer = claimerFor(emits);
+    const to = claimer?.name ?? DEFAULT_FOR_KIND[emits.kind ?? ''] ?? null;
+    return {
+      from: trigger.name,
+      to,
+      label: [emits.kind, ...(emits.tags ?? [])].filter(Boolean).join(' + '),
+      afk: !!emits.afk,
+      live: !!trigger.enabled && (to === null
+        || (claimer ? !!claimer.enabled : true)),
+    };
+  });
+}
+
+function wiringMap() {
+  const triggers = SESS.triggers ?? [];
+  const sessions = allSessionNodes();
+  if (!triggers.length && !sessions.length)
+    return '<p class="empty-note">Nothing to draw yet.</p>';
+
+  const ROW = 54, PAD = 26, LEFT = 150, RIGHT = 470, BOX = 132;
+  const rows = Math.max(triggers.length, sessions.length, 1);
+  const height = rows * ROW + PAD * 2;
+  const at = (i, n) => PAD + i * ROW + (rows - n) * ROW / 2 + 16;
+
+  const place = {};
+  triggers.forEach((t, i) => { place['t:' + t.name] = at(i, triggers.length); });
+  sessions.forEach((s, i) => { place['s:' + s.name] = at(i, sessions.length); });
+
+  // Drawn first so a node always sits on top of a line, and curved so
+  // two edges crossing stay tellable apart.
+  const edges = wiring().map(e => {
+    const y1 = place['t:' + e.from];
+    const y2 = e.to === null ? y1 : place['s:' + e.to];
+    if (y1 === undefined) return '';
+    const x1 = LEFT + BOX / 2, x2 = e.to === null ? x1 + 70 : RIGHT - BOX / 2;
+    const mid = (x1 + x2) / 2;
+    return `<path d="M${x1} ${y1} C${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}"
+      class="wire${e.live ? '' : ' off'}${e.afk ? ' afk' : ''}"></path>
+      <text class="wire-label" x="${mid}" y="${(y1 + y2) / 2 - 5}"
+        text-anchor="middle">${escapeText(e.to === null
+          ? 'nothing runs this' : e.label)}</text>`;
+  }).join('');
+
+  const node = (kind, name, y, sub, on) => `
+    <g class="map-node${on ? '' : ' off'}" data-kind="${escapeText(kind)}"
+       data-name="${escapeText(name)}" tabindex="0" role="button">
+      <rect x="${(kind === 'trigger' ? LEFT : RIGHT) - BOX / 2}" y="${y - 17}"
+            width="${BOX}" height="34" rx="5"></rect>
+      <text x="${kind === 'trigger' ? LEFT : RIGHT}" y="${y - 2}"
+            text-anchor="middle">${escapeText(clip(name, 17))}</text>
+      <text x="${kind === 'trigger' ? LEFT : RIGHT}" y="${y + 11}"
+            text-anchor="middle" class="map-sub">${escapeText(sub)}</text>
+    </g>`;
+
+  return `<svg class="map" viewBox="0 0 ${RIGHT + BOX / 2 + 20} ${height}"
+       role="img" aria-label="How triggers reach sessions">
+    <text class="map-col" x="${LEFT}" y="16" text-anchor="middle">TRIGGERS</text>
+    <text class="map-col" x="${RIGHT}" y="16" text-anchor="middle">SESSIONS</text>
+    ${edges}
+    ${triggers.map((t, i) => node('trigger', t.name,
+        place['t:' + t.name],
+        t.source?.kind ?? '', !!t.enabled)).join('')}
+    ${sessions.map(s => node('type', s.name, place['s:' + s.name],
+        s.builtin ? 'built in' : `${runsFor(s.name).length} runs`,
+        s.enabled)).join('')}
+  </svg>
+  <p class="note">A solid line is work an agent may take unattended; a thin
+    one waits for a person. A faded node or line is switched off, and a line
+    that stops short is work nothing would pick up.</p>`;
+}
+
+/* Spend per day, from the runs this page already has. Bars rather than a
+   line: fourteen discrete days is not a continuum, and the question is
+   "which day was expensive", which a bar answers by length. */
+function spendByDay(days = 14) {
+  const byDay = new Map();
+  for (const run of SESS.runs ?? []) {
+    const day = String(run.recorded_at ?? '').slice(0, 10);
+    if (!day) continue;
+    byDay.set(day, (byDay.get(day) ?? 0) + (Number(run.cost_usd) || 0));
+  }
+  const out = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today.getTime() - i * 86_400_000)
+      .toISOString().slice(0, 10);
+    out.push({ day: d, cost: byDay.get(d) ?? 0 });
+  }
+  return out;
+}
+
+function spendChart() {
+  const days = spendByDay();
+  const peak = Math.max(...days.map(d => d.cost), 0);
+  if (!peak)
+    return `<p class="empty-note">Nothing has been spent in the last
+      fourteen days.</p>`;
+  return `<div class="bars" role="img"
+       aria-label="Spend per day for the last fourteen days, peak $${num(peak, 2)}">
+    ${days.map(d => `<div class="bar" title="${escapeText(d.day)} — $${num(d.cost, 4)}">
+        <i style="height:${Math.round((d.cost / peak) * 100)}%"></i>
+        <span>${escapeText(d.day.slice(8))}</span>
+      </div>`).join('')}
+  </div>
+  <p class="note">Peak day $${num(peak, 2)}. Only sessions this unit ran
+    itself are counted — a session started anywhere else never reaches
+    this store.</p>`;
+}
+
+/* Per session, from the same runs. The columns are the ones a person
+   actually acts on: what it costs to run this thing once, and whether it
+   finishes. */
+function perSessionTable() {
+  const nodes = allSessionNodes();
+  const rows = nodes.map(n => {
+    const runs = runsFor(n.name);
+    const cost = runs.reduce((a, r) => a + (Number(r.cost_usd) || 0), 0);
+    const failed = runs.filter(r => r.outcome !== 'resolved').length;
+    const turns = runs.reduce((a, r) => a + (Number(r.num_turns) || 0), 0);
+    const denials = runs.flatMap(r => r.permission_denials ?? []).length;
+    return { n, runs, cost, failed, turns, denials };
+  }).sort((a, b) => b.cost - a.cost || b.runs.length - a.runs.length);
+
+  return `<table class="tbl sess-table">
+    <thead><tr>
+      <th scope="col">session</th><th scope="col">runs</th>
+      <th scope="col">spent</th><th scope="col">per run</th>
+      <th scope="col">turns</th><th scope="col">refused</th>
+      <th scope="col">unfinished</th><th scope="col">last run</th>
+    </tr></thead>
+    <tbody>${rows.map(r => `
+      <tr class="pick" data-kind="type" data-name="${escapeText(r.n.name)}">
+        <td>${stateCell(r.n.enabled)} <code>${escapeText(r.n.name)}</code>
+          ${r.n.builtin ? '<span class="muted">built in</span>' : ''}</td>
+        <td>${num(r.runs.length)}</td>
+        <td>$${num(r.cost, 4)}</td>
+        <td>${r.runs.length ? '$' + num(r.cost / r.runs.length, 4)
+             : '<span class="muted">—</span>'}</td>
+        <td class="muted">${num(r.turns)}</td>
+        <td>${r.denials ? `<span class="warnish">${num(r.denials)}</span>`
+             : '<span class="muted">—</span>'}</td>
+        <td>${r.failed ? `<span class="warnish">${num(r.failed)}</span>`
+             : '<span class="muted">—</span>'}</td>
+        <td class="muted">${escapeText(when(r.runs[0]?.recorded_at) || 'never')}</td>
+      </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function overviewDetail() {
+  const types = SESS.types ?? [], triggers = SESS.triggers ?? [];
+  const runs = SESS.runs ?? [];
+  const spent = runs.reduce((a, r) => a + (Number(r.cost_usd) || 0), 0);
+  const unwired = wiring().filter(e => e.to === null).length;
+  const idle = allSessionNodes().filter(n =>
+    n.enabled && !triggersFeeding(n.record ?? {}).length && !n.builtin).length;
+
+  return `
+    <header class="sess-head">
+      <div>
+        <h2>Overview</h2>
+        <p class="note">Everything this unit can run, what starts it, and what
+          it has cost. The numbers along the top of the page are the task
+          queue's; these are the agents'.</p>
+      </div>
+    </header>
+
+    <div class="sess-tiles">
+      <div class="tile"><b>${num(types.filter(t => t.enabled).length)}<span
+        class="of">/${num(types.length)}</span></b><span>sessions live</span></div>
+      <div class="tile"><b>${num(triggers.filter(t => t.enabled).length)}<span
+        class="of">/${num(triggers.length)}</span></b><span>triggers live</span></div>
+      <div class="tile"><b>${num(runs.length)}</b><span>runs recorded</span></div>
+      <div class="tile"><b>$${num(spent, 2)}</b><span>spent, all time</span></div>
+      <div class="tile ${unwired ? 'warn' : ''}"><b>${num(unwired)}</b><span>triggers wired to nothing</span></div>
+    </div>
+
+    <section>
+      <h3>Wiring <span class="q">— what starts what</span></h3>
+      ${wiringMap()}
+      ${idle ? `<p class="note warnish">${plural(idle, 'live session has',
+        'live sessions have')} no trigger feeding ${idle === 1 ? 'it' : 'them'};
+        ${idle === 1 ? 'it runs' : 'they run'} only what a person queues.</p>` : ''}
+    </section>
+
+    <section>
+      <h3>Spend <span class="q">— the last fourteen days</span></h3>
+      ${spendChart()}
+    </section>
+
+    <section>
+      <h3>Per session <span class="q">— what each one costs and finishes</span></h3>
+      ${perSessionTable()}
+      <p class="note">Context usage is not here because it is not recorded:
+        a run stores cost, duration, turns, tools and refusals, and the CLI's
+        token counts are not among them. Adding them is a change to what a
+        run writes, not to this page.</p>
+    </section>`;
+}
+
 /* ---- testing a trigger before trusting it ----
 
    A trigger is the only object on this page whose correctness cannot be
@@ -2134,6 +2425,21 @@ function renderDetail() {
     if (sel.kind === 'trigger') fillTriggerForm(editing);
     else fillTypeForm(editing);
     wireForm(sel, editing);
+  } else if (sel?.kind === 'overview') {
+    pane.innerHTML = overviewDetail();
+    // Every node and every row is a way into the thing it names. The
+    // overview's whole job is to be the place you start from, which it
+    // is not if reading it means scrolling back to the list.
+    for (const el of pane.querySelectorAll('.map-node, tr.pick')) {
+      const go = () => {
+        STATE.sel = { kind: el.dataset.kind, name: el.dataset.name };
+        renderDetail();
+      };
+      el.onclick = go;
+      el.onkeydown = e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+      };
+    }
   } else {
     pane.innerHTML = item
       ? (sel.kind === 'trigger' ? triggerDetail(item) : typeDetail(item))
@@ -2232,9 +2538,12 @@ function renderSessions(d) {
   // broken page rather than as a page waiting to be told what to show.
   const all = [...SESS.types.map(t => ({ kind: 'type', name: t.name })),
                ...SESS.triggers.map(t => ({ kind: 'trigger', name: t.name }))];
-  const stillThere = STATE.sel
-    && all.some(x => x.kind === STATE.sel.kind && x.name === STATE.sel.name);
-  if (!stillThere) STATE.sel = all[0] ?? null;
+  // The overview is always there -- it is not one of the records -- and
+  // it is where a reader who has not chosen should land: the list on its
+  // own does not say what is wired to what.
+  const stillThere = STATE.sel && (STATE.sel.kind === 'overview'
+    || all.some(x => x.kind === STATE.sel.kind && x.name === STATE.sel.name));
+  if (!stillThere) STATE.sel = { kind: 'overview', name: 'overview' };
 
   $('sessions').innerHTML = `
     <div class="sess">
@@ -2974,9 +3283,19 @@ function apply(d, { first = false } = {}) {
   // the early return below: a tick that changed only a session type
   // must still reach this view, or the secondary view silently stops
   // refreshing whenever the queue happens to be quiet.
-  const sessionsKey = JSON.stringify([d.types, d.triggers, d.cursors]);
-  if (first || sessionsKey !== seen.sessions) renderSessions(d);
-  seen.sessions = sessionsKey;
+  // `runs` is in the key because the overview is mostly made of them:
+  // a session that just finished has to show up without a reload.
+  //
+  // And a form being filled in is never rebuilt under its author. The
+  // poll is ten seconds; a prompt takes longer than that to write, and
+  // losing it to a cursor advance somewhere else would be the page
+  // throwing away work nobody told it to. The key is left unrecorded so
+  // the change still lands the moment the form closes.
+  const sessionsKey = JSON.stringify([d.types, d.triggers, d.cursors, d.runs]);
+  if ((first || sessionsKey !== seen.sessions) && !STATE.sel?.mode) {
+    renderSessions(d);
+    seen.sessions = sessionsKey;
+  }
 
   if (!first && tasksKey === seen.tasks) return;   // the common case: nothing
   seen.tasks = tasksKey;

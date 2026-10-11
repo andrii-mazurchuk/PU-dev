@@ -360,3 +360,40 @@ def test_the_highlight_marks_new_work_not_a_project_switch(html):
     turns the new-work highlight from information into decoration,
     which is the same failure as colouring every blocked task."""
     assert "markFresh(g, keepView)" in html
+
+
+# -- the sessions overview ------------------------------------------------
+
+
+def test_the_overview_derives_its_wiring_from_the_claim_rule(html):
+    """The map draws the same answer the selector would give, because it
+    calls the same function the preview line calls. A second
+    implementation would eventually disagree with `for_task`, and a
+    picture that disagrees is worse than no picture."""
+    assert "function wiringMap(" in html
+    assert "function wiring()" in html
+    # The one function in this file that mirrors `session_types.for_task`.
+    wiring = html.split("function wiring()")[1].split("function wiringMap")[0]
+    assert "claimerFor(" in wiring
+    assert "DEFAULT_FOR_KIND[" in wiring
+
+
+def test_the_overview_counts_the_built_in_session_types_too(html):
+    """A trigger emitting a kind no record claims still reaches the
+    committed directory for that kind. A map drawn from the store alone
+    would show it wired to nothing while it feeds `execution` every
+    tick."""
+    assert "function allSessionNodes(" in html
+    nodes = html.split("function allSessionNodes(")[1].split("\n}")[0]
+    assert "builtin: true" in nodes
+
+
+def test_a_form_in_progress_is_never_rebuilt_by_the_poll(html):
+    """Ten seconds is shorter than writing a prompt. A refresh that
+    re-rendered the pane would throw away work nobody asked it to."""
+    line = next(l for l in html.splitlines() if "sessionsKey !== seen.sessions" in l)
+    assert "!STATE.sel?.mode" in line
+    # And the key must not be recorded when the render was skipped, or
+    # the change never lands at all.
+    after = html.split("sessionsKey !== seen.sessions")[1][:200]
+    assert "renderSessions(d);" in after and "seen.sessions = sessionsKey;" in after
