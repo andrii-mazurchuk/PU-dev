@@ -110,7 +110,10 @@ class Evaluation:
     seen_ids: tuple[str, ...] = ()
 
 
-def _validate(record: dict[str, Any]) -> dict[str, Any]:
+def validated(record: dict[str, Any]) -> dict[str, Any]:
+    """Public because a dry run needs the refusals without the write: the
+    whole point of testing a draft is to be told it is unrepresentable
+    before it is stored."""
     unknown = set(record) - set(REQUIRED) - set(OPTIONAL)
     if unknown:
         raise TriggerError(
@@ -176,7 +179,7 @@ def _validate(record: dict[str, Any]) -> dict[str, Any]:
 # -- reading a source -----------------------------------------------------
 
 
-def _http_fetch(url: str, timeout: float = 10.0) -> tuple[int, bytes]:
+def http_fetch(url: str, timeout: float = 10.0) -> tuple[int, bytes]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             return response.status, response.read()
@@ -240,7 +243,7 @@ def _rss_items(raw: bytes, source: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def read_source(source: dict[str, Any],
-                fetch: Callable[[str], tuple[int, bytes]] = _http_fetch
+                fetch: Callable[[str], tuple[int, bytes]] = http_fetch
                 ) -> tuple[bool, list[dict[str, Any]], str]:
     """`(ok, items, reason)`. `ok` is false for anything that is not a 2xx,
     and then the items are empty and nothing may be concluded from them."""
@@ -349,7 +352,7 @@ class TriggerStore:
                 if record.get("enabled")]
 
     def append(self, record: dict[str, Any]) -> dict[str, Any]:
-        return jsonl.append(self.log, _validate(record))
+        return jsonl.append(self.log, validated(record))
 
     # -- cursors ---------------------------------------------------------
 
@@ -383,7 +386,7 @@ class TriggerStore:
 
 
 def evaluate(trigger: dict[str, Any], cursor: dict[str, Any],
-             fetch: Callable[[str], tuple[int, bytes]] = _http_fetch,
+             fetch: Callable[[str], tuple[int, bytes]] = http_fetch,
              now: Callable[[], datetime] = _now) -> Evaluation:
     """Whether this trigger says work exists, and what it saw.
 

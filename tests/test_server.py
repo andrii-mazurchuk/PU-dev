@@ -602,3 +602,18 @@ def test_activating_a_trigger_tells_the_owner_that_it_will_spend(
     post(f"{base_url}/triggers", a_watch(enabled=True))
     assert len(sent) == 1
     assert "will spend" in sent[0]
+
+
+def test_the_dry_run_route_previews_without_writing(base_url):
+    """A read dressed as a POST. It has to answer, and the store has to be
+    untouched afterwards -- otherwise pressing Test is a write."""
+    status, body = post(f"{base_url}/triggers/dry-run", {
+        "name": "unreachable",
+        "source": {"kind": "http-json", "url": "http://127.0.0.1:1/none"},
+        "emits": {"kind": "execution"},
+    })
+    assert status == 200
+    assert body["ok"] is False and body["fired"] is False
+
+    _, listed = get(f"{base_url}/triggers")
+    assert listed["triggers"] == []

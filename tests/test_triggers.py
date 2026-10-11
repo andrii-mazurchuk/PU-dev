@@ -490,3 +490,105 @@ def test_a_schedule_emits_a_task_whose_body_states_there_is_no_payload(
     body = body_store.get(emitted[0]["task_uuid"])
     assert "None. This is a schedule" in body
     assert "nothing failed to arrive" in body
+
+
+# -- the dry run ----------------------------------------------------------
+#
+# The one object here whose correctness cannot be read off its own record:
+# whether a predicate holds depends on what the source is serving this
+# minute. So the test that matters is that pressing the button changes
+# nothing -- a preview with a side effect is a worse tool than no preview.
+
+
+def test_a_dry_run_reports_what_would_happen_and_writes_nothing(
+        tmp_path, monkeypatch):
+    from pu import service
+
+    monkeypatch.setattr(
+        triggers, "http_fetch",
+        json_source([{"id": "a", "level": "error", "title": "deploy failed"},
+                     {"id": "b", "level": "info", "title": "fine"}]))
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    draft = emitting(predicate=[["level", "==", "error"]])
+
+    result = service.dry_run_trigger(trigger_store, draft)
+
+    assert result["ok"] is True
+    assert result["fired"] is True
+    assert (result["fetched"], result["fresh"], result["matched_total"]) \
+        == (2, 2, 1)
+    assert result["matched"][0]["title"] == "deploy failed"
+
+    # The task it would create, down to the afk tag the emits asked for.
+    created = result["would_create"]
+    assert created["kind"] == "execution"
+    assert "digest" in created["tags"] and "afk" in created["tags"]
+    assert "deploy failed" in created["body"]
+
+    # Nothing written: no record, and no cursor to re-report against.
+    assert trigger_store.current() == {}
+    assert trigger_store.cursors() == {}
+
+    # And therefore repeatable: the same answer, not "nothing new".
+    again = service.dry_run_trigger(trigger_store, draft)
+    assert (again["fired"], again["fresh"]) == (True, 2)
+
+
+def test_a_dry_run_of_an_unrepresentable_draft_is_refused(tmp_path):
+    from pu import service
+
+    with pytest.raises(triggers.TriggerError):
+        service.dry_run_trigger(
+            triggers.TriggerStore(tmp_path),
+            a_trigger(source={"kind": "schedule", "every_seconds": 60},
+                      predicate=[["level", "==", "error"]]))
+
+
+def test_a_dry_run_that_does_not_fire_previews_no_task(tmp_path, monkeypatch):
+    from pu import service
+
+    monkeypatch.setattr(triggers, "http_fetch",
+                        json_source([{"id": "a", "level": "info"}]))
+    result = service.dry_run_trigger(
+        triggers.TriggerStore(tmp_path),
+        emitting(predicate=[["level", "==", "error"]]))
+
+    assert result["fired"] is False
+    assert result["would_create"] is None
+    assert result["fetched"] == 1 and result["matched_total"] == 0
+
+
+def test_a_dry_run_states_a_failed_fetch_rather_than_an_empty_source(
+        tmp_path, monkeypatch):
+    """`ok` false, and the reason says so. An empty source and an
+    unreachable one produce the same item count and must not read the
+    same, or a down feed looks like a quiet one."""
+    from pu import service
+
+    monkeypatch.setattr(triggers, "http_fetch", json_source([], status=500))
+    result = service.dry_run_trigger(triggers.TriggerStore(tmp_path),
+                                     emitting())
+
+    assert result["ok"] is False
+    assert "500" in result["reason"]
+    assert result["fired"] is False and result["would_create"] is None
+
+
+def test_a_dry_run_uses_the_saved_cursor_without_moving_it(
+        tmp_path, monkeypatch):
+    """A saved trigger's aggregates are the real ones -- an item already
+    seen is not new -- but reading them must not advance anything."""
+    from pu import service
+
+    monkeypatch.setattr(triggers, "http_fetch",
+                        json_source([{"id": "a", "level": "error"}]))
+    trigger_store = triggers.TriggerStore(tmp_path)
+    draft = emitting(predicate=[["level", "==", "error"]])
+    trigger_store.append(draft)
+    trigger_store.save_cursor("posts", dict(EMPTY, seen=["a"]))
+
+    result = service.dry_run_trigger(trigger_store, draft)
+
+    assert result["fresh"] == 0 and result["fired"] is False
+    assert trigger_store.cursors()["posts"]["seen"] == ["a"]

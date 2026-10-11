@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from pu import bodies, notify, records, taskstore
+from pu import bodies, notify, pipeline, records, taskstore, triggers
 
 
 class ServiceError(ValueError):
@@ -376,6 +376,90 @@ def write_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
             source_unit="pu",
         )
     return written
+
+def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
+    """Evaluate a draft trigger now, and report what it would do.
+
+    **Writes nothing.** No record, no task, no cursor. That is the whole
+    reason this exists: a trigger is the one object here whose correctness
+    cannot be read off its own record -- whether a predicate holds depends
+    on what a source is serving this minute -- and the alternative way to
+    find out is to activate it and wait.
+
+    It runs the *same* functions the tick runs, not a reimplementation of
+    them. `validated`, `read_source`, `evaluate` and `payload_body` are
+    the production path; a second opinion written for the preview would
+    eventually disagree with the real one, and a preview that disagrees is
+    worse than none because it is believed.
+
+    The cursor is **read and not advanced**, so the aggregates
+    (`count_since_fire`, `age_since_last_seen`) are the real ones for a
+    saved trigger and empty for a draft. Running this repeatedly is
+    therefore idempotent and tells you the same thing each time, which is
+    what you want of a test button.
+
+    One fetch, memoised, because `read_source` and `evaluate` would
+    otherwise each hit the source and a test that doubles the load on
+    somebody's feed is a test people learn not to press.
+    """
+    if not isinstance(payload, dict):
+        raise ServiceError("a trigger is a JSON object")
+    record = triggers.validated({k: v for k, v in payload.items()
+                                 if k != "enabled"})
+    name = record["name"]
+    source = record["source"]
+
+    cache: dict[str, tuple[int, bytes]] = {}
+
+    def fetch(url: str) -> tuple[int, bytes]:
+        if url not in cache:
+            cache[url] = triggers.http_fetch(url)
+        return cache[url]
+
+    cursor = (trigger_store.cursor(name) if trigger_store is not None
+              else {"seen": [], "last_new_at": None, "pending": 0,
+                    "fired_at": None})
+    seen = set(cursor.get("seen") or ())
+
+    if source["kind"] == "schedule":
+        ok, items, reason = True, [], "a schedule fetches nothing"
+    else:
+        ok, items, reason = triggers.read_source(source, fetch)
+
+    evaluation = triggers.evaluate(record, cursor, fetch=fetch)
+    fresh = [i for i in items
+             if triggers.item_id(i, source) not in seen]
+
+    emits = record.get("emits") or {}
+    would_create = None
+    if evaluation.fired and emits:
+        tags = list(emits.get("tags") or ())
+        if emits.get("afk"):
+            tags.append(records.AFK_TAG)
+        would_create = {
+            "title": emits.get("title") or f"{name}: {evaluation.reason}",
+            "kind": emits["kind"],
+            "tags": tags,
+            "project": emits.get("project"),
+            "body": pipeline.payload_body(record, evaluation),
+        }
+
+    return {
+        "ok": ok,
+        "reason": reason if not ok else evaluation.reason,
+        "fired": evaluation.fired,
+        "fetched": len(items),
+        "fresh": len(fresh),
+        # The matched items themselves, capped: this is a preview, and a
+        # feed returning two hundred matches would answer the question
+        # with the first few just as well.
+        "matched": [i for i in evaluation.items[:5]],
+        "matched_total": len(evaluation.items),
+        "would_create": would_create,
+        "note": ("Nothing was written. The cursor was read and not "
+                 "advanced, so this reports the same thing each time."),
+    }
+
 
 # -- stats ----------------------------------------------------------------
 

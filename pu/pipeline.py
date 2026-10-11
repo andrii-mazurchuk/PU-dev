@@ -584,7 +584,7 @@ def _run(
 # tick instead of waiting for the next one.
 
 
-def _payload_body(trigger: dict, evaluation) -> str:
+def payload_body(trigger: dict, evaluation) -> str:
     """The task's body: why it exists, then the payload, labelled.
 
     The payload is a separate labelled section rather than prose woven
@@ -665,7 +665,7 @@ def emit_due_work(
                 kind=emits["kind"],
                 project=emits.get("project"),
             )
-            body_store.set(uuid, _payload_body(trigger, evaluation))
+            body_store.set(uuid, payload_body(trigger, evaluation))
             emitted.append({"trigger": name, "task_uuid": uuid,
                             "items": len(evaluation.items)})
         elif evaluation.fired:

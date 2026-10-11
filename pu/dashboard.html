@@ -577,6 +577,25 @@
               text-transform: none; letter-spacing: 0; margin-top: 6px; }
   .fld .chk input { width: auto; }
   .hint-row { margin: 3px 0 0; font-size: 11px; color: var(--dim); }
+  /* What the field was actually read as. A comma-separated box has one
+     real failure -- the reader guessing at the separator -- and echoing
+     the parse answers it without a word of instruction. */
+  .echo { color: var(--brand); font-family: var(--mono); font-size: 10.5px; }
+
+  /* The emitted task, boxed. These four fields are not more settings of
+     the trigger; they are a different object, and reading them as one
+     list is what makes "creates kind" an unanswerable question. */
+  .emits {
+    margin: 18px 0 0; padding: 12px 14px 4px;
+    border: 1px solid var(--rule); border-radius: var(--radius);
+    background: var(--panel-alt);
+  }
+  .emits legend { padding: 0 6px; font: 600 11px var(--sans);
+                  letter-spacing: .08em; text-transform: uppercase;
+                  color: var(--ink-soft); }
+  .emits .note { margin: 0 0 12px; }
+  .test-out { margin-top: 20px; border-top: 1px solid var(--rule);
+              padding-top: 4px; }
 
   /* The one line that says whether any of this will do anything. */
   .form-wiring {
@@ -1390,6 +1409,45 @@ const DEFAULT_FOR_KIND = {
   execution: 'execution', research: 'research', intake: 'intake',
 };
 
+/* Mirrors `records.KINDS`, which is a closed vocabulary -- it is also the
+   Taskwarrior UDA's value list, so a kind this page invented would be
+   written and then be unreachable by every session type. The first three
+   have a built-in session behind them; the rest are wayfinder's own record
+   types, which pu can hold and only a claiming type can run. */
+const KINDS = ['execution', 'research', 'intake',
+               'task', 'prototype', 'grilling', 'map'];
+
+/* Model is cost and reasoning load, not permission, so it stays an
+   ordinary field -- but free text was wrong: a typo is accepted by the
+   store and discovered when a paid session fails to start. The list
+   cannot be fetched (pu holds no API key and the CLI has no list
+   command), so it is the known set plus an escape for an id newer than
+   this page. The aliases track the latest of their family. */
+const MODELS = [
+  { id: 'opus', note: 'alias, the latest Opus' },
+  { id: 'sonnet', note: 'alias, the latest Sonnet' },
+  { id: 'haiku', note: 'alias, the latest Haiku' },
+  { id: 'claude-opus-5-5', note: 'Opus 5.5' },
+  { id: 'claude-sonnet-5-5', note: 'Sonnet 5.5' },
+  { id: 'claude-fable-5-1', note: 'Fable 5.1' },
+  { id: 'claude-haiku-4-5-20251001', note: 'Haiku 4.5' },
+];
+
+/* The kind dropdown, carrying the one thing its name does not say:
+   whether anything can run it. A kind with no built-in session and no
+   claiming type produces a task that sits in the queue forever, which is
+   a choice worth making knowingly rather than discovering. */
+function kindOptions(blank = '') {
+  return (blank ? `<option value="">${escapeText(blank)}</option>` : '')
+    + KINDS.map(k => {
+        const runs = DEFAULT_FOR_KIND[k]
+          ? `runs as ${DEFAULT_FOR_KIND[k]}`
+          : 'only if a session claims it';
+        return `<option value="${escapeText(k)}">`
+             + `${escapeText(k)} — ${escapeText(runs)}</option>`;
+      }).join('');
+}
+
 function claimerFor(emits) {
   if (!emits || !emits.kind) return null;
   const tags = new Set(emits.tags ?? []);
@@ -1544,6 +1602,7 @@ function typeDetail(t) {
     <div class="sess-tiles">
       <div class="tile"><b>${num(runs.length)}</b><span>runs</span></div>
       <div class="tile"><b>$${num(spent, 2)}</b><span>spent, all time</span></div>
+      <div class="tile"><b>${num(triggersFeeding(t).length)}</b><span>triggers feeding it</span></div>
       <div class="tile"><b>${escapeText(when(runs[0]?.recorded_at) || '—')}</b><span>last run</span></div>
       <div class="tile ${denials.length ? 'warn' : ''}"><b>${num(denials.length)}</b><span>refused tool calls</span></div>
     </div>
@@ -1569,12 +1628,13 @@ function typeDetail(t) {
     </section>
 
     <section>
-      <h3>Claim <span class="q">— what it picks up</span></h3>
-      <p class="note">A live type runs any task whose kind and tags it claims,
-        and the most specific claim wins. ${t.enabled
+      <h3>Picks up <span class="q">— the work it takes</span></h3>
+      <p class="note">A live session runs any task whose kind and tags it
+        picks up, and the most specific one wins — a session naming more tags
+        has stated a narrower case. ${t.enabled
           ? 'It is live, so it is picking these up now.'
           : 'It is off, so it is picking up nothing.'}</p>
-      <dl class="kvs">${kv('claims', claimCell(t.claims))}
+      <dl class="kvs">${kv('picks up', claimCell(t.claims))}
         ${kv('fed by', (() => {
           const feeders = triggersFeeding(t);
           return feeders.length
@@ -1650,9 +1710,12 @@ function triggerDetail(t) {
         ${kv('project', t.emits?.project
             ? `<code>${escapeText(t.emits.project)}</code>`
             : '<span class="muted">none</span>')}
-        ${kv('who it is for', t.emits?.afk
-            ? 'an agent may run it alone — this is how it spends'
-            : 'it waits for a person')}
+        ${kv('title', t.emits?.title
+            ? escapeText(t.emits.title)
+            : '<span class="muted">derived from the trigger name</span>')}
+        ${kv('unattended', t.emits?.afk
+            ? 'an agent may run it alone — this is how this unit spends'
+            : 'no — the task is created and then waits for a person')}
       </dl>
       <p class="form-wiring">${wiringNote(t.emits)}</p>
       <p class="note">A trigger never starts a session. It creates a task, and
@@ -1721,15 +1784,22 @@ function typeForm(existing) {
         `<select id="f-grant" name="grant">${options(Object.keys(GRANTS))}</select>`,
         '<span id="grant-explains"></span>')}
       <div class="fld-row">
-        ${field('f-kind', 'claims kind',
-          `<select id="f-kind" name="kind">${options(Object.keys(DEFAULT_FOR_KIND), { blank: '— claims nothing —' })}</select>`)}
-        ${field('f-tags', 'claims tags',
+        ${field('f-kind', 'picks up — kind',
+          `<select id="f-kind" name="kind">${kindOptions('— nothing, it only runs what a person queues —')}</select>`,
+          'The kind of task this session runs. Leave it unset and no task ever reaches it.')}
+        ${field('f-tags', 'picks up — tags',
           `<input id="f-tags" name="tags" placeholder="digest, nightly" autocomplete="off">`,
-          'Comma separated. A task must carry all of them.')}
+          'Comma separated, and a task must carry <em>all</em> of them, so more tags means narrower. Empty means every task of that kind. <span id="f-tags-echo" class="echo"></span>')}
       </div>
       ${field('f-model', 'model',
-        `<input id="f-model" name="model" placeholder="(the CLI default)" autocomplete="off">`,
-        'Leave empty unless the work genuinely differs in reasoning load.')}
+        `<select id="f-model" name="model">
+           <option value="">(the CLI default)</option>
+           ${MODELS.map(m => `<option value="${escapeText(m.id)}">${escapeText(m.id)} — ${escapeText(m.note)}</option>`).join('')}
+           <option value="__other">something else — type it</option>
+         </select>
+         <input id="f-model-other" name="model_other" hidden
+                placeholder="claude-…" autocomplete="off">`,
+        'Leave it default unless the work genuinely differs in reasoning load.')}
       ${field('f-prompt', 'instructions',
         `<textarea id="f-prompt" name="prompt" rows="7"></textarea>`,
         'pu writes this into the generated <code>CLAUDE.md</code>, under a preamble it adds itself.')}
@@ -1774,27 +1844,39 @@ function triggerForm(existing) {
         `<textarea id="g-pred" name="predicate" rows="3"
                    placeholder="level == error"></textarea>`,
         'One clause per line, <code>field operator value</code>, all of them ANDed. Empty means anything new. Fields are <code>count_since_fire</code>, <code>age_since_last_seen</code>, or a dotted path into an item.')}
-      <div class="fld-row">
-        ${field('g-ekind', 'creates kind',
-          `<select id="g-ekind" name="ekind">${options(Object.keys(DEFAULT_FOR_KIND))}</select>`)}
-        ${field('g-etags', 'creates tags',
-          `<input id="g-etags" name="etags" placeholder="digest" autocomplete="off">`,
-          'This is the wire: a session claiming these picks the work up.')}
-      </div>
-      <div class="fld-row">
-        ${field('g-project', 'project',
-          `<input id="g-project" name="project" placeholder="demo" autocomplete="off">`)}
-        ${field('g-afk', 'who it is for',
-          `<label class="chk"><input id="g-afk" name="afk" type="checkbox">
-             an agent may run it alone</label>`,
-          'Unticked, the task waits for a person. Ticked is how this unit spends unattended.')}
-      </div>
-      <p class="form-wiring" id="trigger-wiring"></p>
+      <fieldset class="emits">
+        <legend>The task it creates</legend>
+        <p class="note">A firing never starts a session. It creates one task,
+          and these are that task's fields.</p>
+        ${field('g-etitle', 'title',
+          `<input id="g-etitle" name="etitle" autocomplete="off">`,
+          'What it is called in the queue. Empty derives one from the trigger name.')}
+        <div class="fld-row">
+          ${field('g-ekind', 'kind',
+            `<select id="g-ekind" name="ekind">${kindOptions()}</select>`,
+            'What sort of work it is, and half of what routes it to a session.')}
+          ${field('g-etags', 'tags',
+            `<input id="g-etags" name="etags" placeholder="digest" autocomplete="off">`,
+            'Comma separated, one word each. The other half of the routing: a session picking up these takes the work. <span id="g-etags-echo" class="echo"></span>')}
+        </div>
+        <div class="fld-row">
+          ${field('g-project', 'project',
+            `<input id="g-project" name="project" placeholder="demo" autocomplete="off">`,
+            'Grouping only — it is what the task graph draws by.')}
+          ${field('g-afk', 'may an agent run it unattended',
+            `<label class="chk"><input id="g-afk" name="afk" type="checkbox">
+               yes — nobody has to be here</label>`,
+            'Either way the task <em>is</em> created. Unticked it waits in the queue for a person and no agent will ever take it. Ticked is the only way this unit spends money on its own.')}
+        </div>
+        <p class="form-wiring" id="trigger-wiring"></p>
+      </fieldset>
       <div class="form-actions">
         <button type="submit" class="btn primary">${escapeText(isNew ? 'Create, switched off' : 'Save')}</button>
+        <button type="button" class="btn" id="g-test">Test it now</button>
         <button type="button" class="btn" data-cancel>Cancel</button>
         <span class="form-error" id="trigger-error"></span>
       </div>
+      <div id="g-test-out"></div>
     </form>`;
 }
 
@@ -1828,9 +1910,23 @@ function tagList(text) {
 function fillTypeForm(t) {
   const set = (id, v) => { $(id).value = v ?? ''; };
   set('f-name', t?.name); set('f-purpose', t?.purpose);
-  set('f-grant', t?.grant ?? 'read'); set('f-model', t?.model);
+  set('f-grant', t?.grant ?? 'read');
   set('f-kind', t?.claims?.kind); set('f-tags', (t?.claims?.tags ?? []).join(', '));
   set('f-prompt', t?.prompt);
+
+  // A model this page has never heard of is still a model. It goes in the
+  // escape field rather than being dropped, so an edit of an older record
+  // cannot silently change which model it runs on.
+  const known = MODELS.some(m => m.id === t?.model);
+  set('f-model', t?.model && !known ? '__other' : (t?.model ?? ''));
+  set('f-model-other', known ? '' : (t?.model ?? ''));
+  const modelShape = () => {
+    const other = $('f-model').value === '__other';
+    $('f-model-other').hidden = !other;
+    if (other) $('f-model-other').focus();
+  };
+  $('f-model').onchange = modelShape;
+  modelShape();
 
   const explain = () => {
     const g = GRANTS[$('f-grant').value] ?? {};
@@ -1841,8 +1937,11 @@ function fillTypeForm(t) {
   const wire = () => {
     const kind = $('f-kind').value;
     const el = $('type-wiring');
-    if (!kind) { el.textContent = 'Claims nothing, so no task will ever reach it.'; return; }
     const tags = tagList($('f-tags').value);
+    $('f-tags-echo').textContent = tags.length
+      ? `reads as ${tags.length}: ${tags.join(' · ')}`
+      : '';
+    if (!kind) { el.textContent = 'Picks up nothing, so no task will ever reach it.'; return; }
     const feeders = (SESS.triggers ?? []).filter(tr =>
       tr.emits?.kind === kind && tags.every(x => (tr.emits.tags ?? []).includes(x)));
     el.textContent = feeders.length
@@ -1862,6 +1961,7 @@ function fillTriggerForm(t) {
   set('g-url', t?.source?.url); set('g-every', t?.source?.every_seconds);
   set('g-pred', (t?.predicate ?? []).map(c => c.join(' ')).join('\n'));
   set('g-ekind', t?.emits?.kind ?? 'execution');
+  set('g-etitle', t?.emits?.title);
   set('g-etags', (t?.emits?.tags ?? []).join(', '));
   set('g-project', t?.emits?.project);
   $('g-afk').checked = !!t?.emits?.afk;
@@ -1878,9 +1978,13 @@ function fillTriggerForm(t) {
       : 'level == error';
   };
   const wire = () => {
+    const tags = tagList($('g-etags').value);
+    $('g-etags-echo').textContent = tags.length
+      ? `reads as ${tags.length}: ${tags.join(' · ')}`
+      : '';
     $('trigger-wiring').innerHTML = wiringNote({
       kind: $('g-ekind').value,
-      tags: tagList($('g-etags').value),
+      tags,
       afk: $('g-afk').checked,
     });
   };
@@ -1900,7 +2004,8 @@ async function submitType(existing) {
   };
   const kind = $('f-kind').value;
   if (kind) payload.claims = { kind, tags: tagList($('f-tags').value) };
-  const model = $('f-model').value.trim();
+  const picked = $('f-model').value;
+  const model = (picked === '__other' ? $('f-model-other').value : picked).trim();
   if (model) payload.model = model;
   // Carried through an edit, because a write is a whole record: omitting
   // it would read as "the field was removed", which is a change, which
@@ -1910,7 +2015,11 @@ async function submitType(existing) {
   STATE.sel = { kind: 'type', name: payload.name };
 }
 
-async function submitTrigger(existing) {
+/* One reader for the trigger form, used by Save and by Test alike. The
+   dry run has to be sent the record Save would send, or the preview is a
+   preview of something else -- which is the one failure that makes a test
+   button worse than no test button. */
+function triggerDraft(existing) {
   const skind = $('g-kind').value;
   const source = { kind: skind };
   if (skind === 'schedule') source.every_seconds = Number($('g-every').value);
@@ -1928,13 +2037,75 @@ async function submitTrigger(existing) {
   };
   const project = $('g-project').value.trim();
   if (project) payload.emits.project = project;
+  const title = $('g-etitle').value.trim();
+  if (title) payload.emits.title = title;
   if (skind !== 'schedule') {
     const predicate = parsePredicate($('g-pred').value);
     if (predicate.length) payload.predicate = predicate;
   }
+  return payload;
+}
+
+async function submitTrigger(existing) {
+  const payload = triggerDraft(existing);
   if (existing?.enabled) payload.enabled = true;
   await postJSON('triggers', payload);
   STATE.sel = { kind: 'trigger', name: payload.name };
+}
+
+/* ---- testing a trigger before trusting it ----
+
+   A trigger is the only object on this page whose correctness cannot be
+   read off its own record: whether the predicate holds depends on what
+   the source is serving this minute. Everything else here can be checked
+   by reading it. So this is the one button that goes to the network.
+
+   pu's `/triggers/dry-run` writes nothing -- no record, no task, no
+   cursor advance -- and runs the same functions the tick runs. What comes
+   back is rendered as the three questions actually being asked: did the
+   fetch work, what matched, and what task would exist. */
+function testResult(r) {
+  const verdict = !r.ok
+    ? `<span class="warnish">the source did not answer — ${escapeText(r.reason)}</span>`
+    : r.fired
+      ? '<span class="state live"><i></i>it would fire</span>'
+      : `<span class="muted">it would not fire — ${escapeText(r.reason)}</span>`;
+
+  const created = r.would_create
+    ? `<table class="tbl">
+         <caption class="note">the task this would create, exactly</caption>
+         <tbody>
+           <tr><th scope="row">title</th><td>${escapeText(r.would_create.title)}</td></tr>
+           <tr><th scope="row">kind</th><td><code>${escapeText(r.would_create.kind)}</code>
+             <span class="muted">${escapeText(DEFAULT_FOR_KIND[r.would_create.kind]
+               ? `runs as ${DEFAULT_FOR_KIND[r.would_create.kind]} unless a session claims it`
+               : 'no built-in session runs this kind')}</span></td></tr>
+           <tr><th scope="row">tags</th><td>${(r.would_create.tags ?? []).length
+             ? escapeText((r.would_create.tags ?? []).join(' · '))
+             : '<span class="muted">none</span>'}</td></tr>
+           <tr><th scope="row">project</th><td>${r.would_create.project
+             ? `<code>${escapeText(r.would_create.project)}</code>`
+             : '<span class="muted">none</span>'}</td></tr>
+         </tbody>
+       </table>
+       <pre class="prompt">${escapeText(r.would_create.body)}</pre>`
+    : `<p class="empty-note">${escapeText(r.fired
+        ? 'It would fire but create nothing — there is no kind set to create.'
+        : 'No task, because it would not fire.')}</p>`;
+
+  return `<section class="test-out">
+    <h3>Test <span class="q">— what would happen, right now</span></h3>
+    <p class="form-wiring">${verdict}</p>
+    <div class="sess-tiles">
+      <div class="tile"><b>${num(r.fetched)}</b><span>items the source returned</span></div>
+      <div class="tile"><b>${num(r.fresh)}</b><span>not seen before</span></div>
+      <div class="tile"><b>${num(r.matched_total)}</b><span>matching the predicate</span></div>
+    </div>
+    ${(r.matched ?? []).length ? `<pre class="prompt">${escapeText(
+        JSON.stringify(r.matched, null, 1))}</pre>` : ''}
+    ${created}
+    <p class="note">${escapeText(r.note)}</p>
+  </section>`;
 }
 
 /* Activation is its own write touching only `enabled`, which is the one
@@ -1985,6 +2156,25 @@ function wireForm(sel, existing) {
       ? { kind: sel.kind, name: existing.name }
       : (SESS.types[0] ? { kind: 'type', name: SESS.types[0].name } : null);
     renderDetail();
+  };
+  const test = $('g-test');
+  if (test) test.onclick = async () => {
+    err.textContent = '';
+    test.disabled = true;
+    const out = $('g-test-out');
+    out.innerHTML = '<p class="empty-note">Reading the source…</p>';
+    try {
+      out.innerHTML = testResult(
+        await postJSON('triggers/dry-run', triggerDraft(existing)));
+      // The detail pane scrolls on its own, so the answer lands below the
+      // fold of a container the reader is not looking at -- which reads
+      // as a button that did nothing.
+      out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (ex) {
+      out.innerHTML = '';
+      err.textContent = readError(ex);
+    }
+    test.disabled = false;
   };
   form.onsubmit = async e => {
     e.preventDefault();

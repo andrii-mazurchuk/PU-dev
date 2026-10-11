@@ -352,6 +352,22 @@ TOOLS = [
         },
     },
     {
+        "name": "dry_run_trigger",
+        "description": "Evaluate a draft trigger now and report what it would do, writing nothing: no record, no task, no cursor advance. Returns whether the fetch succeeded, how many items it returned, how many are new, which ones match the predicate, whether it would fire, and the exact task it would create. The only way to find out whether a predicate holds against what a source is actually serving, short of activating the trigger and waiting. Takes the same body as write_trigger; `enabled` is ignored.",
+        "method": "POST",
+        "path": "/triggers/dry-run",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "source": {"type": "object"},
+                "predicate": {"type": "array", "items": {"type": "array"}},
+                "emits": {"type": "object"},
+            },
+            "required": ["name", "source"],
+        },
+    },
+    {
         "name": "list_session_runs",
         "description": "Recorded session runs, most recent first: which session type ran, against which task, what it cost, how long it took, how many turns, which tools it was refused, and what it concluded. This is the history of what this unit's agents have actually done. Filter by `task` for one task's runs.",
         "method": "GET",
@@ -744,6 +760,14 @@ def make_handler(
                         gate_reason=gate.get("reason", ""),
                     )
                     return self._json(202, {"id": ask_id})
+
+                if parts == ["triggers", "dry-run"]:
+                    # Before the bare `triggers` branch is irrelevant --
+                    # the patterns are disjoint -- but it is a read
+                    # dressed as a POST, and keeping it adjacent to the
+                    # write it previews is how a reader finds it.
+                    return self._json(200, service.dry_run_trigger(
+                        trigger_store, payload))
 
                 if parts == ["triggers"]:
                     if trigger_store is None:
