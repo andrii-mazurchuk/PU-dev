@@ -167,3 +167,42 @@ def test_the_generated_directory_is_the_type_s_cwd(types):
     chosen = build()["digest"]
     assert chosen.dir == store.dirs / "digest"
     assert "be brief" in (chosen.dir / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+def test_a_record_appended_by_hand_gets_its_file_generated(tmp_path):
+    """Appending a line to the log is a legitimate way to configure this
+    unit -- no HTTP, no restart. What that path cannot do is write the
+    generated CLAUDE.md, which left a type that claimed tasks and then
+    ran with no instructions in a directory that did not exist."""
+    from pu import jsonl, session_types, typestore
+
+    store = typestore.TypeStore(tmp_path)
+    jsonl.append(store.log, {
+        "name": "hand-typed", "purpose": "p", "prompt": "Do the thing.",
+        "grant": "read", "origin": "authored", "enabled": True})
+    assert not (store.dirs / "hand-typed").exists()
+
+    (tmp_path / "committed").mkdir()
+    found = session_types.discover(tmp_path / "committed", store)
+
+    generated = store.dirs / "hand-typed" / "CLAUDE.md"
+    assert generated.exists()
+    assert "Do the thing." in generated.read_text(encoding="utf-8")
+    assert found["hand-typed"].dir == store.dirs / "hand-typed"
+
+
+def test_a_file_that_is_there_is_never_rewritten_behind_a_reader(tmp_path):
+    """Not a reconciler. Rewriting on every read would make a deliberate
+    local change impossible to keep for even one tick."""
+    from pu import session_types, typestore
+
+    store = typestore.TypeStore(tmp_path)
+    store.append({"name": "digest", "purpose": "p", "prompt": "original",
+                  "grant": "read", "origin": "authored", "enabled": True})
+    target = store.dirs / "digest" / "CLAUDE.md"
+    target.write_text("edited by hand\n", encoding="utf-8", newline="\n")
+
+    (tmp_path / "committed").mkdir()
+    session_types.discover(tmp_path / "committed", store)
+
+    assert target.read_text(encoding="utf-8") == "edited by hand\n"

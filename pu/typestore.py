@@ -227,6 +227,28 @@ class TypeStore:
         self._generate(validated)
         return validated
 
+    def ensure_generated(self, record: dict[str, Any]) -> None:
+        """Write the type's file if it is not there, leave it if it is.
+
+        **A record written by hand is a whole session type.** The log is
+        a plain JSONL file in private storage, and appending a line to it
+        is a legitimate way to configure this unit -- no HTTP, no
+        restart, the next read picks it up. What that path cannot do is
+        produce the generated `CLAUDE.md`, which until now left a type
+        that claimed tasks and then ran with no instructions and a
+        working directory that did not exist.
+
+        Regenerating it here is not a special case for hand edits; it
+        follows from the rule the store already has. The record is the
+        source of truth and the file is an artifact, so an artifact that
+        is missing is rebuilt from the truth. An artifact that is
+        *present* is left exactly as it is -- this is not a reconciler,
+        and silently rewriting a file on every read would make a
+        deliberate local change impossible to keep for even one tick.
+        """
+        if not (self.dirs / record["name"] / "CLAUDE.md").exists():
+            self._generate(record)
+
     def _generate(self, record: dict[str, Any]) -> Path:
         """Write the type's `CLAUDE.md` from its record.
 

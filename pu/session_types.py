@@ -279,6 +279,11 @@ def discover(session_types_dir: Path, store=None) -> dict[str, SessionType]:
             # committed *is* their approval.
             if not record.get("enabled"):
                 continue
+            # A record appended to the log by hand has no generated file
+            # and no directory to run in. The record is the truth and the
+            # file is its artifact, so a missing artifact is rebuilt
+            # rather than being a session that runs with no instructions.
+            store.ensure_generated(record)
             found[name] = SessionType(
                 name=name, dir=store.dirs / name, record=record)
 
