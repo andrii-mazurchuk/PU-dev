@@ -531,7 +531,7 @@ def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
                 evaluation.items[0] if evaluation.items else None),
             "kind": emits["kind"],
             "tags": tags,
-            "project": emits.get("project"),
+            "project": emits.get("project") or records.RUNS_PROJECT,
             "body": pipeline.payload_body(record, evaluation),
         }
 

@@ -53,6 +53,7 @@ class SessionStore:
         outcome: str,
         detail: str = "",
         agent_role: str = "system",
+        extra: dict[str, Any] | None = None,
     ) -> Path:
         """Persist one run. Returns the directory it went to.
 
@@ -80,6 +81,7 @@ class SessionStore:
                     "tool_calls": list(result.tool_calls),
                     "models_used": list(result.models_used),
                     "permission_denials": list(result.permission_denials),
+                    **(extra or {}),
                 }, indent=1),
                 encoding="utf-8",
             )

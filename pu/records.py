@@ -107,6 +107,7 @@ class Task:
     entry: str | None = None
     modified: str | None = None
     start: str | None = None
+    trigger: str | None = None
 
     @property
     def afk(self) -> bool:
@@ -181,6 +182,7 @@ def from_export(raw: dict[str, Any]) -> Task:
         entry=raw.get("entry"),
         modified=raw.get("modified"),
         start=raw.get("start"),
+        trigger=raw.get("trigger"),
     )
 
 

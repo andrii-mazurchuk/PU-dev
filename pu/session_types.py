@@ -30,6 +30,7 @@ a real repository, which cannot be enumerated in advance.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import os
 from pathlib import Path
 
@@ -216,6 +217,18 @@ class SessionType:
         if self.record is not None:
             return self.grant.reaches_peers
         return self.name in REACHES_PEERS
+
+    @property
+    def version(self) -> str | None:
+        """Which instructions a run ran under, as a short hash of the
+        `CLAUDE.md` it was given. One rule for both sources: a record's
+        file is generated from the record, so its hash pins the record
+        line too, and a committed directory's pins the deployed text."""
+        try:
+            text = (self.dir / "CLAUDE.md").read_bytes()
+        except OSError:
+            return None
+        return hashlib.sha256(text).hexdigest()[:12]
 
     @property
     def agent_role(self) -> str:

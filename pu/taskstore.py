@@ -68,6 +68,11 @@ RC_SCHEMA: dict[str, str] = {
     "uda.parent_uuid.label": "Parent",
     "uda.repo.type": "string",
     "uda.repo.label": "Repo",
+    # The trigger that created this task, if one did. The run record reads
+    # it to say what started a session -- a fact pu measures, not one the
+    # session reports.
+    "uda.trigger.type": "string",
+    "uda.trigger.label": "Trigger",
     # Ordering across every source lives here rather than in a priority
     # ladder in code. Retuning what PU works on next is a config change.
     "urgency.uda.kind.research.coefficient": "4.0",

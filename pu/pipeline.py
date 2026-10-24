@@ -51,6 +51,7 @@ from pu import (
     notify,
     records,
     repo_setup,
+    report as report_mod,
     runner as runner_mod,
     session_types as session_types_mod,
     sessions as sessions_mod,
@@ -281,6 +282,10 @@ def build_prompt(
     if extra_context:
         lines += ["", extra_context]
 
+    # Last, so it is the freshest thing the session read before it starts:
+    # every run's final message opens with the same six fields.
+    lines += ["", report_mod.CONTRACT]
+
     return "\n".join(lines)
 
 
@@ -484,8 +489,18 @@ def _run(
     else:
         outcome, detail = _apply_resolution(store, task, result)
 
-    session_store.record(task.uuid, stype.name, prompt, result, outcome, detail,
-                         agent_role=stype.agent_role)
+    session_store.record(
+        task.uuid, stype.name, prompt, result, outcome, detail,
+        agent_role=stype.agent_role,
+        extra={
+            # The header: measured here, never self-reported.
+            "session_type_version": stype.version,
+            "started_by": (f"trigger:{task.trigger}" if task.trigger
+                           else "task"),
+            # The body, read back.
+            **report_mod.parse(result.text).as_record(),
+        },
+    )
     # What this session saw of the account's rolling windows, back to the
     # gateway, which records it once for the whole node. Best-effort: the
     # session has already succeeded and a bridge that is down must not
@@ -617,6 +632,7 @@ def emit_due_work(
                 # its own: a schedule firing daily would otherwise put a
                 # year of run-tasks into every task view.
                 project=emits.get("project") or records.RUNS_PROJECT,
+                trigger=name,
             )
             body_store.set(uuid, body)
             emitted.append({"trigger": name, "task_uuid": uuid,
