@@ -1,4 +1,4 @@
-"""The session layer: SOPs, discovery, argv, intake validation, the tick."""
+"""The session layer: SOPs, discovery, argv, the tick."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import pytest
 
 from pu import (
     guards,
-    intake,
     logs_client,
     notify,
     pipeline,
@@ -75,7 +74,7 @@ def test_a_sop_without_a_description_is_broken(tmp_path):
 
 def test_the_session_types_are_discovered():
     found = session_types.discover(UNIT_ROOT / "session_types")
-    assert set(found) == {"intake", "research", "execution", "ask"}
+    assert set(found) == {"research", "execution", "ask"}
 
 
 def test_every_selectable_type_has_a_tool_grant():
@@ -107,14 +106,6 @@ def test_research_may_not_write_files():
     research = session_types.discover(UNIT_ROOT / "session_types")["research"]
     assert "Write" not in research.allowed_tools
     assert "Edit" not in research.allowed_tools
-
-
-def test_intake_reaches_neither_the_network_nor_the_shell():
-    grant = session_types.discover(UNIT_ROOT / "session_types")["intake"].allowed_tools
-    assert "WebFetch" not in grant and "WebSearch" not in grant
-    # The only Bash it has is the lookup script, not Bash at large.
-    assert "Bash," not in grant + ","
-    assert "tag_sop_lookup" in grant
 
 
 def test_a_directory_without_claude_md_is_not_a_session_type(tmp_path):
@@ -221,112 +212,6 @@ def test_exit_code_comes_from_the_process_not_the_stream():
         runner=lambda argv, cwd, stdin: runner.CompletedRun(2, "", "boom"),
     )
     assert result.exit_code == 2 and result.ok is False
-
-
-# -- intake ----------------------------------------------------------------
-
-
-def test_extract_block_finds_json_in_prose():
-    text = 'Sure, here you go:\n\n```json\n{"tasks": []}\n```\n\nHope that helps.'
-    assert intake.extract_block(text) == {"tasks": []}
-
-
-def test_extract_block_tolerates_a_truncated_fence():
-    assert intake.extract_block('```json\n{"tasks": []}') == {"tasks": []}
-
-
-def test_no_json_at_all_raises():
-    with pytest.raises(intake.IntakeError):
-        intake.extract_block("I could not decide.")
-
-
-def test_a_task_must_trace_to_the_message():
-    """The mechanical half of 'transcribe, do not invent'."""
-    with pytest.raises(intake.IntakeError) as excinfo:
-        intake.validate({"tasks": [{"title": "t", "kind": "execution"}]})
-    assert "traces_to" in str(excinfo.value)
-
-
-def test_an_unknown_kind_is_raised_on_never_defaulted():
-    with pytest.raises(records.RecordError):
-        intake.validate({"tasks": [
-            {"title": "t", "kind": "invent", "traces_to": "x"}]})
-
-
-def test_a_missing_kind_is_raised_on_never_defaulted():
-    with pytest.raises(intake.IntakeError):
-        intake.validate({"tasks": [{"title": "t", "traces_to": "x"}]})
-
-
-def test_bounce_conditions_are_a_closed_list():
-    with pytest.raises(intake.IntakeError):
-        intake.validate({"bounce": {"condition": "dunno", "reason": "r"}})
-    ok = intake.validate({"bounce": {"condition": "needs_a_map", "reason": "r"}})
-    assert ok["bounce"]["condition"] == "needs_a_map"
-
-
-def test_a_bounce_must_carry_a_reason():
-    with pytest.raises(intake.IntakeError):
-        intake.validate({"bounce": {"condition": "needs_a_map", "reason": "  "}})
-
-
-def test_apply_is_all_or_none(store, body_store):
-    """A proposal that fails partway must leave nothing pending behind --
-    half a plan is worse than none, because someone has to reconcile it."""
-    calls = {"n": 0}
-    original = body_store.set
-
-    def flaky(uuid, text):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise OSError("disk full")
-        return original(uuid, text)
-
-    body_store.set = flaky
-    plan = {"tasks": [
-        {"title": "first", "kind": "execution", "project": None, "tags": [],
-         "afk": True, "body": "one", "traces_to": "a"},
-        {"title": "second", "kind": "execution", "project": None, "tags": [],
-         "afk": False, "body": "two", "traces_to": "b"},
-    ]}
-    with pytest.raises(OSError):
-        intake.apply(store, body_store, plan)
-    assert store.count("status:pending") == 0
-
-
-def test_an_intake_proposal_can_place_an_execution_task_in_a_repo(
-    store, body_store
-):
-    """Intake is told to identify the repository -- `no_placeable_target`
-    names it -- so the proposal has to be able to carry one. Without this
-    every intake-created execution task is skipped for having no repo, and
-    the miss is quiet: the tick annotates and moves on."""
-    plan = intake.validate({"tasks": [{
-        "title": "fix the thing", "kind": "execution", "repo": "/srv/app",
-        "afk": True, "traces_to": "fix the thing in /srv/app",
-    }]})
-    assert plan["tasks"][0]["repo"] == "/srv/app"
-
-    task = store.get(intake.apply(store, body_store, plan)[0])
-    assert task.repo == "/srv/app"
-    assert task.runnable is True
-
-
-def test_apply_creates_afk_and_non_afk_side_by_side(store, body_store):
-    """Intake may split one message into work an agent does and a check a
-    person makes. Both come from one proposal."""
-    created = intake.apply(store, body_store, {"tasks": [
-        {"title": "do it", "kind": "execution", "project": "dev.x", "tags": [],
-         "afk": True, "body": "detail", "traces_to": "the ask"},
-        {"title": "verify it", "kind": "task", "project": "dev.x", "tags": [],
-         "afk": False, "body": None, "traces_to": "the ask"},
-    ]})
-    assert len(created) == 2
-    doer, checker = store.get(created[0]), store.get(created[1])
-    assert doer.afk is True and doer.runnable is True
-    assert checker.afk is False
-    assert body_store.get(created[0]) == "detail"
-    assert any("traces to: the ask" in a for a in doer.annotations)
 
 
 # -- repo setup ------------------------------------------------------------
@@ -717,77 +602,6 @@ def test_an_execution_tick_runs_in_the_repo_with_injected_instructions(
     # ...which is exactly why ours is folded into the prompt instead.
     assert "Execution session" in seen["prompt"]
     assert "Write" in seen["allowed_tools"]
-
-
-def test_an_intake_tick_creates_the_proposed_tasks(store, body_store, tmp_path):
-    from pu import service
-    accepted = service.push_inbox(store, body_store, "cu", "please fix the deploy")
-
-    proposal = json.dumps({"tasks": [{
-        "title": "fix the failing deploy", "kind": "execution",
-        "project": "dev.thing", "tags": [], "afk": False,
-        "traces_to": "please fix the deploy",
-    }]})
-
-    def fake_session(prompt, cwd, allowed_tools, model, mcp_bridge_url):
-        # intake is not in REACHES_PEERS, so a configured bridge must not
-        # reach it: the URL is what grants `mcp__mcp-bridge__*`, and this is
-        # the session whose narrow grant matters most.
-        assert mcp_bridge_url is None
-        # The catalogue is handed to intake up front: it cannot choose tags
-        # from a set it does not know exists.
-        assert "Available procedures" in prompt
-        assert "please fix the deploy" in prompt
-        return runner.SessionResult(0, text=f"```json\n{proposal}\n```",
-                                    is_error=False)
-
-    result = pipeline.tick(
-        store, body_store, _session_store(tmp_path), UNIT_ROOT,
-        tmp_path / "peers.json", tmp_path / "cost_policy.json",
-        session_runner=fake_session,
-    )
-    assert result.outcome == "converted"
-    assert store.get(accepted["uuid"]).status == "completed"
-    created = [t for t in store.export("status:pending") if t.kind == "execution"]
-    assert len(created) == 1 and created[0].afk is False
-
-
-def test_an_intake_bounce_closes_the_record_and_creates_nothing(
-    store, body_store, tmp_path
-):
-    from pu import service
-    accepted = service.push_inbox(store, body_store, "cu", "make it better somehow")
-    bounce = json.dumps({"bounce": {
-        "condition": "no_stateable_outcome",
-        "reason": "the message never says what 'better' would look like",
-    }})
-
-    result = pipeline.tick(
-        store, body_store, _session_store(tmp_path), UNIT_ROOT,
-        tmp_path / "peers.json", tmp_path / "cost_policy.json",
-        session_runner=lambda **k: runner.SessionResult(
-            0, text=bounce, is_error=False),
-    )
-    assert result.outcome == "bounced"
-    assert store.get(accepted["uuid"]).status == "completed"
-    assert store.count("status:pending") == 0
-
-
-def test_an_unusable_intake_proposal_creates_nothing_and_releases(
-    store, body_store, tmp_path
-):
-    from pu import service
-    accepted = service.push_inbox(store, body_store, "cu", "do a thing")
-    result = pipeline.tick(
-        store, body_store, _session_store(tmp_path), UNIT_ROOT,
-        tmp_path / "peers.json", tmp_path / "cost_policy.json",
-        session_runner=lambda **k: runner.SessionResult(
-            0, text="I decided not to answer in JSON.", is_error=False),
-    )
-    assert result.outcome == "invalid_proposal"
-    task = store.get(accepted["uuid"])
-    assert task.status == "pending" and task.active is False
-    assert store.count("status:pending") == 1
 
 
 def test_the_prompt_names_mandatory_procedures(store, body_store, tmp_path):

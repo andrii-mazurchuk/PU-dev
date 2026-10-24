@@ -40,7 +40,7 @@ TOOLS = [
     },
     {
         "name": "query_tasks",
-        "description": "List tasks. Every task in this unit is the same universal record whatever its source -- a wayfinder decision ticket, a mirrored GitHub issue, an inbox message. Filter by project (matches nested projects by prefix), kind, status, or parent.",
+        "description": "List tasks. Every task in this unit is the same universal record whatever its source -- a wayfinder decision ticket, a mirrored GitHub issue, a task a trigger created. Filter by project (matches nested projects by prefix), kind, status, or parent.",
         "method": "GET",
         "path": "/tasks",
         "input_schema": {
@@ -194,21 +194,6 @@ TOOLS = [
                 "body": {"type": "string"},
             },
             "required": ["uuid", "body"],
-        },
-    },
-    {
-        "name": "push_inbox_message",
-        "description": "Push work at this unit for consideration. This does not create a task to be done -- it creates one intake record, which a session later converts into real work or bounces with what was missing. It is the only write available to a peer that is not a wayfinding operation.",
-        "method": "POST",
-        "path": "/inbox",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source": {"type": "string", "description": "who is asking"},
-                "message": {"type": "string", "description": "the request, as worded"},
-                "project": {"type": "string"},
-            },
-            "required": ["source", "message"],
         },
     },
     {
@@ -825,14 +810,6 @@ def make_handler(
                         return self._json(503, {"error": "no session-type store wired"})
                     return self._json(201, service.write_session_type(
                         type_store, payload))
-
-                if parts == ["inbox"]:
-                    return self._json(202, service.push_inbox(
-                        store, body_store,
-                        source=payload.get("source"),
-                        message=payload.get("message"),
-                        project=payload.get("project"),
-                    ))
 
                 if len(parts) == 3 and parts[0] == "tasks":
                     uuid, action = parts[1], parts[2]

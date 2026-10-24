@@ -1,8 +1,7 @@
 """Telling a person when pu has stopped and needs one.
 
-Two moments, and until now both were silent: the repeat-dispatch breaker
-taking a task away from agents, and intake bouncing a message. Each writes
-its reason onto the record and tells nobody -- which in a unit designed to
+The first moment, and once silent: the repeat-dispatch breaker taking a
+task away from agents. It wrote its reason onto the record and told nobody -- which in a unit designed to
 run unattended is a stall you only discover by going to look.
 
 **Addressed to the role `owner`, never to a unit name.** Which unit serves

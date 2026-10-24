@@ -2,8 +2,8 @@
 
 Taskwarrior holds a one-line description and timestamped annotations. That
 is the right shape for a task and the wrong shape for a wayfinder map,
-whose body has five structured sections, or for an inbox message, which is
-arbitrary text someone sent.
+whose body has five structured sections, or for a trigger's payload,
+which is arbitrary text a source served.
 
 So a record's long form lives in exactly one of three places, and which one
 is a property of the record rather than of its source:

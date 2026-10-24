@@ -70,7 +70,6 @@ RC_SCHEMA: dict[str, str] = {
     "uda.repo.label": "Repo",
     # Ordering across every source lives here rather than in a priority
     # ladder in code. Retuning what PU works on next is a config change.
-    "urgency.uda.kind.intake.coefficient": "6.0",
     "urgency.uda.kind.research.coefficient": "4.0",
     "urgency.uda.kind.execution.coefficient": "2.0",
 }

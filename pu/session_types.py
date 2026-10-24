@@ -19,7 +19,7 @@ starting from nothing -- not from what might be convenient. The prose in a
 session cannot write files because `Write` is not in its list, and the
 sentence telling it not to is a courtesy on top of that.
 
-`intake` and `research` get the SOP lookup script specifically rather than
+`research` gets the SOP lookup script specifically rather than
 `Bash`, so resolving a procedure is always possible and reading the
 filesystem generally is not.
 
@@ -49,7 +49,6 @@ LOOKUP = (f"Bash(python3 {LOOKUP_SCRIPT}:*),"
           f"Bash(python {LOOKUP_SCRIPT}:*)")
 
 ALLOWED_TOOLS: dict[str, str] = {
-    "intake": f"Read,{LOOKUP}",
     "research": f"Read,WebSearch,WebFetch,{LOOKUP}",
     "execution": f"Bash,Read,Write,Edit,{LOOKUP}",
 }
@@ -119,7 +118,6 @@ GRANTS: dict[str, Grant] = {
 # what the one untrusted-input session is allowed to do.
 GRANT_FOR_DIRECTORY_TYPE: dict[str, str] = {
     "ask": "none",
-    "intake": "read",
     "research": "web",
     "execution": "repo",
 }
@@ -155,11 +153,6 @@ RUNS_IN_TARGET_REPO = frozenset({"execution"})
 # config: handing a session a bridge URL adds `mcp__mcp-bridge__*`, which is
 # every tool every peer exposes -- a far wider surface than anything in the
 # list above, and one that grows whenever somebody registers a new unit.
-#
-# `intake` is deliberately absent. Its grant is `Read` plus the lookup
-# script, deliberately narrow because it is the one session that causes work
-# to exist; widening it to the whole system's tool surface is not something
-# a deployment setting should be able to do by filling in an env var.
 REACHES_PEERS = frozenset({"research", "execution"})
 
 

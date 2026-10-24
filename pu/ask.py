@@ -30,8 +30,8 @@ whatever it likes by the text it is summarising.
 ## What comes back is untrusted text
 
 The answer is model output derived from task descriptions and bodies,
-which are written by other agents and by anything that reached
-`POST /inbox`. It is rendered as escaped text by the console and must
+which are written by other agents and by any peer that can create a
+ticket. It is rendered as escaped text by the console and must
 never be treated as markup -- a body carrying an `onerror` attribute
 that got quoted back into an HTML-rendering panel would run on the
 node's own origin, which is also where the unauthenticated `POST /route`

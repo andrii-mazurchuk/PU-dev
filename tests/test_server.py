@@ -98,7 +98,8 @@ def test_tools_manifest_shape(base_url):
         names.add(tool["name"])
     # /health and /tools are excluded from the manifest by the standard.
     assert not {t["path"] for t in payload["tools"]} & {"/health", "/tools"}
-    assert "push_inbox_message" in names
+    # Deleted 2026-10-24: wired into cu and au, never used.
+    assert "push_inbox_message" not in names
 
 
 def test_every_declared_GET_tool_path_answers(base_url):
@@ -217,30 +218,6 @@ def test_claiming_twice_reports_not_claimed(base_url):
     post(f"{base_url}/tasks/{ticket['uuid']}/claim", {})
     _, second = post(f"{base_url}/tasks/{ticket['uuid']}/claim", {})
     assert second["claimed"] is False
-
-
-# -- the inbox ------------------------------------------------------------
-
-
-def test_inbox_mints_exactly_one_intake_record(base_url):
-    status, accepted = post(f"{base_url}/inbox", {
-        "source": "cu",
-        "message": "please look at the deploy\nit has been failing since friday",
-    })
-    assert status == 202
-    _, task = get(f"{base_url}/tasks/{accepted['uuid']}")
-    assert task["kind"] == "intake"
-    assert task["runnable"] is True
-    assert "please look at the deploy" in task["body"]
-
-    _, listed = get(f"{base_url}/tasks")
-    assert len(listed["tasks"]) == 1
-
-
-def test_inbox_requires_a_message(base_url):
-    with pytest.raises(HTTPError) as excinfo:
-        post(f"{base_url}/inbox", {"source": "cu"})
-    assert excinfo.value.code == 400
 
 
 # -- reads ----------------------------------------------------------------

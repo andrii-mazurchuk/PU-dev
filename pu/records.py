@@ -39,14 +39,13 @@ from typing import Any
 # The closed vocabulary. Order is significant: Taskwarrior uses the order of
 # `uda.kind.values` as the sort order for the attribute.
 #
-# The first three are the kinds PU can actually run; each maps to a session
-# type below. The last three exist because wayfinder stores them and this is
+# The first two are the kinds PU can actually run; each maps to a session
+# type below. The rest exist because wayfinder stores them and this is
 # one store -- PU must be able to hold a grilling ticket without ever being
 # able to select one.
 KINDS: tuple[str, ...] = (
     "execution",
     "research",
-    "intake",
     "task",
     "prototype",
     "grilling",
@@ -69,7 +68,6 @@ KINDS: tuple[str, ...] = (
 SESSION_TYPE_FOR_KIND: dict[str, str] = {
     "execution": "execution",
     "research": "research",
-    "intake": "intake",
 }
 
 # The tag that opts a task in to being run by an agent at all. Absence means

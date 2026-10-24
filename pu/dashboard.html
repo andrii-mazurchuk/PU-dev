@@ -1142,9 +1142,9 @@ function sample() {
       { name: 'deploy-digest', grant: 'read', enabled: true,
         purpose: 'Summarise failed deploys the watch found.',
         claims: { kind: 'execution', tags: ['digest'] } },
-      { name: 'inbox-triage', grant: 'read', enabled: false,
-        purpose: 'Decide whether a pushed message is real work.',
-        claims: { kind: 'intake', tags: [] } },
+      { name: 'paper-triage', grant: 'web', enabled: false,
+        purpose: 'Decide whether a new paper is worth a summary.',
+        claims: { kind: 'research', tags: ['papers'] } },
       { name: 'mu-spec.verify-layer', grant: 'web', enabled: false,
         origin: 'declared',
         purpose: 'Check one spec layer against the one above it.',
@@ -1458,15 +1458,15 @@ async function postJSON(path, payload) {
    number of claim tags, then by name, and only live types are in the
    running -- an unenabled one is not discovered at all. */
 const DEFAULT_FOR_KIND = {
-  execution: 'execution', research: 'research', intake: 'intake',
+  execution: 'execution', research: 'research',
 };
 
 /* Mirrors `records.KINDS`, which is a closed vocabulary -- it is also the
    Taskwarrior UDA's value list, so a kind this page invented would be
-   written and then be unreachable by every session type. The first three
+   written and then be unreachable by every session type. The first two
    have a built-in session behind them; the rest are wayfinder's own record
    types, which pu can hold and only a claiming type can run. */
-const KINDS = ['execution', 'research', 'intake',
+const KINDS = ['execution', 'research',
                'task', 'prototype', 'grilling', 'map'];
 
 /* Model is cost and reasoning load, not permission, so it stays an

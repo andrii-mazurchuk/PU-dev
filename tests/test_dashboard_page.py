@@ -156,7 +156,7 @@ def test_it_draws_no_navigation(html):
 
 def test_untrusted_text_is_never_set_as_markup(html):
     """Task descriptions and bodies are written by other agents
-    and by anything that reached POST /inbox. The one place a
+    and by any peer that can create a ticket. The one place a
     value could become markup is innerHTML, and the places that
     use it must only ever receive strings this file wrote."""
     for line in html.splitlines():

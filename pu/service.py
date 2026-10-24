@@ -1,7 +1,6 @@
 """The operations, as plain functions over a store. No HTTP here.
 
-There are exactly **two write doors** into this unit, and neither is
-generic CRUD:
+No write door into this unit is generic CRUD. The first and oldest:
 
 **The wayfinding operations.** A wayfinder session runs outside PU -- it is
 user-invoked and human-in-the-loop, so it can never be a `claude -p`
@@ -11,13 +10,11 @@ create a map, create a child ticket, wire blocking, read the frontier,
 claim, resolve. It can create a decision ticket on a map. It cannot invent
 an execution task, set urgency, or mark anything agent-runnable.
 
-**The inbox.** Everything else -- a peer unit, a message from a person.
-It does not write a task; it mints exactly one `kind:intake` record and
-nothing else. An intake *session* is what converts that into real work, or
-bounces it saying what was missing. That is what keeps "PU executes
-ratified work and never decides what work exists" true: ratification is an
-act a session performs against a written procedure, not a side effect of
-an HTTP call.
+There used to be a second door, the inbox: a peer pushed an untyped
+message and an intake session turned it into work. It was wired into cu
+and au and never used, and it was deleted on 2026-10-24 (pu vision). A
+peer that knows what it wants creates a typed ticket; untyped input from
+a person goes to cu, where a human is.
 
 Reading is open to every peer. Writing is not, and the shape of the write
 is the permission -- there is no endpoint that takes an arbitrary task.
@@ -272,39 +269,6 @@ def set_body(
         raise ServiceError(f"no such task: {uuid}")
     body_store.set(uuid, body)
     return {"uuid": uuid, "bytes": len(body.encode("utf-8"))}
-
-
-# -- write door 2: the inbox ----------------------------------------------
-
-
-def push_inbox(
-    store: taskstore.TaskStore,
-    body_store: bodies.BodyStore,
-    source: str,
-    message: str,
-    project: str | None = None,
-) -> dict[str, Any]:
-    """Accept pushed work from a peer, as exactly one `kind:intake` record.
-
-    This endpoint cannot mint anything else. An intake session reads the
-    message and either creates real tasks from it or resolves the record
-    with what was missing -- so a peer can cause work to be *considered*
-    without deciding that work exists.
-
-    It is tagged `afk` because converting it is the one thing PU can
-    always do alone."""
-    _require(source, "source")
-    _require(message, "message")
-
-    first_line = message.strip().splitlines()[0][:120]
-    uuid = store.add(
-        f"intake from {source}: {first_line}",
-        tags=[records.AFK_TAG],
-        kind="intake",
-        project=project,
-    )
-    body_store.set(uuid, message)
-    return {"uuid": uuid, "accepted": True}
 
 
 # -- write door 4: trigger authoring --------------------------------------

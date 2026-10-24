@@ -47,7 +47,6 @@ from typing import Any, Callable
 from pu import (
     bodies,
     guards,
-    intake as intake_mod,
     logs_client,
     notify,
     records,
@@ -280,71 +279,7 @@ def build_prompt(
     return "\n".join(lines)
 
 
-def intake_context(unit_root: Path) -> str:
-    """The SOP catalogue, for the one session that assigns tags.
-
-    Given up front rather than looked up: intake has to choose tags for
-    tasks it proposes, and it cannot choose from a set it does not know
-    exists."""
-    catalogue = sops.catalogue(unit_root)
-    if not catalogue:
-        return (
-            "## Available procedures\n\n"
-            "There are no SOPs defined yet. Propose tasks without procedure "
-            "tags."
-        )
-    lines = ["## Available procedures", "",
-             "These are the tags that carry a binding procedure. Attach the "
-             "ones that apply; do not invent others.", ""]
-    for entry in catalogue:
-        kinds = f" (kinds: {', '.join(entry['kinds'])})" if entry["kinds"] else ""
-        lines.append(f"- `{entry['tag']}`{kinds} — {entry['description']}")
-    return "\n".join(lines)
-
-
 # -- outcome handling -----------------------------------------------------
-
-
-def _apply_intake(
-    store: taskstore.TaskStore,
-    body_store: bodies.BodyStore,
-    task: records.Task,
-    result: runner_mod.SessionResult,
-    mcp_bridge_url: str | None = None,
-) -> tuple[str, str]:
-    """Convert an intake session's proposal into tasks, or record a bounce.
-
-    A bounce is a normal outcome, not a failure: the message was read and
-    the answer is that it cannot become work as written."""
-    try:
-        plan = intake_mod.validate(intake_mod.extract_block(result.text))
-    except intake_mod.IntakeError as exc:
-        store.annotate(task.uuid, f"intake could not be applied: {exc}")
-        store.release(task.uuid)
-        return "invalid_proposal", str(exc)
-
-    if "bounce" in plan:
-        bounce = plan["bounce"]
-        store.annotate(
-            task.uuid, f"bounced ({bounce['condition']}): {bounce['reason']}"
-        )
-        store.complete(task.uuid)
-        # A bounce is a finished answer, but only pu has heard it: the
-        # record closes and whoever sent the message is never told what was
-        # missing. Best-effort, so a silent bounce beats a failed tick.
-        notify.notify_owner(
-            mcp_bridge_url,
-            f"pu bounced an inbox message ({bounce['condition']}): "
-            f"{bounce['reason']}\n\nThe message was: {task.description}",
-            source_unit=UNIT_NAME,
-        )
-        return "bounced", f"{bounce['condition']}: {bounce['reason']}"
-
-    created = intake_mod.apply(store, body_store, plan)
-    store.annotate(task.uuid, f"converted into {len(created)} task(s): "
-                              f"{', '.join(created)}")
-    store.complete(task.uuid)
-    return "converted", f"{len(created)} task(s) created"
 
 
 def _apply_resolution(
@@ -512,8 +447,7 @@ def _run(
 ) -> TickResult:
     store.claim(task.uuid)
 
-    extra = intake_context(unit_root) if stype.name == "intake" else ""
-    prompt = build_prompt(task, body_store.get(task.uuid), unit_root, extra)
+    prompt = build_prompt(task, body_store.get(task.uuid), unit_root)
     if instructions:
         prompt = "\n\n---\n\n".join([instructions, prompt])
 
@@ -525,7 +459,7 @@ def _run(
             model=stype.model,
             # Gated on the type, not merely on the URL being configured:
             # passing one grants `mcp__mcp-bridge__*`, every tool every peer
-            # exposes. See session_types.REACHES_PEERS for why intake is out.
+            # exposes. See session_types.REACHES_PEERS.
             mcp_bridge_url=mcp_bridge_url if stype.reaches_peers else None,
         )
     except Exception as exc:  # a launch failure must not strand the claim
@@ -540,10 +474,6 @@ def _run(
         store.release(task.uuid)
         store.annotate(task.uuid, f"session failed (exit {result.exit_code})")
         outcome, detail = "failed", f"exit {result.exit_code}"
-    elif stype.name == "intake":
-        outcome, detail = _apply_intake(
-            store, body_store, task, result, mcp_bridge_url
-        )
     else:
         outcome, detail = _apply_resolution(store, task, result)
 
