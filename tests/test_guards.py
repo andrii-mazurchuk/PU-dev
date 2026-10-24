@@ -178,3 +178,36 @@ def test_blocking_removes_only_the_afk_tag(store):
     task = store.get(uuid)
     assert records.AFK_TAG not in task.tags
     assert "integration" in task.tags, "procedure tags are not the breaker's business"
+
+
+# -- crash recovery -------------------------------------------------------
+
+
+def test_a_run_lost_to_a_restart_is_released_and_recorded(
+        store, body_store, tmp_path):
+    """pu died mid-session: the claim is still held and the marker is still
+    there. The next tick must admit the run was lost, not leave a ghost."""
+    import json
+
+    from pu import pipeline, sessions
+
+    uuid = store.add("long job", tags=["afk"], kind="research")
+    store.claim(uuid)
+    (tmp_path / "inflight.json").write_text(json.dumps({
+        "task_uuid": uuid, "session_type": "research",
+        "agent_role": "system", "started_at": "2026-10-24T10:00:00+00:00",
+    }), encoding="utf-8")
+
+    session_store = sessions.SessionStore(tmp_path / "sessions")
+    pipeline.tick(
+        store, body_store, session_store, Path(__file__).resolve().parent.parent,
+        tmp_path / "peers.json", tmp_path / "cost_policy.json",
+        session_runner=lambda **k: runner.SessionResult(1, text=""),
+        tracker_path=tmp_path / "tracker.json",
+    )
+
+    lost = [r for r in session_store.runs() if r["outcome"] == "lost"]
+    assert len(lost) == 1 and lost[0]["task_uuid"] == uuid
+    assert not (tmp_path / "inflight.json").exists()
+    task = store.get(uuid)
+    assert any("run lost" in a for a in task.annotations)

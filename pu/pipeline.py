@@ -384,6 +384,58 @@ def _settle(
     return "resolved", answer[:200]
 
 
+# -- crash recovery -------------------------------------------------------
+#
+# A run pu was in the middle of when it stopped. The stale-claim reaper
+# would release the claim two hours later and say nothing about a run; this
+# finds it on the very next tick, because the marker is written at the claim
+# and removed on every exit a live process makes. The tick lock means no
+# run of this process can be in flight while a tick starts, so a marker
+# present then belongs to a process that is gone. (pu vision, 2026-10-24.)
+
+
+def _write_inflight(path: Path, task: records.Task, stype) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "task_uuid": task.uuid,
+            "session_type": stype.name,
+            "agent_role": stype.agent_role,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _clear_inflight(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _recover_lost_run(store, session_store, path: Path, mcp_bridge_url) -> None:
+    try:
+        lost = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    _clear_inflight(path)
+    task = store.get(lost.get("task_uuid") or "") if isinstance(lost, dict) else None
+    if task is None or task.status != "pending":
+        return
+    why = (f"infrastructure: run lost -- pu stopped mid-session "
+           f"(started {lost.get('started_at')})")
+    # A lost run is an infrastructure failure: retried once, counted.
+    outcome, detail = _fail(store, task, why, mcp_bridge_url)
+    session_store.record(
+        task.uuid, lost.get("session_type") or "unknown", "",
+        runner_mod.SessionResult(exit_code=-1), "lost", detail,
+        agent_role=lost.get("agent_role") or "system",
+        extra={"started_by": (f"trigger:{task.trigger}" if task.trigger
+                              else "task")},
+    )
+
+
 # -- the tick -------------------------------------------------------------
 
 
@@ -427,6 +479,8 @@ def _tick(
 
     # Before anything reads the queue: a claim left behind by a process
     # that died is otherwise invisible to every future tick.
+    inflight_path = tracker_path.parent / "inflight.json"
+    _recover_lost_run(store, session_store, inflight_path, mcp_bridge_url)
     guards.release_stale_claims(store, stale_claim_seconds, moment)
     guards.prune_runs(store, tracker_path.parent / "prune.json", moment)
 
@@ -524,7 +578,7 @@ def _tick(
         return dataclasses.replace(_run(
             store, body_store, session_store, unit_root, peers_path,
             candidate, stype, cwd, instructions, session_runner,
-            mcp_bridge_url,
+            mcp_bridge_url, inflight_path,
         ), emitted=emitted)
 
     return TickResult(ran=False, reason="nothing runnable", emitted=emitted)
@@ -533,8 +587,25 @@ def _tick(
 def _run(
     store, body_store, session_store, unit_root, peers_path,
     task, stype, cwd, instructions, session_runner, mcp_bridge_url,
+    inflight_path,
 ) -> TickResult:
     store.claim(task.uuid)
+    _write_inflight(inflight_path, task, stype)
+    try:
+        return _run_claimed(
+            store, body_store, session_store, unit_root, peers_path,
+            task, stype, cwd, instructions, session_runner, mcp_bridge_url)
+    finally:
+        # Cleared on every way out this process survives. Only a process
+        # that dies mid-run leaves it behind, which is exactly what makes
+        # its presence at the next tick mean "lost".
+        _clear_inflight(inflight_path)
+
+
+def _run_claimed(
+    store, body_store, session_store, unit_root, peers_path,
+    task, stype, cwd, instructions, session_runner, mcp_bridge_url,
+) -> TickResult:
 
     prompt = build_prompt(task, body_store.get(task.uuid), unit_root,
                           agent_role=stype.agent_role)
