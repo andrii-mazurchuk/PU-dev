@@ -757,7 +757,8 @@ def make_handler(
                     # a nicety: jq is not present by default on Windows,
                     # and piping JSON through a shell to extract a field
                     # is where the quoting bugs live.
-                    body = body_store.get(parts[1])
+                    uuid = service.full_uuid(store, parts[1])
+                    body = body_store.get(uuid) if uuid else None
                     if body is None:
                         return self._not_found()
                     return self._text(200, body, "text/markdown; charset=utf-8")

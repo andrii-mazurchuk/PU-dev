@@ -298,16 +298,45 @@ def test_unknown_task_is_404(base_url):
     assert excinfo.value.code == 404
 
 
-def test_a_short_uuid_is_refused_rather_than_dropping_the_connection(base_url):
-    """Live 2026-10-23: an 8-char prefix found the task, then the body
-    store refused it with an exception nothing caught, and the caller saw
-    the socket close -- "pu is down" -- instead of a status."""
+def test_a_short_uuid_names_its_task_on_reads_and_writes(base_url):
+    """pu's own listings show 8 characters. A prefix of a permanent uuid is
+    not a renumbering short id, so it is accepted wherever a uuid is."""
+    _, created = post(f"{base_url}/maps", {"destination": "short",
+                                           "body": "the body"})
+    full, prefix = created["uuid"], created["uuid"][:8]
+
+    _, task = get(f"{base_url}/tasks/{prefix}")
+    assert task["uuid"] == full
+    assert get(f"{base_url}/tasks/{prefix}/body")[1] == "the body"
+    _, ticket = post(f"{base_url}/tickets", {"parent": prefix, "title": "t",
+                                            "kind": "task"})
+    assert post(f"{base_url}/tasks/{ticket['uuid'][:8]}/resolve",
+                {"answer": "done"})[1]["uuid"] == ticket["uuid"]
+
+
+def test_a_prefix_too_short_is_refused_not_guessed(base_url):
     _, created = post(f"{base_url}/maps", {"destination": "short"})
-    prefix = created["uuid"][:8]
-    for path in (f"/tasks/{prefix}", f"/tasks/{prefix}/body"):
-        with pytest.raises(HTTPError) as excinfo:
-            get(f"{base_url}{path}")
-        assert excinfo.value.code == 400, path
+    with pytest.raises(HTTPError) as excinfo:
+        get(f"{base_url}/tasks/{created['uuid'][:6]}")
+    assert excinfo.value.code == 400
+
+
+def test_an_ambiguous_prefix_is_refused_with_the_candidates(store, monkeypatch):
+    """Never first-match: a resolve sent to the wrong task loses an answer."""
+    import uuid as uuid_module
+
+    from pu import service, taskstore
+
+    chosen = iter([uuid_module.UUID("abcdef01-0000-4000-8000-000000000001"),
+                   uuid_module.UUID("abcdef01-0000-4000-8000-000000000002")])
+    monkeypatch.setattr(taskstore.uuid_module, "uuid4", lambda: next(chosen))
+    a = store.add("one", kind="task")
+    store.add("two", kind="task")
+
+    with pytest.raises(service.ServiceError, match="matches 2 tasks"):
+        service.full_uuid(store, "abcdef01")
+    # The full uuid is unambiguous by definition.
+    assert service.full_uuid(store, a) == a
 
 
 def test_unknown_route_is_404(base_url):

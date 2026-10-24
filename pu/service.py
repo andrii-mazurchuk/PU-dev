@@ -28,6 +28,7 @@ answer and closes the ticket; the caller rewrites the map body through
 
 from __future__ import annotations
 
+import re
 from typing import Any, Sequence
 
 from pu import (
@@ -49,6 +50,54 @@ def _require(value: Any, name: str) -> Any:
     if value is None or (isinstance(value, str) and not value.strip()):
         raise ServiceError(f"{name} is required")
     return value
+
+
+# -- addressing a task ----------------------------------------------------
+#
+# pu's listings and notifications show the first 8 characters of a uuid,
+# so callers hold prefixes. A prefix is not a Taskwarrior short id (those
+# renumber); it is part of a permanent identifier. Accepted wherever a uuid
+# is, on reads and writes alike, when it names exactly one task -- git's
+# rule for object ids. An ambiguous prefix is refused with the candidates,
+# never first-match: a resolve sent to the wrong task loses an answer.
+
+_FULL_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_PREFIX = re.compile(r"^[0-9a-f-]{8,35}$")
+MIN_PREFIX = 8
+
+
+def full_uuid(store: taskstore.TaskStore, ref: str | None) -> str | None:
+    """The full uuid `ref` names, or None when it names no task. Raises
+    ServiceError for a prefix too short or matching more than one task."""
+    if not ref:
+        return ref
+    ref = ref.strip().lower()
+    if _FULL_UUID.match(ref):
+        return ref
+    if not _PREFIX.match(ref):
+        raise ServiceError(
+            f"not a task uuid: {ref!r} -- give the uuid, or at least its "
+            f"first {MIN_PREFIX} characters")
+    # `uuid.startswith:`, not the bare prefix: an all-digit prefix would
+    # otherwise be read as a short id (measured, Taskwarrior 2.6.1).
+    found = store.export(f"uuid.startswith:{ref}")
+    if not found:
+        return None
+    if len(found) > 1:
+        raise ServiceError(
+            f"{ref!r} matches {len(found)} tasks: "
+            + ", ".join(f"{t.uuid} ({t.description[:40]})" for t in found[:5])
+            + " -- give more of the uuid")
+    return found[0].uuid
+
+
+def _must_exist(store: taskstore.TaskStore, ref: str, what: str) -> str:
+    uuid = full_uuid(store, ref)
+    # A full uuid is returned unlooked-up, so existence is checked here.
+    if uuid is None or store.get(uuid) is None:
+        raise ServiceError(f"no such {what}: {ref}")
+    return uuid
 
 
 # -- the run namespace ----------------------------------------------------
@@ -126,14 +175,15 @@ def list_tasks(
     if kind:
         filters.append(f"kind:{records.check_kind(kind)}")
     if parent:
-        filters.append(f"parent_uuid:{parent}")
+        filters.append(f"parent_uuid:{full_uuid(store, parent) or parent}")
     return [as_dict(t) for t in store.export(*filters)]
 
 
 def get_task(
     store: taskstore.TaskStore, body_store: bodies.BodyStore, uuid: str
 ) -> dict[str, Any] | None:
-    task = store.get(uuid)
+    uuid = full_uuid(store, uuid)
+    task = store.get(uuid) if uuid else None
     if task is None:
         return None
     out = as_dict(task, body=body_store.get(uuid))
@@ -166,7 +216,8 @@ def frontier(
     This deliberately includes human-in-the-loop tickets. A person working
     a map needs to see that the next thing is a grilling ticket -- hiding
     it would make the map look finished when it is not."""
-    extra = [f"parent_uuid:{parent}"] if parent else []
+    extra = ([f"parent_uuid:{full_uuid(store, parent) or parent}"]
+             if parent else [])
     return [as_dict(t) for t in store.ready(*extra, *_hide_runs(None))]
 
 
@@ -181,7 +232,8 @@ def queue(
     conversation that only a person can have. **Wider in one way:** it
     includes `pu.runs`, which every other read hides. Hiding trigger work
     here as well would be a silent outage."""
-    extra = [f"parent_uuid:{parent}"] if parent else []
+    extra = ([f"parent_uuid:{full_uuid(store, parent) or parent}"]
+             if parent else [])
     return [as_dict(t) for t in store.runnable(*extra)]
 
 
@@ -228,8 +280,7 @@ def create_ticket(
     records.check_kind(_require(kind, "kind"))
     _refuse_runs(project)
 
-    if store.get(parent) is None:
-        raise ServiceError(f"no such parent: {parent}")
+    parent = _must_exist(store, parent, "parent")
 
     tag_list = list(tags)
     if afk:
@@ -254,11 +305,12 @@ def wire_blocking(
     `+READY` mean what wayfinder means by the frontier. Wiring is a second
     pass because tickets need uuids before they can reference each other."""
     _require(uuid, "uuid")
-    if store.get(uuid) is None:
-        raise ServiceError(f"no such task: {uuid}")
-    missing = [b for b in blocked_by if store.get(b) is None]
+    uuid = _must_exist(store, uuid, "task")
+    resolved = [full_uuid(store, b) for b in blocked_by]
+    missing = [b for b, r in zip(blocked_by, resolved) if r is None]
     if missing:
         raise ServiceError(f"no such blocker(s): {', '.join(missing)}")
+    blocked_by = resolved
     store.modify(uuid, depends=list(blocked_by))
     return {"uuid": uuid, "blocked_by": list(blocked_by)}
 
@@ -267,9 +319,8 @@ def claim(store: taskstore.TaskStore, uuid: str) -> dict[str, Any]:
     """Claiming is the session's first write, before any work, so that a
     concurrent session skips it. `start` sets `+ACTIVE`; the claim is the
     store's own state rather than a convention layered on top."""
+    uuid = _must_exist(store, uuid, "task")
     task = store.get(uuid)
-    if task is None:
-        raise ServiceError(f"no such task: {uuid}")
     if task.active:
         return {"uuid": uuid, "claimed": False, "reason": "already claimed"}
     store.claim(uuid)
@@ -285,9 +336,8 @@ def resolve(
     gist that goes there is judgement, and belongs to the caller, which
     writes it with `set_body`."""
     _require(answer, "answer")
+    uuid = _must_exist(store, uuid, "task")
     task = store.get(uuid)
-    if task is None:
-        raise ServiceError(f"no such task: {uuid}")
     # Checked before the annotation, not left to `done` to refuse: on a
     # completed task the annotate succeeds and only the `done` fails, so a
     # retry used to append a second answer and then report failure --
@@ -303,8 +353,7 @@ def resolve(
 def set_body(
     store: taskstore.TaskStore, body_store: bodies.BodyStore, uuid: str, body: str
 ) -> dict[str, Any]:
-    if store.get(uuid) is None:
-        raise ServiceError(f"no such task: {uuid}")
+    uuid = _must_exist(store, uuid, "task")
     body_store.set(uuid, body)
     return {"uuid": uuid, "bytes": len(body.encode("utf-8"))}
 
@@ -550,9 +599,8 @@ def dry_run_session_type(
     }
     task_uuid = payload.get("task")
     if task_uuid and store is not None:
+        task_uuid = _must_exist(store, task_uuid, "task")
         task = store.get(task_uuid)
-        if task is None:
-            raise ServiceError(f"no such task: {task_uuid}")
         out["prompt"] = pipeline.build_prompt(
             task, body_store.get(task_uuid) if body_store else None,
             unit_root, agent_role=record["agent_role"])
