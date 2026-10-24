@@ -18,6 +18,7 @@ for six hours is one line and an idle unit writes nothing.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -113,3 +114,55 @@ def ticks(state_dir: Path | None, limit: int = 50) -> list[dict[str, Any]]:
         if len(out) >= limit:
             break
     return out
+
+
+# -- silence --------------------------------------------------------------
+#
+# A dead loop looks exactly like a quiet day: no runs, no errors, nothing.
+# So every tick stamps when it happened, and a tick that finds the previous
+# stamp far older than the heartbeat says so -- once, on the tick that ends
+# the silence. Slots a schedule missed in the gap fire late on this tick
+# (triggers walk forward from their last fire), which is why the message
+# says so. pu being dead outright is the gateway's to notice; it polls
+# health. (pu vision, 2026-10-24.)
+
+HEARTBEAT_FILE = "heartbeat.json"
+DEFAULT_HEARTBEAT_SECONDS = 30
+# Ten missed beats, and never less than ten minutes: a slow tick or one
+# restart is not silence.
+SILENT_BEATS = 10
+SILENT_FLOOR_SECONDS = 600
+
+
+def heartbeat_seconds(environ: dict[str, str] | None = None) -> float:
+    """The interval the gateway pokes at. One value, set where the gateway
+    sets everything else; this only reads it."""
+    raw = (environ if environ is not None else os.environ).get(
+        "PU_HEARTBEAT_SECONDS", "")
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_HEARTBEAT_SECONDS
+    return value if value > 0 else DEFAULT_HEARTBEAT_SECONDS
+
+
+def silence(state_dir: Path, moment: datetime,
+            interval: float = DEFAULT_HEARTBEAT_SECONDS) -> float | None:
+    """Stamp this tick. Returns how many seconds pu went unticked, when
+    that gap counts as silence, else None."""
+    path = Path(state_dir) / HEARTBEAT_FILE
+    gap = None
+    try:
+        last = datetime.fromisoformat(
+            json.loads(path.read_text(encoding="utf-8"))["at"])
+        gap = (moment - last).total_seconds()
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"at": moment.isoformat()}), encoding="utf-8")
+    except OSError:
+        pass
+    if gap is not None and gap > max(SILENT_BEATS * interval, SILENT_FLOOR_SECONDS):
+        return gap
+    return None

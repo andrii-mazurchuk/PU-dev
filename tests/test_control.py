@@ -78,3 +78,20 @@ def test_pause_and_ticks_over_http(store, body_store, tmp_path):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_a_long_gap_between_ticks_is_reported_once(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    t0 = datetime(2026, 10, 24, 8, 0, tzinfo=timezone.utc)
+    assert control.silence(tmp_path, t0) is None, "first tick: nothing to compare"
+    assert control.silence(tmp_path, t0 + timedelta(seconds=30)) is None
+    gap = control.silence(tmp_path, t0 + timedelta(hours=2))
+    assert gap is not None and gap > 3600
+    assert control.silence(tmp_path, t0 + timedelta(hours=2, seconds=30)) is None
+
+
+def test_the_heartbeat_is_read_not_assumed():
+    assert control.heartbeat_seconds({"PU_HEARTBEAT_SECONDS": "15"}) == 15
+    assert control.heartbeat_seconds({}) == 30
+    assert control.heartbeat_seconds({"PU_HEARTBEAT_SECONDS": "nope"}) == 30

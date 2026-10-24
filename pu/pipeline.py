@@ -493,6 +493,16 @@ def _tick(
 
     # Before anything reads the queue: a claim left behind by a process
     # that died is otherwise invisible to every future tick.
+    # Before the gates: silence is about whether ticks happened at all,
+    # and a blocked tick still happened.
+    gap = control.silence(tracker_path.parent, moment, control.heartbeat_seconds())
+    if gap is not None:
+        notify.notify_owner(
+            mcp_bridge_url,
+            f"pu was not ticked for {int(gap // 60)} min. Nothing ran in that "
+            f"time; schedules that came due fire late now, once each.",
+            source_unit=UNIT_NAME)
+
     inflight_path = tracker_path.parent / "inflight.json"
     _recover_lost_run(store, session_store, inflight_path, mcp_bridge_url)
     guards.release_stale_claims(store, stale_claim_seconds, moment)
