@@ -50,6 +50,37 @@ def _require(value: Any, name: str) -> Any:
     return value
 
 
+# -- the run namespace ----------------------------------------------------
+#
+# Trigger-fired work lands in one reserved project, so a schedule firing
+# every morning does not fill the task views -- people's and agents' --
+# with a year of small run-tasks. It is hidden from every read except the
+# queue, which is the one place it must never be hidden from. Only triggers
+# create tasks there. (pu vision, 2026-10-24.)
+
+RUNS_PROJECT = records.RUNS_PROJECT
+
+
+def _in_runs(project: str | None) -> bool:
+    return bool(project) and (project == RUNS_PROJECT
+                              or project.startswith(RUNS_PROJECT + "."))
+
+
+def _hide_runs(project: str | None) -> tuple[str, ...]:
+    """The filter that keeps run-tasks out of a read, unless the caller
+    asked for that namespace by name. `project.not:` excludes nested
+    scopes too, which is the behaviour wanted (measured, Taskwarrior
+    2.6.1)."""
+    return () if _in_runs(project) else (f"project.not:{RUNS_PROJECT}",)
+
+
+def _refuse_runs(project: str | None) -> None:
+    if _in_runs(project):
+        raise ServiceError(
+            f"{RUNS_PROJECT} is reserved for work triggers create; a map or "
+            f"ticket belongs in a project of its own")
+
+
 # -- reads: open to every peer -------------------------------------------
 
 
@@ -83,7 +114,7 @@ def list_tasks(
     status: str = "pending",
     parent: str | None = None,
 ) -> list[dict[str, Any]]:
-    filters: list[str] = []
+    filters: list[str] = list(_hide_runs(project))
     if status:
         filters.append(f"status:{status}")
     if project:
@@ -116,7 +147,7 @@ def list_projects(store: taskstore.TaskStore) -> list[dict[str, Any]]:
     """Every project with open work, and how much. Derived from the tasks
     rather than stored -- there is no project record to go stale."""
     counts: dict[str, int] = {}
-    for task in store.export("status:pending"):
+    for task in store.export("status:pending", *_hide_runs(None)):
         if task.project:
             counts[task.project] = counts.get(task.project, 0) + 1
     return [
@@ -135,7 +166,7 @@ def frontier(
     a map needs to see that the next thing is a grilling ticket -- hiding
     it would make the map look finished when it is not."""
     extra = [f"parent_uuid:{parent}"] if parent else []
-    return [as_dict(t) for t in store.ready(*extra)]
+    return [as_dict(t) for t in store.ready(*extra, *_hide_runs(None))]
 
 
 def queue(
@@ -144,9 +175,11 @@ def queue(
     """What PU itself may select: the frontier narrowed to work an agent
     is allowed to take alone.
 
-    Strictly narrower than `frontier`, and the two must not be merged --
-    that conflation is what would let a session pick up a conversation
-    that only a person can have."""
+    Narrower than `frontier` in what an agent may take, and the two must
+    not be merged -- that conflation is what would let a session pick up a
+    conversation that only a person can have. **Wider in one way:** it
+    includes `pu.runs`, which every other read hides. Hiding trigger work
+    here as well would be a silent outage."""
     extra = [f"parent_uuid:{parent}"] if parent else []
     return [as_dict(t) for t in store.runnable(*extra)]
 
@@ -164,6 +197,7 @@ def create_map(
     """A map is a record with children, never itself worked. It carries no
     `afk` tag and `map` has no session type, so it can never be selected."""
     _require(destination, "destination")
+    _refuse_runs(project)
     uuid = store.add(destination, kind="map", project=project)
     if body:
         body_store.set(uuid, body)
@@ -191,6 +225,7 @@ def create_ticket(
     _require(parent, "parent")
     _require(title, "title")
     records.check_kind(_require(kind, "kind"))
+    _refuse_runs(project)
 
     if store.get(parent) is None:
         raise ServiceError(f"no such parent: {parent}")
@@ -527,16 +562,21 @@ def stats(
     rule for `/stats` and the reason this unit reports numbers rather than
     opinions about them."""
     try:
-        pending = store.export("status:pending")
+        # Open work as the task views show it: without the run namespace,
+        # which is counted on its own line instead.
+        pending = store.export("status:pending", *_hide_runs(None))
+        runs_pending = len(store.export(
+            "status:pending", f"project:{RUNS_PROJECT}"))
         # The same call `queue()` makes, so the two numbers cannot differ.
         # Counting `t.runnable` over all pending work also counted blocked
         # tasks, and stats said 5 while the queue said none.
         runnable_now = len(store.runnable())
-        blocked = len(store.export("status:pending", "+BLOCKED"))
+        blocked = len(store.export(
+            "status:pending", "+BLOCKED", *_hide_runs(None)))
     except taskstore.TaskError:
         # An unreachable or uninitialised store degrades to empty rather
         # than taking the endpoint down with it.
-        pending, runnable_now, blocked = [], 0, 0
+        pending, runs_pending, runnable_now, blocked = [], 0, 0, 0
 
     by_kind: dict[str, int] = {}
     for task in pending:
@@ -545,6 +585,7 @@ def stats(
     return {
         "pending_tasks": len(pending),
         "by_kind": by_kind,
+        "runs_pending": runs_pending,
         "runnable_now": runnable_now,
         "claimed": sum(1 for t in pending if t.active),
         # `+BLOCKED`, not "has depends": a finished blocker blocks nothing.

@@ -680,3 +680,62 @@ def test_a_stdout_only_refusal_carries_its_message():
     err = taskstore.TaskError(["task", "done"], 1, "",
                               "Task c54bf6c3 'b' is neither pending nor waiting.\n")
     assert "neither pending nor waiting" in str(err)
+
+
+# -- the run namespace ----------------------------------------------------
+
+
+def test_run_tasks_are_hidden_from_every_view_but_the_queue(store, body_store):
+    """The rule that matters most: hidden from people's and agents' views,
+    never from the queue -- or trigger work silently never runs."""
+    from pu import service
+
+    run = store.add("digest: fired", tags=["afk"], kind="research",
+                    project="pu.runs")
+    mine = store.add("real work", tags=["afk"], kind="research",
+                     project="hub")
+
+    listed = {t["uuid"] for t in service.list_tasks(store)}
+    assert listed == {mine}
+    assert {t["uuid"] for t in service.frontier(store)} == {mine}
+    assert [p["project"] for p in service.list_projects(store)] == ["hub"]
+    assert {t["uuid"] for t in service.queue(store)} == {run, mine}
+
+    # Asked for by name, it is there.
+    assert {t["uuid"] for t in service.list_tasks(store, project="pu.runs")} \
+        == {run}
+
+    stats = service.stats(store, body_store)
+    assert (stats["pending_tasks"], stats["runs_pending"],
+            stats["runnable_now"]) == (1, 1, 2)
+
+
+def test_nobody_but_a_trigger_writes_into_the_run_namespace(base_url):
+    _, created = post(f"{base_url}/maps", {"destination": "a map"})
+    for path, payload in (
+        ("/maps", {"destination": "sneaky", "project": "pu.runs"}),
+        ("/tickets", {"parent": created["uuid"], "title": "t",
+                      "kind": "task", "project": "pu.runs.x"}),
+    ):
+        with pytest.raises(HTTPError) as excinfo:
+            post(f"{base_url}{path}", payload)
+        assert excinfo.value.code == 400, path
+
+
+def test_a_finished_run_task_is_pruned_after_thirty_days(store, tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from pu import guards
+
+    old = store.add("old run", kind="research", project="pu.runs")
+    store.complete(old)
+    keep = store.add("other work", kind="research", project="hub")
+    store.complete(keep)
+
+    later = datetime.now(timezone.utc) + timedelta(days=31)
+    state = tmp_path / "prune.json"
+    assert guards.prune_runs(store, state, later) == [old]
+    assert store.get(old).status == "deleted"
+    assert store.get(keep).status == "completed"
+    # And not again within the day.
+    assert guards.prune_runs(store, state, later) == []

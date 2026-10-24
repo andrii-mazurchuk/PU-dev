@@ -75,6 +75,10 @@ SESSION_TYPE_FOR_KIND: dict[str, str] = {
 # agent-runnable by accident.
 AFK_TAG = "afk"
 
+# The reserved project trigger-fired work lands in. Hidden from every read
+# but the queue -- see service.py, "the run namespace".
+RUNS_PROJECT = "pu.runs"
+
 
 class RecordError(ValueError):
     """A record that cannot be represented. Raised, never degraded --

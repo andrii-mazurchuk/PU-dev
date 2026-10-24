@@ -147,3 +147,51 @@ def release_stale_claims(
         except taskstore.TaskError:
             continue
     return released
+
+
+# How long a finished run-task stays. The run record -- the report -- is
+# kept forever; the task was only ever the queue entry that carried it.
+RUN_RETENTION_DAYS = 30
+PRUNE_EVERY_SECONDS = 24 * 60 * 60
+
+
+def prune_runs(
+    store: taskstore.TaskStore,
+    state_path: Path,
+    now: datetime | None = None,
+    retention_days: int = RUN_RETENTION_DAYS,
+) -> list[str]:
+    """Delete completed run-tasks older than the retention, once a day.
+
+    Throttled through a state file rather than run every tick: at a 30s
+    heartbeat that is ~2,900 exports a day to find nothing. Returns what
+    was deleted."""
+    moment = now or datetime.now(timezone.utc)
+    try:
+        last = json.loads(Path(state_path).read_text(encoding="utf-8")).get("at")
+        if last and (moment - datetime.fromisoformat(last)).total_seconds() \
+                < PRUNE_EVERY_SECONDS:
+            return []
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+
+    cutoff = (moment - timedelta(days=retention_days)).strftime("%Y-%m-%d")
+    deleted: list[str] = []
+    try:
+        old = store.export("status:completed", f"project:{records.RUNS_PROJECT}",
+                           f"end.before:{cutoff}")
+    except taskstore.TaskError:
+        return deleted
+    for task in old:
+        try:
+            store.delete(task.uuid)
+            deleted.append(task.uuid)
+        except taskstore.TaskError:
+            continue
+    try:
+        Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(state_path).write_text(json.dumps({"at": moment.isoformat()}),
+                                    encoding="utf-8")
+    except OSError:
+        pass
+    return deleted

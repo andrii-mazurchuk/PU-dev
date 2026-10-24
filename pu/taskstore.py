@@ -429,3 +429,8 @@ class TaskStore:
 
     def complete(self, uuid: str) -> None:
         self.run([uuid, "done"])
+
+    def delete(self, uuid: str) -> None:
+        """Taskwarrior's delete is a status, not an erase: the record stays
+        readable under `status:deleted`."""
+        self.run([uuid, "delete"])

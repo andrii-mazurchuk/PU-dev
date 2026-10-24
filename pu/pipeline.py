@@ -345,6 +345,7 @@ def _tick(
     # Before anything reads the queue: a claim left behind by a process
     # that died is otherwise invisible to every future tick.
     guards.release_stale_claims(store, stale_claim_seconds, moment)
+    guards.prune_runs(store, tracker_path.parent / "prune.json", moment)
 
     policy = read_cost_policy(cost_policy_path)
     blocked = check_cost_gate(policy, session_store, moment.strftime("%Y-%m-%d"))
@@ -612,7 +613,10 @@ def emit_due_work(
                     evaluation.items[0] if evaluation.items else None),
                 tags=tags,
                 kind=emits["kind"],
-                project=emits.get("project"),
+                # The run namespace unless the trigger names a project of
+                # its own: a schedule firing daily would otherwise put a
+                # year of run-tasks into every task view.
+                project=emits.get("project") or records.RUNS_PROJECT,
             )
             body_store.set(uuid, body)
             emitted.append({"trigger": name, "task_uuid": uuid,
