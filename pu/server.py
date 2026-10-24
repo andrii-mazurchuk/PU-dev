@@ -713,7 +713,8 @@ def make_handler(
 
                 return self._not_found()
 
-            except (service.ServiceError, records.RecordError) as exc:
+            except (service.ServiceError, records.RecordError,
+                    bodies.BodyError) as exc:
                 return self._json(400, {"error": str(exc)})
             except (typestore.TypeStoreError, triggers.TriggerError) as exc:
                 # Not the caller's mistake: the store itself is unreadable,
@@ -722,6 +723,11 @@ def make_handler(
                 return self._json(500, {"error": str(exc)})
             except taskstore.TaskError as exc:
                 return self._json(502, {"error": str(exc)})
+            except Exception as exc:  # noqa: BLE001
+                # Anything uncaught kills the handler before it writes a
+                # status, and the caller sees a dropped connection -- which
+                # reads as "pu is down" rather than "pu refused this".
+                return self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
         def do_POST(self):  # noqa: N802
             parts, _ = self._path_parts()
@@ -855,6 +861,8 @@ def make_handler(
                 return self._json(400, {"error": str(exc)})
             except taskstore.TaskError as exc:
                 return self._json(502, {"error": str(exc)})
+            except Exception as exc:  # noqa: BLE001 -- see do_GET
+                return self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
     return Handler
 

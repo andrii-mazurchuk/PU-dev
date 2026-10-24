@@ -321,6 +321,18 @@ def test_unknown_task_is_404(base_url):
     assert excinfo.value.code == 404
 
 
+def test_a_short_uuid_is_refused_rather_than_dropping_the_connection(base_url):
+    """Live 2026-10-23: an 8-char prefix found the task, then the body
+    store refused it with an exception nothing caught, and the caller saw
+    the socket close -- "pu is down" -- instead of a status."""
+    _, created = post(f"{base_url}/maps", {"destination": "short"})
+    prefix = created["uuid"][:8]
+    for path in (f"/tasks/{prefix}", f"/tasks/{prefix}/body"):
+        with pytest.raises(HTTPError) as excinfo:
+            get(f"{base_url}{path}")
+        assert excinfo.value.code == 400, path
+
+
 def test_unknown_route_is_404(base_url):
     with pytest.raises(HTTPError) as excinfo:
         get(f"{base_url}/nope")
