@@ -492,6 +492,30 @@ def test_a_schedule_emits_a_task_whose_body_states_there_is_no_payload(
     assert "nothing failed to arrive" in body
 
 
+def test_a_cron_schedule_emits_once_and_names_its_cadence(
+        store, body_store, tmp_path):
+    """A cron schedule has no every_seconds. Reading it raised after the
+    task was created and before the cursor advanced, so every tick made
+    another task."""
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting(
+        name="morning",
+        source={"kind": "schedule", "cron": "0 9 * * *", "tz": "Europe/Warsaw"}))
+
+    # 07:00Z is 09:00 in Warsaw: the slot it names.
+    slot = lambda: datetime(2026, 10, 12, 7, 0, tzinfo=timezone.utc)
+    first = pipeline.emit_due_work(trigger_store, store, body_store, now=slot)
+    created = [e for e in first if "task_uuid" in e]
+    assert len(created) == 1, first
+    assert "`0 9 * * *` (Europe/Warsaw)" in body_store.get(
+        created[0]["task_uuid"])
+    again = pipeline.emit_due_work(trigger_store, store, body_store, now=slot)
+    assert not [e for e in again if "task_uuid" in e], "fired twice for one slot"
+    assert not [e for e in first + again if "error" in e]
+
+
 # -- the dry run ----------------------------------------------------------
 #
 # The one object here whose correctness cannot be read off its own record:

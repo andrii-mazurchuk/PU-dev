@@ -603,11 +603,16 @@ def payload_body(trigger: dict, evaluation) -> str:
         lines += ["", trigger["purpose"]]
 
     if source["kind"] == "schedule":
+        if source.get("cron"):
+            cadence = (f"on `{source['cron']}`"
+                       f" ({source.get('tz') or 'UTC'})")
+        else:
+            cadence = f"every {source['every_seconds']}s"
         lines += [
             "", "## Payload", "",
-            f"None. This is a schedule, firing every "
-            f"{source['every_seconds']}s; it watches no source, so there is "
-            f"nothing to carry and nothing failed to arrive.",
+            f"None. This is a schedule, firing {cadence}; it watches no "
+            f"source, so there is nothing to carry and nothing failed to "
+            f"arrive.",
         ]
     else:
         lines += [
@@ -659,6 +664,11 @@ def emit_due_work(
             # at-least-once model this unit already owns; the other order
             # marks the items seen and loses the work with nobody the
             # wiser.
+            # Built before the task exists: anything that raises after
+            # `add` and before the cursor advances re-creates the task on
+            # every tick. A cron schedule did exactly that once, through a
+            # KeyError in here.
+            body = payload_body(trigger, evaluation)
             uuid = store.add(
                 triggers.fill_title(
                     emits.get("title") or f"{name}: {evaluation.reason}",
@@ -667,7 +677,7 @@ def emit_due_work(
                 kind=emits["kind"],
                 project=emits.get("project"),
             )
-            body_store.set(uuid, payload_body(trigger, evaluation))
+            body_store.set(uuid, body)
             emitted.append({"trigger": name, "task_uuid": uuid,
                             "items": len(evaluation.items)})
         elif evaluation.fired:
