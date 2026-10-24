@@ -435,7 +435,17 @@ def test_a_type_without_an_agent_role_runs_as_system(base_url):
     assert written["agent_role"] == "system"
 
 
-def test_moving_a_live_type_to_another_agent_role_switches_it_off(base_url):
+@pytest.fixture
+def registry(monkeypatch):
+    """The gateway's role registry, stubbed: system plus finance."""
+    from pu import roles
+    known = {"system": "", "finance": "Andrey's personal finance agent."}
+    monkeypatch.setattr(roles, "fetch", lambda url, timeout=3.0: dict(known))
+    return known
+
+
+def test_moving_a_live_type_to_another_agent_role_switches_it_off(
+        base_url, registry):
     """Once a role carries MCP permissions, a role change is a permission
     change -- so it needs approval again, like any other edit."""
     post(f"{base_url}/session-types", a_type())
@@ -452,6 +462,27 @@ def test_moving_a_live_type_to_another_agent_role_switches_it_off(base_url):
                     a_type(enabled=True, agent_role="finance"))
     assert moved["enabled"] is False
     assert moved["agent_role"] == "finance"
+
+
+def test_a_role_the_registry_does_not_hold_is_refused(base_url, registry):
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/session-types", a_type(agent_role="cto"))
+    assert excinfo.value.code == 400
+    assert "not in the gateway's registry" in excinfo.value.read().decode()
+
+
+def test_a_non_system_role_is_refused_while_the_registry_is_unreachable(
+        base_url, monkeypatch):
+    from pu import roles
+
+    def down(url, timeout=3.0):
+        raise roles.Unreachable("connection refused")
+    monkeypatch.setattr(roles, "fetch", down)
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/session-types", a_type(agent_role="finance"))
+    assert excinfo.value.code == 400
+    # System work never depends on the gateway.
+    assert post(f"{base_url}/session-types", a_type())[0] == 201
 
 
 def test_an_agent_role_is_a_name_not_a_path(base_url):

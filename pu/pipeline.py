@@ -53,6 +53,7 @@ from pu import (
     records,
     repo_setup,
     report as report_mod,
+    roles as roles_mod,
     runner as runner_mod,
     session_types as session_types_mod,
     sessions as sessions_mod,
@@ -237,6 +238,7 @@ def build_prompt(
     unit_root: Path,
     extra_context: str = "",
     agent_role: str = session_types_mod.DEFAULT_AGENT_ROLE,
+    role_description: str = "",
 ) -> str:
     """Everything the session gets, assembled here rather than fetched by
     the session itself.
@@ -255,7 +257,8 @@ def build_prompt(
         # Which agent this session acts for. Its memory in mu-agent lives
         # under this name, so a session that is not told reads and writes
         # the wrong namespace -- or none.
-        f"- agent role: `{agent_role}`",
+        f"- agent role: `{agent_role}`"
+        + (f" — {role_description}" if role_description else ""),
     ]
     if task.url:
         lines.append(f"- authoritative source: {task.url}")
@@ -563,6 +566,23 @@ def _tick(
             # out loud rather than silently passed over.
             continue
 
+        # A role that has left the gateway's registry takes its type with
+        # it: switched off, owner told, nothing runs under a role that no
+        # longer means anything. The last copy stands in for a gateway
+        # that does not answer, so a blip stops nothing.
+        exists, role_description = roles_mod.at_launch(
+            stype.agent_role, mcp_bridge_url, tracker_path.parent)
+        if not exists:
+            if type_store is not None and stype.record is not None:
+                type_store.append(dict(stype.record, enabled=False))
+            notify.notify_owner(
+                mcp_bridge_url,
+                f"pu switched off session type {stype.name}: its agent role "
+                f"{stype.agent_role!r} is no longer in the gateway's registry."
+                f"\n\nNothing ran. Give it an existing role and activate it "
+                f"again.", source_unit=UNIT_NAME)
+            continue
+
         # Winning selection repeatedly means it is not resolving: a
         # resolved task is closed and cannot win again. Counted here,
         # before any work, so a session that fails to launch counts too.
@@ -611,7 +631,7 @@ def _tick(
         return dataclasses.replace(_run(
             store, body_store, session_store, unit_root, peers_path,
             candidate, stype, cwd, instructions, session_runner,
-            mcp_bridge_url, inflight_path,
+            mcp_bridge_url, inflight_path, role_description,
         ), emitted=emitted)
 
     return TickResult(ran=False, reason="nothing runnable", emitted=emitted)
@@ -620,14 +640,15 @@ def _tick(
 def _run(
     store, body_store, session_store, unit_root, peers_path,
     task, stype, cwd, instructions, session_runner, mcp_bridge_url,
-    inflight_path,
+    inflight_path, role_description="",
 ) -> TickResult:
     store.claim(task.uuid)
     _write_inflight(inflight_path, task, stype)
     try:
         return _run_claimed(
             store, body_store, session_store, unit_root, peers_path,
-            task, stype, cwd, instructions, session_runner, mcp_bridge_url)
+            task, stype, cwd, instructions, session_runner, mcp_bridge_url,
+            role_description)
     finally:
         # Cleared on every way out this process survives. Only a process
         # that dies mid-run leaves it behind, which is exactly what makes
@@ -638,10 +659,12 @@ def _run(
 def _run_claimed(
     store, body_store, session_store, unit_root, peers_path,
     task, stype, cwd, instructions, session_runner, mcp_bridge_url,
+    role_description="",
 ) -> TickResult:
 
     prompt = build_prompt(task, body_store.get(task.uuid), unit_root,
-                          agent_role=stype.agent_role)
+                          agent_role=stype.agent_role,
+                          role_description=role_description)
     if instructions:
         prompt = "\n\n---\n\n".join([instructions, prompt])
 

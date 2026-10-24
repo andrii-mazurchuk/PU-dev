@@ -31,7 +31,8 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from pu import (
-    bodies, notify, pipeline, records, session_types, taskstore, triggers,
+    bodies, notify, pipeline, records, roles, session_types, taskstore,
+    triggers,
 )
 
 
@@ -737,6 +738,13 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
         previous = with_role(previous)
     record, transition = apply_activation_rules(
         previous, with_role(dict(payload, origin="authored")))
+    # Only an existing role can be named. Checked against the gateway's
+    # registry, strictly: an unreachable registry refuses a non-system role
+    # rather than letting a typo through.
+    try:
+        roles.require(record["agent_role"], notify.bridge_url(), type_store.root)
+    except ValueError as exc:
+        raise ServiceError(str(exc)) from None
     written = type_store.append(record)
 
     if transition == "deactivated_by_edit":

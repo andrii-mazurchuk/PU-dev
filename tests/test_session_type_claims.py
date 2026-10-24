@@ -206,3 +206,32 @@ def test_a_file_that_is_there_is_never_rewritten_behind_a_reader(tmp_path):
     session_types.discover(tmp_path / "committed", store)
 
     assert target.read_text(encoding="utf-8") == "edited by hand\n"
+
+
+def test_a_type_whose_role_vanished_is_switched_off_and_runs_nothing(
+        store, body_store, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from pu import pipeline, roles, runner, sessions
+
+    monkeypatch.setattr(roles, "fetch", lambda url, timeout=3.0: {"system": ""})
+    type_store = typestore.TypeStore(tmp_path / "state")
+    type_store.append({
+        "name": "brief", "purpose": "p", "prompt": "x\n", "grant": "read",
+        "origin": "authored", "enabled": True, "agent_role": "finance",
+        "claims": {"kind": "research", "tags": ["brief"]},
+    })
+    store.add("brief me", tags=["afk", "brief"], kind="research")
+
+    calls = []
+    pipeline.tick(
+        store, body_store, sessions.SessionStore(tmp_path / "s"),
+        Path(__file__).resolve().parent.parent,
+        tmp_path / "peers.json", tmp_path / "cost_policy.json",
+        session_runner=lambda **k: calls.append(k) or runner.SessionResult(0, text="x"),
+        tracker_path=tmp_path / "tracker.json", type_store=type_store,
+        mcp_bridge_url="http://bridge.invalid",
+    )
+    assert type_store.get("brief")["enabled"] is False
+    # Nothing ran under the role that no longer exists.
+    assert all(k["cwd"].name != "brief" for k in calls)
