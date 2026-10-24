@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pu import (
-    ask, bodies, docs, pipeline, records, service, session_types, sops,
+    ask, bodies, control, docs, pipeline, records, service, session_types, sops,
     taskstore, triggers, typestore,
 )
 
@@ -382,6 +382,32 @@ TOOLS = [
         },
     },
     {
+        "name": "list_tick_log",
+        "description": "Why something did or did not run: each tick's decision, most recent first -- a session ran, a gate refused (and which), the unit is paused, nothing was runnable, what triggers created. A decision identical to the previous one is not repeated, so a gate blocked for hours is one entry.",
+        "method": "GET",
+        "path": "/ticks",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "default 50, capped at 500"},
+            },
+        },
+    },
+    {
+        "name": "set_paused",
+        "description": "The kill switch. While paused, triggers still fire and create their work, but no session starts. Pausing one session type is write_session_type with enabled false instead. A running session is left to finish.",
+        "method": "POST",
+        "path": "/pause",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "paused": {"type": "boolean"},
+                "reason": {"type": "string", "description": "shown wherever the pause is reported"},
+            },
+            "required": ["paused"],
+        },
+    },
+    {
         "name": "list_session_runs",
         "description": "Recorded session runs, most recent first: which session type ran, against which task, what it cost, how long it took, how many turns, which tools it was refused, and what it concluded. This is the history of what this unit's agents have actually done. Filter by `task` for one task's runs, or by `agent_role` for everything one agent did.",
         "method": "GET",
@@ -440,6 +466,7 @@ def make_handler(
     ask_store=None,
     type_store=None,
     trigger_store=None,
+    state_dir=None,
 ):
     class Handler(BaseHTTPRequestHandler):
         server_version = "pu/0.1"
@@ -506,7 +533,8 @@ def make_handler(
                 return {}
             try:
                 return pipeline.gate_state(
-                    session_store, unit_root, unit_root / "cost_policy.json"
+                    session_store, unit_root, unit_root / "cost_policy.json",
+                    state_dir=state_dir,
                 )
             except OSError:
                 return {}
@@ -594,6 +622,11 @@ def make_handler(
 
                 if parts == ["gate"]:
                     return self._json(200, self._gate())
+
+                if parts == ["ticks"]:
+                    limit = int(one("limit") or 50)
+                    return self._json(200, {"ticks": control.ticks(
+                        state_dir, min(max(limit, 1), 500))})
 
                 if parts == ["spend"]:
                     if session_store is None:
@@ -748,6 +781,15 @@ def make_handler(
                         project=payload.get("project"),
                     ))
 
+                if parts == ["pause"]:
+                    if state_dir is None:
+                        return self._json(503, {"error": "no state dir wired"})
+                    if not isinstance(payload.get("paused"), bool):
+                        raise service.ServiceError("paused must be true or false")
+                    return self._json(200, control.set_paused(
+                        state_dir, payload["paused"],
+                        str(payload.get("reason") or "")))
+
                 if parts == ["trigger"]:
                     # The gateway pokes an already-running unit here rather
                     # than restarting it. One tick, synchronously: the cost
@@ -861,6 +903,7 @@ def build_server(
     ask_store=None,
     type_store=None,
     trigger_store=None,
+    state_dir=None,
 ) -> ThreadingHTTPServer:
     return ThreadingHTTPServer(
         (host, port),
@@ -868,5 +911,6 @@ def build_server(
             store, body_store, prompts_dir,
             Path(unit_root) if unit_root else Path("."),
             session_store, tick, ask_store, type_store, trigger_store,
+            Path(state_dir) if state_dir else None,
         ),
     )

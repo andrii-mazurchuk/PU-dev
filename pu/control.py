@@ -1,0 +1,115 @@
+"""Two operator facts kept in private storage: the kill switch, and the
+why-not log.
+
+**The kill switch** is one flag. While it is set the tick still evaluates
+triggers -- cursors keep moving and work is still created, so nothing is
+lost while paused -- but it launches nothing. Pausing one session type is
+already `enabled: false` on its record. Whether pressing this must be
+human-only falls under the standards ticket on human-only endpoints; a
+pause is the safe direction, so it is not held back waiting for that.
+
+**The why-not log** answers "why didn't X run?", which until now had an
+answer only for runs that happened. Every tick's decision is appended --
+but a decision identical to the previous one is not, so a gate blocked
+for six hours is one line and an idle unit writes nothing.
+(pu vision, 2026-10-24.)
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+PAUSE_FILE = "paused.json"
+TICK_LOG = "ticks.jsonl"
+
+# ponytail: trimmed by line count on write, not by age. A deduplicated log
+# at a 30s heartbeat stays far under this; move to dated files if it ever
+# does not.
+MAX_LINES = 5000
+KEEP_LINES = 4000
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# -- the kill switch ------------------------------------------------------
+
+
+def paused(state_dir: Path | None) -> dict[str, Any] | None:
+    """The pause record while set, else None. Unreadable means not paused:
+    a corrupt file must not stop the unit, and must not start it either --
+    it simply was never paused."""
+    if state_dir is None:
+        return None
+    try:
+        record = json.loads((Path(state_dir) / PAUSE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) and record.get("paused") else None
+
+
+def set_paused(state_dir: Path, value: bool, reason: str = "") -> dict[str, Any]:
+    record = {"paused": bool(value), "since": _now(), "reason": reason or ""}
+    path = Path(state_dir) / PAUSE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return record
+
+
+# -- the why-not log ------------------------------------------------------
+
+
+def _key(entry: dict[str, Any]) -> tuple:
+    return (entry.get("ran"), entry.get("reason"), entry.get("outcome"),
+            entry.get("task_uuid"), json.dumps(entry.get("emitted") or []))
+
+
+def _lines(path: Path) -> list[str]:
+    try:
+        return path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+
+def note_tick(state_dir: Path, result: dict[str, Any]) -> bool:
+    """Append this tick's decision unless it repeats the last one. A tick
+    that ran a session is always written. Best-effort: losing a log line
+    must never fail a tick. Returns whether a line was written."""
+    path = Path(state_dir) / TICK_LOG
+    lines = _lines(path)
+    if not result.get("ran") and lines:
+        try:
+            if _key(json.loads(lines[-1])) == _key(result):
+                return False
+        except ValueError:
+            pass
+    entry = {"at": _now(), **result}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if len(lines) >= MAX_LINES:
+            path.write_text("\n".join(lines[-KEEP_LINES:]) + "\n",
+                            encoding="utf-8", newline="\n")
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(entry) + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def ticks(state_dir: Path | None, limit: int = 50) -> list[dict[str, Any]]:
+    """Most recent first."""
+    if state_dir is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for line in reversed(_lines(Path(state_dir) / TICK_LOG)):
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+        if len(out) >= limit:
+            break
+    return out

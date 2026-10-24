@@ -46,6 +46,7 @@ from typing import Any, Callable
 
 from pu import (
     bodies,
+    control,
     guards,
     logs_client,
     notify,
@@ -130,6 +131,7 @@ def gate_state(
     unit_root: Path,
     cost_policy_path: Path,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    state_dir: Path | None = None,
 ) -> dict[str, Any]:
     """What the two gates would decide right now, without deciding it.
 
@@ -181,20 +183,29 @@ def gate_state(
 
     cap = policy.get("daily_cost_cap_usd")
     spent = session_store.cost_since(today)
+    # Not a gate -- a person's decision -- but it stops sessions all the
+    # same, so it is reported first and wherever the gates are.
+    pause = control.paused(state_dir)
+    paused_note = (f"paused since {pause.get('since')}"
+                   + (f": {pause['reason']}" if pause.get("reason") else "")
+                   ) if pause else ""
 
     return {
-        "blocked": bool(cost_blocked or usage_blocked),
+        "blocked": bool(pause or cost_blocked or usage_blocked),
+        "paused": pause,
         # The cost gate is reported first because it is the one a person
         # sets themselves, and so the one they can act on.
-        "reason": cost_blocked or usage_blocked or "",
+        "reason": paused_note or cost_blocked or usage_blocked or "",
         # The same facts arranged as label/value/note. Not judgement --
         # "blocked" and the reason are both mechanical readings; this is
         # only the shape a reader can scan.
         "summary": [
             {
                 "key": "Sessions",
-                "value": "blocked" if (cost_blocked or usage_blocked) else "clear",
-                "note": cost_blocked or usage_blocked or "nothing is holding work back",
+                "value": "paused" if pause else (
+                    "blocked" if (cost_blocked or usage_blocked) else "clear"),
+                "note": paused_note or cost_blocked or usage_blocked
+                        or "nothing is holding work back",
             },
             {
                 "key": "Spent today",
@@ -455,19 +466,22 @@ def tick(
     type_store=None,
     trigger_store=None,
 ) -> TickResult:
-    """Do at most one unit of work."""
+    """Do at most one unit of work, and write down what was decided."""
+    tracker_path = tracker_path or (unit_root / "state" / "repeat_tracker.json")
     if not _TICK_LOCK.acquire(blocking=False):
-        return TickResult(ran=False, reason="a tick is already running")
-    try:
-        return _tick(
-            store, body_store, session_store, unit_root, peers_path,
-            cost_policy_path, session_runner, now,
-            tracker_path or (unit_root / "state" / "repeat_tracker.json"),
-            repeat_threshold, stale_claim_seconds, mcp_bridge_url, type_store,
-            trigger_store,
-        )
-    finally:
-        _TICK_LOCK.release()
+        result = TickResult(ran=False, reason="a tick is already running")
+    else:
+        try:
+            result = _tick(
+                store, body_store, session_store, unit_root, peers_path,
+                cost_policy_path, session_runner, now, tracker_path,
+                repeat_threshold, stale_claim_seconds, mcp_bridge_url,
+                type_store, trigger_store,
+            )
+        finally:
+            _TICK_LOCK.release()
+    control.note_tick(tracker_path.parent, result.as_dict())
+    return result
 
 
 def _tick(
@@ -511,6 +525,15 @@ def _tick(
     # Step 4. Past the gates, so a blocked unit has changed nothing; before
     # selection, so work a trigger just created is selectable on this tick.
     emitted = emit_due_work(trigger_store, store, body_store, now)
+
+    # The kill switch. After triggers, so work keeps being created and
+    # nothing is lost while paused; before selection, so nothing launches.
+    pause = control.paused(tracker_path.parent)
+    if pause:
+        return TickResult(
+            ran=False, emitted=emitted,
+            reason=f"paused since {pause.get('since')}"
+                   + (f": {pause['reason']}" if pause.get("reason") else ""))
 
     try:
         types = session_types_mod.discover(
