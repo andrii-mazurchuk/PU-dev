@@ -212,3 +212,23 @@ def test_natively_there_is_no_boundary_and_nothing_is_translated():
     """Runs everywhere, because this is the branch that runs everywhere:
     with no WSL prefix the path is handed back untouched."""
     assert taskstore.path_for_binary("/home/u/.taskrc", ("task",)) == "/home/u/.taskrc"
+
+
+def test_stats_counts_runnable_exactly_as_the_queue_does(store, body_store):
+    """Live 2026-10-23: stats said `runnable_now: 5` while the queue was
+    empty -- the five were agent-runnable but blocked. One number for one
+    thing: stats must equal what the queue would hand out."""
+    from pu import service
+
+    blocker = store.add("first", tags=["afk"], kind="research")
+    blocked = store.add("second", tags=["afk"], kind="execution")
+    store.modify(blocked, depends=[blocker])
+
+    got = service.stats(store, body_store)
+    assert got["runnable_now"] == len(service.queue(store)) == 1
+    assert got["blocked"] == 1
+
+    store.complete(blocker)
+    got = service.stats(store, body_store)
+    assert got["runnable_now"] == len(service.queue(store)) == 1
+    assert got["blocked"] == 0, "a finished blocker blocks nothing"

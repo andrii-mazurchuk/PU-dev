@@ -544,10 +544,15 @@ def stats(
     opinions about them."""
     try:
         pending = store.export("status:pending")
+        # The same call `queue()` makes, so the two numbers cannot differ.
+        # Counting `t.runnable` over all pending work also counted blocked
+        # tasks, and stats said 5 while the queue said none.
+        runnable_now = len(store.runnable())
+        blocked = len(store.export("status:pending", "+BLOCKED"))
     except taskstore.TaskError:
         # An unreachable or uninitialised store degrades to empty rather
         # than taking the endpoint down with it.
-        pending = []
+        pending, runnable_now, blocked = [], 0, 0
 
     by_kind: dict[str, int] = {}
     for task in pending:
@@ -556,9 +561,10 @@ def stats(
     return {
         "pending_tasks": len(pending),
         "by_kind": by_kind,
-        "runnable_now": sum(1 for t in pending if t.runnable and not t.active),
+        "runnable_now": runnable_now,
         "claimed": sum(1 for t in pending if t.active),
-        "blocked": sum(1 for t in pending if t.depends),
+        # `+BLOCKED`, not "has depends": a finished blocker blocks nothing.
+        "blocked": blocked,
         "bodies": body_store.count(),
         "body_bytes": body_store.total_bytes(),
     }
