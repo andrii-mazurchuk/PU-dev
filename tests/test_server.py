@@ -739,3 +739,30 @@ def test_a_finished_run_task_is_pruned_after_thirty_days(store, tmp_path):
     assert store.get(keep).status == "completed"
     # And not again within the day.
     assert guards.prune_runs(store, state, later) == []
+
+
+# -- dry-running a session type -------------------------------------------
+
+
+def test_a_session_type_dry_run_shows_everything_and_writes_nothing(
+        base_url, tmp_path):
+    _, task = post(f"{base_url}/maps", {"destination": "what does it cost"})
+    status, preview = post(f"{base_url}/session-types/dry-run",
+                           a_type(agent_role="finance", task=task["uuid"]))
+    assert status == 200
+    assert preview["agent_role"] == "finance"
+    assert "You summarise." in preview["claude_md"]
+    assert preview["argv"][:2][1] == "-p"
+    assert "- agent role: `finance`" in preview["prompt"]
+    assert "OUTCOME:" in preview["prompt"]
+
+    # Nothing was written: no record, no generated directory.
+    _, listed = get(f"{base_url}/session-types")
+    assert listed["session_types"] == []
+    assert not (tmp_path / "session_types" / "digest").exists()
+
+
+def test_a_dry_run_refuses_what_a_write_would_refuse(base_url):
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/session-types/dry-run", a_type(grant="root"))
+    assert excinfo.value.code == 400

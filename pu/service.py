@@ -466,6 +466,52 @@ def rename_trigger(trigger_store, name: str, to: str) -> dict[str, Any]:
     return written
 
 
+def dry_run_session_type(
+    type_store, payload: dict[str, Any], store: taskstore.TaskStore | None = None,
+    body_store: bodies.BodyStore | None = None, unit_root=None,
+) -> dict[str, Any]:
+    """Show exactly what a draft session type would run as, launching
+    nothing and writing nothing.
+
+    The sibling of `dry_run_trigger`, and exit condition 2's "testable"
+    half: the generated instructions, the tools, where it would run, the
+    model, the agent role and the argv. With `task`, also the full prompt
+    that task would produce -- the one thing a reviewer most needs to read
+    and, until now, could only see after paying for a run."""
+    from pu import runner, typestore
+
+    if not isinstance(payload, dict):
+        raise ServiceError("a session type is a JSON object")
+    draft = {k: v for k, v in payload.items() if k not in ("task", "enabled")}
+    record = typestore.validate(dict(draft, origin="authored"))
+    grant = session_types.GRANTS[record["grant"]]
+
+    out: dict[str, Any] = {
+        "name": record["name"],
+        "agent_role": record["agent_role"],
+        "grant": record["grant"],
+        "allowed_tools": grant.tools or None,
+        "reaches_peers": grant.reaches_peers,
+        "cwd": ("the task's target repository" if grant.runs_in_target_repo
+                else str(type_store.dirs / record["name"])),
+        "model": record.get("model"),
+        "claude_md": typestore.render(record),
+        "argv": runner.build_argv(
+            allowed_tools=grant.tools or None, model=record.get("model"),
+            mcp_bridge_url="<bridge>" if grant.reaches_peers else None),
+        "note": "Nothing was written and nothing was launched.",
+    }
+    task_uuid = payload.get("task")
+    if task_uuid and store is not None:
+        task = store.get(task_uuid)
+        if task is None:
+            raise ServiceError(f"no such task: {task_uuid}")
+        out["prompt"] = pipeline.build_prompt(
+            task, body_store.get(task_uuid) if body_store else None,
+            unit_root, agent_role=record["agent_role"])
+    return out
+
+
 def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
     """Evaluate a draft trigger now, and report what it would do.
 

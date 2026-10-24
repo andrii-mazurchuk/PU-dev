@@ -366,6 +366,26 @@ TOOLS = [
         },
     },
     {
+        "name": "dry_run_session_type",
+        "description": "Show exactly what a draft session type would run as, writing nothing and launching nothing: the generated CLAUDE.md, the tools it would be granted, where it would run, the model, the agent role and the claude argv. Pass `task` to also get the full prompt that task would produce. Takes the same body as write_session_type.",
+        "method": "POST",
+        "path": "/session-types/dry-run",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "purpose": {"type": "string"},
+                "prompt": {"type": "string"},
+                "grant": {"type": "string", "enum": sorted(session_types.GRANTS)},
+                "model": {"type": "string"},
+                "agent_role": {"type": "string"},
+                "claims": {"type": "object"},
+                "task": {"type": "string", "description": "optional task uuid, to preview the full prompt it would produce"},
+            },
+            "required": ["name", "purpose", "prompt", "grant"],
+        },
+    },
+    {
         "name": "dry_run_trigger",
         "description": "Evaluate a draft trigger now and report what it would do, writing nothing: no record, no task, no cursor advance. Returns whether the fetch succeeded, how many items it returned, how many are new, which ones match the predicate, whether it would fire, and the exact task it would create. The only way to find out whether a predicate holds against what a source is actually serving, short of activating the trigger and waiting. Takes the same body as write_trigger; `enabled` is ignored.",
         "method": "POST",
@@ -835,6 +855,12 @@ def make_handler(
                               else service.rename_session_type)
                     return self._json(200, rename(
                         target, parts[1], payload.get("to") or ""))
+
+                if parts == ["session-types", "dry-run"]:
+                    if type_store is None:
+                        return self._json(503, {"error": "no session-type store wired"})
+                    return self._json(200, service.dry_run_session_type(
+                        type_store, payload, store, body_store, unit_root))
 
                 if parts == ["triggers", "dry-run"]:
                     # Before the bare `triggers` branch is irrelevant --

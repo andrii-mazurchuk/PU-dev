@@ -268,9 +268,18 @@ class TypeStore:
         directory = self.dirs / record["name"]
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / "CLAUDE.md"
-        target.write_text(
-            _GENERATED_HEADER
-            + contract_preamble(record["grant"])
-            + record["prompt"].rstrip("\n") + "\n",
-            encoding="utf-8", newline="\n")
+        target.write_text(render(record), encoding="utf-8", newline="\n")
         return target
+
+
+def render(record: dict[str, Any]) -> str:
+    """The generated `CLAUDE.md`, as text. Shared by the write and the dry
+    run, so a preview cannot drift from what a session would be given."""
+    return (_GENERATED_HEADER
+            + contract_preamble(record["grant"])
+            + record["prompt"].rstrip("\n") + "\n")
+
+
+def validate(record: dict[str, Any]) -> dict[str, Any]:
+    """The store's own refusals, without writing anything."""
+    return _validate(record)
