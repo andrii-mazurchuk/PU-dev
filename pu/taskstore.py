@@ -78,13 +78,19 @@ RC_SCHEMA: dict[str, str] = {
 
 class TaskError(RuntimeError):
     """A `task` invocation failed. Carries the binary's own stderr, which
-    is the useful part -- a rejected UDA value says exactly which value."""
+    is the useful part -- a rejected UDA value says exactly which value.
 
-    def __init__(self, argv: Sequence[str], returncode: int, stderr: str):
+    Falls back to stdout when stderr is empty: Taskwarrior prints some
+    refusals there ("Task x is neither pending nor waiting." exits 1 with
+    an empty stderr), and "(no stderr)" hid the cause of a live 502."""
+
+    def __init__(self, argv: Sequence[str], returncode: int, stderr: str,
+                 stdout: str = ""):
         self.argv = list(argv)
         self.returncode = returncode
         self.stderr = stderr.strip()
-        super().__init__(f"task exited {returncode}: {self.stderr or '(no stderr)'}")
+        detail = self.stderr or stdout.strip() or "(no output)"
+        super().__init__(f"task exited {returncode}: {detail}")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -292,7 +298,7 @@ class TaskStore:
         argv = self._argv(args)
         result = self._runner(argv, stdin)
         if result.returncode != 0:
-            raise TaskError(argv, result.returncode, result.stderr)
+            raise TaskError(argv, result.returncode, result.stderr, result.stdout)
         return result
 
     # -- reads ------------------------------------------------------------

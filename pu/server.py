@@ -159,7 +159,7 @@ TOOLS = [
     },
     {
         "name": "resolve_task",
-        "description": "Record a task's answer and close it. Does not touch the parent map's Decisions-so-far: choosing the one-line gist for that is judgement, and the caller writes it with set_body.",
+        "description": "Record a task's answer and close it. Does not touch the parent map's Decisions-so-far: choosing the one-line gist for that is judgement, and the caller writes it with set_body. Refused with 409 when the task is no longer pending, so a retry never overwrites an answer; get_task returns the recorded answer under annotations.",
         "method": "POST",
         "path": "/tasks/{uuid}/resolve",
         "input_schema": {
@@ -855,6 +855,8 @@ def make_handler(
 
                 return self._not_found()
 
+            except service.ConflictError as exc:
+                return self._json(409, {"error": str(exc)})
             except (service.ServiceError, records.RecordError,
                     bodies.BodyError, typestore.TypeStoreError,
                     triggers.TriggerError) as exc:

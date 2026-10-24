@@ -648,3 +648,28 @@ def test_the_rename_routes_answer_and_the_old_name_leaves_the_listing(base_url):
     assert status == 200 and body["name"] == "nightly"
     _, listed = get(f"{base_url}/triggers")
     assert [t["name"] for t in listed["triggers"]] == ["nightly"]
+
+
+def test_resolving_a_finished_task_is_refused_and_keeps_the_first_answer(base_url):
+    """Live 2026-09-27: a retried resolve appended a new answer to an
+    already-completed task, then 502'd -- inviting the next retry. The
+    considered answer was buried under a one-word probe."""
+    _, created = post(f"{base_url}/maps", {"destination": "resolve twice"})
+    uuid = created["uuid"]
+    assert post(f"{base_url}/tasks/{uuid}/resolve",
+                {"answer": "the considered answer"})[0] == 200
+
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/tasks/{uuid}/resolve", {"answer": "probe"})
+    assert excinfo.value.code == 409
+
+    _, task = get(f"{base_url}/tasks/{uuid}")
+    assert task["status"] == "completed"
+    assert task["annotations"] == ["the considered answer"]
+
+
+def test_a_stdout_only_refusal_carries_its_message():
+    from pu import taskstore
+    err = taskstore.TaskError(["task", "done"], 1, "",
+                              "Task c54bf6c3 'b' is neither pending nor waiting.\n")
+    assert "neither pending nor waiting" in str(err)

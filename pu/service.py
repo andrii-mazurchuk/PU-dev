@@ -40,6 +40,11 @@ class ServiceError(ValueError):
     """A request that cannot be served as asked. Surfaces as a 400."""
 
 
+class ConflictError(ServiceError):
+    """The request is well formed but the record is not in a state that
+    allows it. Surfaces as a 409, so a client can tell it from a typo."""
+
+
 def _require(value: Any, name: str) -> Any:
     if value is None or (isinstance(value, str) and not value.strip()):
         raise ServiceError(f"{name} is required")
@@ -100,7 +105,12 @@ def get_task(
     task = store.get(uuid)
     if task is None:
         return None
-    return as_dict(task, body=body_store.get(uuid))
+    out = as_dict(task, body=body_store.get(uuid))
+    # A resolution is an annotation, so without this a caller cannot check
+    # whether an answer landed or what it said. Single reads only; a list
+    # of every task's annotations would be the whole store.
+    out["annotations"] = list(task.annotations)
+    return out
 
 
 def list_projects(store: taskstore.TaskStore) -> list[dict[str, Any]]:
@@ -240,8 +250,16 @@ def resolve(
     gist that goes there is judgement, and belongs to the caller, which
     writes it with `set_body`."""
     _require(answer, "answer")
-    if store.get(uuid) is None:
+    task = store.get(uuid)
+    if task is None:
         raise ServiceError(f"no such task: {uuid}")
+    # Checked before the annotation, not left to `done` to refuse: on a
+    # completed task the annotate succeeds and only the `done` fails, so a
+    # retry used to append a second answer and then report failure --
+    # which invited the next retry. Live 2026-09-27, an answer lost.
+    if task.status != "pending":
+        raise ConflictError(
+            f"task {uuid} is already {task.status}; its answer stands")
     store.annotate(uuid, answer)
     store.complete(uuid)
     return {"uuid": uuid, "resolved": True}
