@@ -26,7 +26,6 @@ A record's long form lives in exactly one of three places: **external**
 |---|---|---|
 | `execution` | yes, with `afk` | `execution` |
 | `research` | yes, with `afk` | `research` |
-| `intake` | yes, with `afk` | `intake` |
 | `task` | no | — |
 | `prototype` | **never** | — |
 | `grilling` | **never** | — |
@@ -72,6 +71,6 @@ is inspectable by hand.
 Choosing the one-line gist is judgement. PU records the answer and closes
 the ticket; the caller rewrites the map body with `set_body`.
 
-**PU does not create tasks on a peer's say-so.** A peer's request becomes
-an `intake` record. A session converts it, or closes it saying what was
-missing.
+**PU does not take untyped requests.** A peer that wants something done
+creates a typed ticket with `create_ticket`. Untyped input from a person
+goes to cu, where a human is.

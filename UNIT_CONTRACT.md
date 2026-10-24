@@ -7,7 +7,6 @@ file and that one disagree, that one is right and this one is the bug.
 
 - The four standard endpoints: `GET /health`, `GET /stats`,
   `GET /prompts/<tier>` (`default`, `reference`), `GET /tools`.
-- `POST /inbox` — the convention for accepting pushed work from a peer.
 - `GET /dashboard` — a **page**-tier dashboard, per the standard's
   "Dashboards" section. Self-contained HTML; the node frames it and
   still owns the chrome.
@@ -31,16 +30,17 @@ file and that one disagree, that one is right and this one is the bug.
   binary is reached through `PU_TASK_CMD`, which on a Windows host is
   `wsl -d Ubuntu -e task`. Nothing outside `taskstore.py` knows this.
 - **One store, one record shape, every source.** A wayfinder ticket, a
-  mirrored GitHub issue and an inbox message are the same record differing
-  by field. There is no per-source partition and no priority ladder;
+  mirrored GitHub issue and a task a trigger emitted are the same record
+  differing by field. There is no per-source partition and no priority ladder;
   ordering is Taskwarrior urgency with per-kind coefficients.
-- **Four typed write doors, no generic CRUD.** The six wayfinding
-  operations; `/inbox` — which can only ever mint an `intake` record
-  for a session to convert; `POST /session-types`, which writes a
-  session-type record and nothing else; and `POST /triggers`, which writes
-  a trigger. Reading is open to every peer.
+- **Three typed write doors, no generic CRUD.** The six wayfinding
+  operations, which are also how a peer that wants something done asks for
+  it (a typed ticket); `POST /session-types`, which writes a session-type
+  record and nothing else; and `POST /triggers`, which writes a trigger.
+  Reading is open to every peer. There is no door for untyped requests:
+  those come from people, and go to cu.
 
-  The third door is one endpoint for create and update rather than a
+  The second door is one endpoint for create and update rather than a
   `POST`/`PUT`/`DELETE` set, and that is what keeps it typed rather than
   CRUD: `name` is the identity and the store is append-only, so a write to
   an existing name is a revision. It cannot set `origin` — a record

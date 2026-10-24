@@ -42,7 +42,7 @@ Check it: `task rc:$TASKRC _unique kind` should not error.
 
 | field | meaning |
 |---|---|
-| `kind` | `map`, `research`, `prototype`, `grilling`, `task`, `execution`, `intake` |
+| `kind` | `map`, `research`, `prototype`, `grilling`, `task`, `execution` |
 | `project` | the effort, dotted; filtering matches nested scopes |
 | `parent_uuid` | the map a ticket belongs to |
 | `depends` | blocking; a blocked task leaves the frontier |

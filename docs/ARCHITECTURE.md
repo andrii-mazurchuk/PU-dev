@@ -8,8 +8,8 @@ system, and it is the only unit that launches `claude -p` sessions.
 Two sentences carry most of the design:
 
 > **Every task is the same record, whatever it came from.** A wayfinder
-> decision ticket, a mirrored GitHub issue, a message a peer pushed at the
-> inbox — one store, one shape. The differences are fields.
+> decision ticket, a mirrored GitHub issue, a task a trigger emitted — one
+> store, one shape. The differences are fields.
 
 > **pu executes ratified work; it never decides what work exists.**
 > Ratification is an act a *session* performs against a written procedure,
@@ -44,8 +44,8 @@ enforced here by construction rather than by convention:
    (start, poll,      │   ├─ /health /stats /prompts     │
     poke /trigger)    │   ├─ /tools                      │
                       │   ├─ reads: open to every peer   │
-   peers ────────────▶│   └─ writes: two typed doors     │
-   (inbox, reads)     ├──────────────────────────────────┤
+   peers ────────────▶│   └─ writes: typed doors only    │
+   (tickets, reads)   ├──────────────────────────────────┤
                       │  service.py   (no HTTP)          │
                       │  pipeline.py  (one tick)         │
                       ├──────────────────────────────────┤
@@ -73,16 +73,13 @@ Two things cross that boundary and are worth naming precisely:
 2. **Sessions pu spawns have no route back in.** Context is assembled
    going in (`pipeline.build_prompt`, `pu/pipeline.py:117`) and the result
    parsed coming out. A session cannot call this unit's API, cannot write
-   to the store, and is not given a token that would let it. This is what
-   makes intake safe.
+   to the store, and is not given a token that would let it.
 
-## The two write doors
+## The write door
 
 Reading is open to every peer. Writing is not, and **the shape of the
 write is the permission** — there is no endpoint that accepts an arbitrary
 task.
-
-### Door 1 — the wayfinding operations
 
 `create_map`, `create_ticket`, `wire_blocking`, `claim_task`,
 `resolve_task`, `set_body`. Typed, in `pu/service.py:148`–`:256`.
@@ -90,6 +87,8 @@ task.
 They exist for a wayfinder session, which runs *outside* pu — it is
 user-invoked and human-in-the-loop, so it can never be a `claude -p`
 session this unit hosts — and which, under enclosure, still has to write.
+A peer unit that wants something done uses the same door: it creates a
+typed ticket.
 
 What that door does **not** grant: it cannot invent an execution task
 outside a map, cannot set urgency, and cannot mark anything agent-runnable
@@ -97,17 +96,10 @@ by default. `afk` on `create_ticket` is an explicit opt-in defaulting to
 false (`pu/service.py:164`), so a ticket type nobody has thought about
 cannot become agent-runnable by accident.
 
-### Door 2 — the inbox
-
-`POST /inbox` (`pu/service.py:262`). Everything else: a peer unit, a
-person, a message forwarded from a chat.
-
-It does not create a task. It mints **exactly one `kind:intake` record**
-and nothing else. An intake *session* is what converts that into real work
-or bounces it saying what was missing.
-
-This is the mechanism behind "pu never decides what work exists". A peer
-can cause work to be *considered*; it cannot cause work to exist.
+There is no door for untyped requests. Untyped input comes from a person,
+and goes to cu, where a human is. pu had one — an inbox minting an
+`intake` record for a session to convert — until 2026-10-24, when it was
+deleted unused (`FLOWS.md` §2).
 
 ## Frontier and queue are two different questions
 
@@ -140,13 +132,12 @@ Dependencies point downward only. Nothing below imports anything above it.
       │
   pipeline.py      one tick: gate → select → claim → run → record
       │
-  ┌───┴──────────────┬──────────────┬─────────────┬──────────────┐
-  service.py      intake.py     guards.py    repo_setup.py   sessions.py
-  the operations  proposal →    the two      preparing a     run artifacts,
-  as functions    tasks, or a   breakers     target repo     /stats aggregates
-                  bounce
-  │               │             │                            │
-  └───────┬───────┴─────────────┘                        runner.py
+  ┌───┴──────────────┬─────────────┬──────────────┐
+  service.py      guards.py    repo_setup.py   sessions.py
+  the operations  the two      preparing a     run artifacts,
+  as functions    breakers     target repo     /stats aggregates
+  │               │                            │
+  └───────┬───────┘                        runner.py
           │                                              claude -p + parsing
   ┌───────┴────────┬──────────┬───────────┐
   taskstore.py   bodies.py  sops.py   session_types.py   logs_client.py
@@ -168,7 +159,6 @@ Dependencies point downward only. Nothing below imports anything above it.
 | `sessions` | local run artifacts, derived aggregates | emit a verdict |
 | `logs_client` | `session_run` entries to the logs peer | raise, ever |
 | `notify` | telling the `owner` role a person is needed | name a unit, or raise |
-| `intake` | validating a proposal, writing it all-or-none | decide what the message meant |
 | `repo_setup` | preparing a target repo non-destructively | overwrite or merge anything |
 | `guards` | the repeat-dispatch breaker, the stale-claim reaper | delete or close a task |
 | `service` | the operations as plain functions | know about HTTP |
@@ -190,7 +180,7 @@ whole definition, and discovery is a filesystem walk
 (`session_types.discover`, `pu/session_types.py:102`). Adding a type is
 dropping a directory in.
 
-Three exist: `intake`, `research`, `execution`.
+Two exist: `research`, `execution`.
 
 What is *not* derived from the tree is the **tool grant**, which lives in
 code (`ALLOWED_TOOLS`, `pu/session_types.py:51`) because what a session
@@ -201,17 +191,16 @@ the sentence telling it not to is a courtesy on top of that.
 
 | type | grant | runs in |
 |---|---|---|
-| `intake` | `Read` + the SOP lookup script | its own directory |
 | `research` | `Read`, `WebSearch`, `WebFetch` + the lookup script | its own directory |
 | `execution` | `Bash`, `Read`, `Write`, `Edit` + the lookup script | **the target repository** |
 
-`intake` and `research` are granted the lookup script specifically
+`research` is granted the lookup script specifically
 (`Bash(python3 ../../scripts/tag_sop_lookup.py:*)`) rather than `Bash`, so
 resolving a mandatory procedure is always possible and reading the
 filesystem generally is not.
 
 Peer tools reach a session only through `PU_MCP_BRIDGE_URL`, and only for
-a type in `REACHES_PEERS` — `research` and `execution`, never `intake`.
+a type in `REACHES_PEERS` — `research` and `execution`.
 The URL is what grants `mcp__mcp-bridge__*`, every tool every peer exposes,
 so the opt-in is a frozenset in code beside the grants rather than a
 consequence of a deployment filling in a variable.

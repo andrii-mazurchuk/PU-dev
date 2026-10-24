@@ -122,8 +122,8 @@ sibling unit. The seam is the *subprocess*, never the argv construction,
 which is built in-process and asserted on.
 
 `scripts/smoke.py` exercises the HTTP surface a peer sees. It is
-read-mostly but **does write** — one inbox message, one throwaway map and
-ticket — so point it at a scratch `--taskdata`, not a store you care
+read-mostly but **does write** — one throwaway map and ticket — so point
+it at a scratch `--taskdata`, not a store you care
 about. It does not spend a session; that is `/trigger`, deliberately
 separate because it costs money.
 
@@ -175,7 +175,6 @@ purpose.
 | a body key that is not a uuid | the path is built from untrusted HTTP input |
 | a multi-line `key:value` to `task` | the binary exits 0, discards the value, **and overwrites the description** |
 | an execution target with no `.git` | an agent with `Write` and no way back |
-| a malformed intake proposal | see `FLOWS.md` §2 |
 
 The first, notably: **no `peers.json` means every session log is silently
 dropped.** It degrades correctly, which is exactly why nobody notices.
@@ -228,13 +227,12 @@ and it is the one failure that reports success.
 Stated so nobody has to rediscover them:
 
 - **The MCP bridge is wired but unproven.** `PU_MCP_BRIDGE_URL` reaches
-  `research` and `execution` sessions (never `intake` — see
-  `DECISIONS.md`). No session has actually called a peer tool yet, because
+  `research` and `execution` sessions (see `DECISIONS.md`). No session has
+  actually called a peer tool yet, because
   no bridge has been running.
 - **No GitHub mirror.** Nothing populates `url`, so a task is always its
   own authority and no external issue is tracked. `repo` is set by hand
-  (`task add ... repo:<path>`) or by an intake proposal; that is the
-  designed path, not a gap.
+  (`task add ... repo:<path>`); that is the designed path, not a gap.
 - **`MODELS` is empty** (`pu/session_types.py:59`). Every session type
   uses whatever the CLI defaults to.
 - **`delivery_policy.json` is still never read here** — and now does not

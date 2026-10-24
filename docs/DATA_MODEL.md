@@ -57,16 +57,15 @@ This is the only field whose export shape has actually moved.
 of `uda.kind.values` as the sort order for the attribute.
 
 ```
-execution, research, intake, task, prototype, grilling, map
+execution, research, task, prototype, grilling, map
 ```
 
-`SESSION_TYPE_FOR_KIND` (`pu/records.py:69`) maps only three of them:
+`SESSION_TYPE_FOR_KIND` (`pu/records.py:69`) maps only two of them:
 
 | kind | session type | why |
 |---|---|---|
 | `execution` | `execution` | changing code in a repository |
 | `research` | `research` | finding a fact a decision waits on |
-| `intake` | `intake` | converting a pushed message into work |
 | `task` | — | wayfinder's do-rather-than-decide type. Absent **for now**: its work is too heterogeneous to have earned a tool grant. |
 | `prototype` | — | human-in-the-loop by nature. Absent **permanently**. |
 | `grilling` | — | human-in-the-loop by nature. Absent **permanently**. |
@@ -101,7 +100,6 @@ source is Taskwarrior's own urgency with a per-kind coefficient, declared
 in `RC_SCHEMA` (`pu/taskstore.py:57`):
 
 ```
-urgency.uda.kind.intake.coefficient    = 6.0
 urgency.uda.kind.research.coefficient  = 4.0
 urgency.uda.kind.execution.coefficient = 2.0
 ```
@@ -158,11 +156,11 @@ file would be a second copy of the schema, and two copies drift.
 ```
 confirmation = off        verbose = nothing        hooks = off
 uda.kind.type        = string   uda.kind.label        = Kind
-uda.kind.values      = execution,research,intake,task,prototype,grilling,map
+uda.kind.values      = execution,research,task,prototype,grilling,map
 uda.url.type         = string   uda.url.label         = URL
 uda.parent_uuid.type = string   uda.parent_uuid.label = Parent
 uda.repo.type        = string   uda.repo.label        = Repo
-urgency.uda.kind.{intake|research|execution}.coefficient = 6.0 | 4.0 | 2.0
+urgency.uda.kind.{research|execution}.coefficient = 4.0 | 2.0
 ```
 
 `render_taskrc` (`pu/taskstore.py:168`) renders **the same schema** as a

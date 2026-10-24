@@ -14,7 +14,6 @@ gateway is the only thing that exposes units to each other.
 |---|---|
 | `200` | a successful read, or a successful non-creating write |
 | `201` | `POST /maps`, `POST /tickets` — something was created |
-| `202` | `POST /inbox` — accepted for consideration, not for doing |
 | `400` | `ServiceError`, `RecordError`, `BodyError` — the request cannot be served as asked |
 | `404` | no such route, no such task, no body, unknown prompt tier |
 | `502` | `TaskError` — the `task` binary itself failed. Carries its stderr. |
@@ -87,7 +86,7 @@ unit-specific. **Mechanical data only — never a verdict** (see
         "research": {"runs": 14, "failures": 1, "cost_usd": 5.02,
                      "avg_duration_ms": 61204, "avg_cost_usd": 0.358}
       },
-      "by_outcome": {"resolved": 22, "bounced": 2, "failed": 3},
+      "by_outcome": {"resolved": 22, "empty": 2, "failed": 3},
       "last_run_at": "2026-09-08T16:40:02.117+00:00"
     }
   }
@@ -212,7 +211,7 @@ An empty catalogue is a supported answer, not a misconfiguration.
 
 ---
 
-# Writes — door 1: the wayfinding operations
+# Writes — the wayfinding operations
 
 ## `POST /maps` → `201`
 
@@ -295,28 +294,6 @@ rewrite a map after a decision lands. Accepts either
 
 No history, no versioning: a map's history is the closed tickets it points
 at.
-
----
-
-# Writes — door 2: the inbox
-
-## `POST /inbox` → `202`
-
-```json
-{"source": "cu", "message": "the request, as worded", "project": "pu"}
-```
-→ `{"uuid": "...", "accepted": true}`
-
-The `202` is exact: **accepted for consideration, not for doing.**
-
-This endpoint cannot mint anything but one `kind:intake` record. The
-message becomes that record's body; its description is
-`intake from <source>: <first line, truncated to 120 chars>`. It is tagged
-`afk`, because converting it is the one thing pu can always do alone.
-
-An intake session later reads it and either creates real tasks from it or
-resolves it with what was missing — so a peer can cause work to be
-*considered* without deciding that work exists.
 
 ---
 
@@ -425,7 +402,7 @@ One question runs at a time for the whole unit.
 
 `running` continues; `done` and `error` are terminal. `answer` is model
 output derived from task descriptions and bodies that other agents and
-`POST /inbox` wrote -- **render it as escaped text, never as markup.**
+`POST /tickets` wrote -- **render it as escaped text, never as markup.**
 
 ## `POST /trigger` → `200`
 

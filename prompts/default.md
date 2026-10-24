@@ -7,11 +7,11 @@ unit in this system that launches `claude -p` sessions.
 
 One store, one record shape. Every task PU knows about is the same record
 whatever it came from — a wayfinder decision ticket, a mirrored GitHub
-issue, a message a peer pushed at the inbox. The differences are fields:
+issue, a task a trigger emitted. The differences are fields:
 
 - `kind` — what resolving it produces, and so which session type runs it.
-  One of `execution`, `research`, `intake`, `task`, `prototype`,
-  `grilling`, `map`. The list is closed; an unknown kind is refused.
+  One of `execution`, `research`, `task`, `prototype`, `grilling`, `map`.
+  The list is closed; an unknown kind is refused.
 - `project` — the effort it belongs to, dotted and hierarchical. Filtering
   by a project also returns the scopes nested under it.
 - `tags` — each tag names a mandatory procedure for that task. Also carries
@@ -33,24 +33,22 @@ addresses a different task.
 unblocked, unclaimed, agent-runnable work, most urgent first.
 
 **Writing is not open, and the shape of the write is the permission.**
-There is no endpoint that takes an arbitrary task. Two doors exist:
+There is no endpoint that takes an arbitrary task. The door is the
+wayfinding operations — `create_map`, `create_ticket`, `wire_blocking`,
+`claim_task`, `resolve_task`, `set_body` — for a session charting or
+working a map.
 
-- The wayfinding operations — `create_map`, `create_ticket`,
-  `wire_blocking`, `claim_task`, `resolve_task`, `set_body` — for a session
-  charting or working a map.
-- `push_inbox_message` — for everyone else. It does not create work to be
-  done. It creates one `intake` record, which a PU session later converts
-  into real tasks or closes with what was missing.
-
-That second door is the one to use if you are another unit and you want
-something done. Say who you are and what you want in your own words; you
-will not get a task, you will get it considered.
+If you are another unit and you want something done, that is your door
+too: create a typed ticket with `create_ticket`, choosing the `kind` that
+says what resolving it produces. A ticket hangs off a map (`parent`), so
+`create_map` first if your work has none. There is no channel for untyped requests.
+If what you have is a person's unshaped input, it belongs at cu, where a
+human is.
 
 ## What it will not do
 
 PU does not decide what work exists. It runs work that is already on the
-queue, and the only way onto that queue from outside is a request a session
-has to read and act on.
+queue, and the only way onto that queue from outside is a typed ticket.
 
 It does not store specifications, decisions, or memory — those live
 elsewhere. A task here is a pointer to work, plus enough to rank it.

@@ -302,6 +302,8 @@ script, narrow because it is the one session that causes work to exist;
 widening it to the whole system's tool surface must not be something a
 deployment can do by filling in an environment variable.
 
+*Superseded 2026-10-24: the inbox and intake were deleted (never used; peers create typed tickets, people go to cu).*
+
 ### The owner is addressed by role, through the bridge
 
 `notify.py` posts to the bridge's `/route` with `to: "owner"`. It never
@@ -348,6 +350,8 @@ Nothing else notifies. A single failed session does not: the breaker
 already covers repeated failure, and a message per failure is how a
 notification channel becomes something a person mutes.
 
+*Superseded 2026-10-24: the inbox and intake were deleted (never used; peers create typed tickets, people go to cu).*
+
 ### Context is assembled going in, and the result parsed coming out
 
 Deterministic retrieval before the run, rather than handing an agent a
@@ -357,6 +361,8 @@ session's budget on finding its own inputs.
 
 The corollary is the load-bearing half: **sessions have no route back into
 this unit**, which is what makes intake safe.
+
+*Superseded 2026-10-24: the inbox and intake were deleted (never used; peers create typed tickets, people go to cu).*
 
 ---
 
@@ -369,10 +375,14 @@ a partition**. Holding them together is what removes the priority ladder,
 what makes blocking work across sources for free, and what collapsed the
 inbox into an ordinary queue entry.
 
+*Superseded 2026-10-24: the inbox and intake were deleted (never used; peers create typed tickets, people go to cu).*
+
 ### Two typed write doors, no generic CRUD
 
 **The shape of the write is the permission.** There is no endpoint that
 accepts an arbitrary task. `ARCHITECTURE.md` §the two write doors.
+
+*Superseded 2026-10-24: the inbox and intake were deleted (never used; peers create typed tickets, people go to cu).*
 
 ### The frontier is not the queue
 
@@ -425,10 +435,14 @@ compensating delete, since Taskwarrior has no transaction; a deleted task
 stays visible under `status:deleted`, so a failed intake leaves a readable
 trace rather than a silent gap.
 
+*Superseded 2026-10-24: the inbox and intake were deleted (never used; peers create typed tickets, people go to cu).*
+
 ### `traces_to` is required on every proposed task
 
 The mechanical half of *intake transcribes, it does not invent*. A task
 with nothing to trace to is one the session made up.
+
+*Superseded 2026-10-24: the inbox and intake were deleted (never used; peers create typed tickets, people go to cu).*
 
 ### The cost gate runs before selection, inside the tick
 

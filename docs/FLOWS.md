@@ -1,6 +1,6 @@
 # Control flows
 
-Five paths traced end to end across modules. Each module's own docstring
+Four paths traced end to end across modules (§2 is retired). Each module's own docstring
 explains its local reasoning; this file is the part no single docstring
 can show you.
 
@@ -111,7 +111,7 @@ exactly what the missing tag means.
 
 Two cases, from `stype.runs_in_target_repo` (`pu/session_types.py:66`):
 
-**Ordinary types** (`intake`, `research`): `cwd = stype.dir`. Claude Code
+**Ordinary types** (`research`): `cwd = stype.dir`. Claude Code
 loads that directory's `CLAUDE.md` natively. `instructions = ""`.
 
 **`execution`**: needs `candidate.repo`. Without one, the task is
@@ -137,8 +137,7 @@ concurrent frontier.
 `build_prompt` (`:117`) assembles everything the session gets — title,
 kind, project, `url`, `repo`, the resolved mandatory procedures with the
 lookup command to run for each, unmatched free-form tags called out
-separately, the body, the existing annotations, and (for intake only) the
-SOP catalogue via `intake_context` (`:177`).
+separately, the body, and the existing annotations.
 
 This is **deterministic retrieval before the run**, not a workspace handed
 to an agent. What the session was given is visible in `prompt.txt`
@@ -160,7 +159,6 @@ killed mid-stream is missing data, not an error.
 |---|---|---|
 | the launch raised | released + annotated `session failed to launch: …` | `launch_failed` |
 | `not result.ok` | released + annotated `session failed (exit N)` | `failed` |
-| intake type | see flow 2 | `converted` / `bounced` / `invalid_proposal` |
 | any other type | annotated with the final message, **completed** | `resolved` |
 | any other type, empty answer | released + annotated `session produced no answer` | `empty` |
 
@@ -183,92 +181,13 @@ Then two records are written, in this order:
 
 ---
 
-## 2. An inbox message becomes work
+## 2. Removed: an inbox message became work
 
-The path that carries the unit's central invariant, so it is worth reading
-in full.
-
-```
-  peer ──POST /inbox──▶ service.push_inbox ──▶ ONE kind:intake record
-                                                (+afk, message → body)
-                                                        │
-                            a later tick selects it ────┘
-                                                        │
-                            intake session runs ────────┘
-                                     │  returns TEXT. no write access.
-                                     ▼
-                        intake.extract_block ──▶ intake.validate
-                                                  │        │
-                                        {"bounce"}│        │{"tasks": [...]}
-                                                  ▼        ▼
-                                    annotate + close   intake.apply
-                                                       all-or-none
-```
-
-### The endpoint cannot create work (`pu/service.py:262`)
-
-`push_inbox` mints one record and nothing else: `kind:intake`, tagged
-`afk`, description `intake from <source>: <first line>`, the full message
-written to the body store. `202`.
-
-There is no argument it accepts that would produce anything else.
-
-### The session proposes; `intake.py` writes
-
-The session (`session_types/intake/CLAUDE.md`) is granted `Read` and the
-SOP lookup script. **It has no write access to the store at all.** Its
-final message is the only thing that leaves it.
-
-`extract_block` (`pu/intake.py:46`) finds the JSON: fenced `` ```json ``
-blocks first, in order, then the outermost braces as a fallback — a model
-asked for JSON will often wrap it in a sentence. A truncated final fence
-is tolerated. A missing or unparseable block **raises**; guessing at what
-was meant is exactly the coercion this design refuses.
-
-`validate` (`pu/intake.py:84`) checks the whole proposal **before any of
-it is written**, and raises rather than coercing to a default. A silent
-default here would mean a task nobody asked for, of a kind nobody chose,
-entering a queue an agent then acts on. Per task it requires:
-
-- `title`, non-empty
-- `kind`, through `records.check_kind` — the closed vocabulary
-- `traces_to`, non-empty — the sentence in the message this task came
-  from. This is the mechanical half of *intake transcribes, it does not
-  invent*: a task with nothing to trace to is one the session made up.
-- `tags`, a list of strings if present
-
-Or a `bounce`, whose `condition` must be one of four
-(`pu/intake.py:33`) and which must carry a reason:
-
-| condition | means |
-|---|---|
-| `no_stateable_outcome` | never says what would be true once done |
-| `no_placeable_target` | no project or repo it belongs to |
-| `needs_a_map` | resolving it means choosing between options |
-| `material_ambiguity` | two readings, two different pieces of work |
-
-A bounce is a **normal, correct outcome** — the message was read, and the
-answer is that it cannot become work as written.
-
-`apply` (`pu/intake.py:147`) creates the tasks, annotating each with
-`from intake, traces to: …`. **All or none**: if a write fails partway,
-every task already created is deleted in a compensating pass. Taskwarrior
-has no transaction, and a deleted task remains visible under
-`status:deleted`, so a failed intake leaves a readable trace rather than a
-silent gap.
-
-### Why this is stronger than trusting the session
-
-The session never calls an endpoint. It returns a shape, validated against
-a closed vocabulary by code it cannot reach. **A session cannot write a
-task pu did not approve** — which is a different and much stronger
-property than trusting it to call the right endpoint with the right
-arguments.
-
-The judgement that remains — what the message meant, how to split it,
-whether an agent may do it alone — lives in the session's own `CLAUDE.md`,
-where a human can read and edit it. Nothing in `intake.py` decides
-anything; it validates a shape and performs writes.
+Deleted on 2026-10-24, along with `POST /inbox`, the `intake` kind and
+session type, and `pu/intake.py`. The inbox was wired into cu and au and
+never used. A peer that knows what it wants creates a typed ticket
+(`create_ticket`, flow 3); untyped input from a person goes to cu, where a
+human is. The section number is kept so references to §3–§5 stay valid.
 
 ---
 

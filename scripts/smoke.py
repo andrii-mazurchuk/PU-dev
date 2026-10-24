@@ -3,8 +3,8 @@
 
     python3 scripts/smoke.py [--base-url http://127.0.0.1:9001]
 
-Read-mostly, but it does write: it pushes one inbox message and creates a
-throwaway map and ticket, then reports what it saw. Point it at a scratch
+Read-mostly, but it does write: it creates a throwaway map and tickets,
+then reports what it saw. Point it at a scratch
 `--taskdata`, not at a store you care about.
 
 This exercises the HTTP surface a peer actually sees. It does **not** spend
@@ -102,13 +102,6 @@ def main() -> int:
           hitl["uuid"] not in queue_uuids)
     check("queue does offer the research ticket", afk["uuid"] in queue_uuids)
 
-    # -- the inbox door
-    _, accepted = call(base, "/inbox", {"source": "smoke",
-                                        "message": "have a look at the thing"})
-    _, intake_task = call(base, f"/tasks/{accepted['uuid']}")
-    check("inbox mints exactly one intake record",
-          intake_task["kind"] == "intake" and intake_task["runnable"] is True)
-
     # -- the refusals
     try:
         call(base, "/tickets", {"parent": map_uuid, "title": "x", "kind": "nonsense"})
@@ -121,8 +114,7 @@ def main() -> int:
         print(f"{failures} check(s) failed.")
         return 1
     print("all checks passed.")
-    print(f"\nLeft behind in the store: map {map_uuid} and its tickets, "
-          f"plus intake record {accepted['uuid']}.")
+    print(f"\nLeft behind in the store: map {map_uuid} and its tickets.")
     return 0
 
 

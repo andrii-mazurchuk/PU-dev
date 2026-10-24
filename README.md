@@ -9,8 +9,8 @@ selects what to run from a queue.
 ## The idea in one paragraph
 
 Every task is the **same record**, whatever it came from — a wayfinder
-decision ticket, a mirrored GitHub issue, a message a peer pushed at the
-inbox. The differences are fields, not separate stores. Holding them
+decision ticket, a mirrored GitHub issue, a task a trigger emitted. The
+differences are fields, not separate stores. Holding them
 together is what removes the priority ladder: ordering across every source
 is Taskwarrior's own urgency with a coefficient per kind, so retuning what
 gets worked next is configuration rather than an `if`, and the ordering
@@ -71,17 +71,19 @@ One more Windows trap: a shell may rewrite a `/tmp/...` argument into a
 Windows path before the process ever sees it. Git Bash does. Pass WSL paths
 from PowerShell, or with `MSYS_NO_PATHCONV=1`.
 
-## The two write doors
+## The write door
 
 Reading is open to every peer. Writing is not, and the shape of the write
 *is* the permission — there is no endpoint that accepts an arbitrary task.
 
-- **The wayfinding operations** — create a map, create a child ticket, wire
-  blocking, read the frontier, claim, resolve. For an interactive wayfinder
-  session, which runs outside this unit and still has to write.
-- **`/inbox`** — everyone else. It cannot create work to be done; it mints
-  one `intake` record, and a session converts that into tasks or bounces
-  it saying what was missing.
+**The wayfinding operations** — create a map, create a child ticket, wire
+blocking, read the frontier, claim, resolve. For an interactive wayfinder
+session, which runs outside this unit and still has to write, and for a
+peer that knows what it wants done: it creates a typed ticket.
+
+There is no door for untyped requests. Untyped input from a person goes to
+cu, where a human is. (pu had an inbox for this until 2026-10-24; it was
+wired into cu and au and never used.)
 
 ## Frontier and queue are not the same query
 
@@ -101,9 +103,7 @@ code change. The tool grant is in code, because what a session can reach is
 a security decision and belongs where it gets reviewed.
 
 Sessions this unit spawns have **no way back into it**. Context is
-assembled going in and the result parsed coming out. That is what makes
-intake safe: it returns a *proposal*, validated against the closed
-vocabulary and written whole or not at all.
+assembled going in and the result parsed coming out.
 
 `execution` is the exception to everything above — it runs with the target
 repository as its working directory, so that repo's own conventions and
@@ -214,7 +214,6 @@ operations, and the register of load-bearing decisions. Start at
 | `ask` | one question, one session, polled for an answer |
 | `logs_client` | best-effort `session_run` entries to whoever stores logs |
 | `notify` | best-effort word to the `owner` role when a person is needed |
-| `intake` | validating a proposal, and writing it all-or-none |
 | `repo_setup` | preparing a target repo, non-destructively |
 | `pipeline` | one tick: gate, select, claim, run, record |
 | `service` | the operations as plain functions. No HTTP |

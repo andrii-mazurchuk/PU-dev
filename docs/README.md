@@ -17,23 +17,22 @@ After that the order depends on what you came to do:
 |---|---|
 | understand the system at all | `ARCHITECTURE.md` |
 | change what a task *is*, or add a kind | `DATA_MODEL.md`, then `DECISIONS.md` |
-| add or change an endpoint | `HTTP_API.md`, then `ARCHITECTURE.md` §the two write doors |
+| add or change an endpoint | `HTTP_API.md`, then `ARCHITECTURE.md` §the write door |
 | debug a tick that did the wrong thing | `FLOWS.md` §1, then `DECISIONS.md` |
-| understand why intake cannot invent work | `FLOWS.md` §2 |
 | deploy, register, or configure it | `OPERATIONS.md` |
 | change something that looks redundant | **`DECISIONS.md`, first, without exception** |
 
 ## The files
 
 - **`ARCHITECTURE.md`** — what this unit is and is not, where its boundary
-  runs, the module map and which way dependencies point, the two write
-  doors, and why the session layer has no way back in.
+  runs, the module map and which way dependencies point, the write door,
+  and why the session layer has no way back in.
 - **`DATA_MODEL.md`** — the universal record, the closed vocabularies, how
   ordering and runnability are computed, the Taskwarrior schema, and every
   byte this unit writes to disk.
 - **`HTTP_API.md`** — every endpoint, in full: parameters, request and
   response shapes, status codes, and the raw-text body path.
-- **`FLOWS.md`** — five control flows traced end to end across modules,
+- **`FLOWS.md`** — four control flows traced end to end across modules,
   with `file:line` anchors.
 - **`OPERATIONS.md`** — configuration, running it, the Windows/WSL
   arrangement, verification, what degrades versus what raises, and
