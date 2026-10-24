@@ -404,10 +404,10 @@ def test_firing_twice_creates_two_tasks_and_a_quiet_tick_creates_none(
         trigger_store, store, body_store, now=at(),
         fetch=json_source([{"id": "a"}]))
     again = pipeline.emit_due_work(
-        trigger_store, store, body_store, now=at(10),
+        trigger_store, store, body_store, now=at(400),
         fetch=json_source([{"id": "a"}]))
     second = pipeline.emit_due_work(
-        trigger_store, store, body_store, now=at(20),
+        trigger_store, store, body_store, now=at(800),
         fetch=json_source([{"id": "a"}, {"id": "b"}]))
 
     assert len(first) == 1 and len(second) == 1
@@ -426,9 +426,65 @@ def test_a_failed_fetch_creates_nothing_and_leaves_the_cursor_alone(
 
     assert pipeline.emit_due_work(
         trigger_store, store, body_store, now=at(),
-        fetch=lambda url: (503, b"")) == ()
+        fetch=lambda url: (500, b"")) == ()
     assert store.export("status:pending") == []
     assert trigger_store.cursor("posts")["seen"] == []
+
+
+def test_a_watch_fetches_at_most_every_interval(store, body_store, tmp_path):
+    """2,880 fetches a day per watch at a 30s heartbeat is how a source
+    starts refusing. Default five minutes, or the trigger's own."""
+    from pu import pipeline
+
+    calls = []
+
+    def counting(url):
+        calls.append(url)
+        return 200, b"[]"
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting())
+    for offset in (0, 30, 60, 290):
+        pipeline.emit_due_work(trigger_store, store, body_store,
+                               now=at(offset), fetch=counting)
+    assert len(calls) == 1
+    pipeline.emit_due_work(trigger_store, store, body_store,
+                           now=at(301), fetch=counting)
+    assert len(calls) == 2
+
+
+def test_a_refusing_source_is_backed_off_and_a_success_resets_it(
+        store, body_store, tmp_path):
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting(source={
+        "kind": "http-json", "url": "http://example/feed.json",
+        "every_seconds": 30}))
+
+    told = pipeline.emit_due_work(trigger_store, store, body_store, now=at(),
+                                  fetch=lambda url: (429, b"", "600"))
+    assert "backing off" in told[0]["error"]
+    # Retry-After honoured: nothing is fetched inside the ten minutes.
+    calls = []
+    pipeline.emit_due_work(trigger_store, store, body_store, now=at(300),
+                           fetch=lambda url: calls.append(url) or (200, b"[]"))
+    assert calls == []
+    pipeline.emit_due_work(trigger_store, store, body_store, now=at(601),
+                           fetch=lambda url: calls.append(url) or (200, b"[]"))
+    assert len(calls) == 1
+    assert "backoff_until" not in trigger_store.cursor("posts")
+
+
+def test_without_retry_after_the_wait_doubles_up_to_an_hour():
+    moment = FIXED
+    cursor = triggers.after_fetch({}, moment, 503)
+    assert cursor["backoff_seconds"] == 60
+    cursor = triggers.after_fetch(cursor, moment, 503)
+    assert cursor["backoff_seconds"] == 120
+    for _ in range(10):
+        cursor = triggers.after_fetch(cursor, moment, 503)
+    assert cursor["backoff_seconds"] == triggers.MAX_BACKOFF_SECONDS
 
 
 def test_one_broken_trigger_does_not_silence_the_others(

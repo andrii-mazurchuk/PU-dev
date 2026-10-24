@@ -164,6 +164,14 @@ def validated(record: dict[str, Any]) -> dict[str, Any]:
                 "interval is the whole condition")
     elif not source.get("url"):
         raise TriggerError("a source needs a url")
+    elif source.get("every_seconds") is not None:
+        try:
+            if float(source["every_seconds"]) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise TriggerError(
+                "every_seconds on a watch is how often it may fetch: a "
+                "positive number of seconds") from None
 
     emits = record.get("emits")
     if emits is not None:
@@ -341,12 +349,14 @@ def cron_due(source: dict[str, Any], cursor: dict[str, Any],
 # -- reading a source -----------------------------------------------------
 
 
-def http_fetch(url: str, timeout: float = 10.0) -> tuple[int, bytes]:
+def http_fetch(url: str, timeout: float = 10.0) -> tuple:
+    """`(status, body)`, plus a third element -- the `Retry-After` header --
+    when the source refused. A fetch callable may return just the pair."""
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
-        return exc.code, b""
+        return exc.code, b"", (exc.headers or {}).get("Retry-After")
     except Exception:
         # Any transport failure is one thing to this module: unknown. The
         # distinction between a refused connection, a timeout and a DNS
@@ -435,7 +445,7 @@ def read_source(source: dict[str, Any],
                 ) -> tuple[bool, list[dict[str, Any]], str]:
     """`(ok, items, reason)`. `ok` is false for anything that is not a 2xx,
     and then the items are empty and nothing may be concluded from them."""
-    status, raw = fetch(source["url"])
+    status, raw = fetch(source["url"])[:2]
     if not 200 <= status < 300:
         return False, [], f"fetch did not succeed (status {status})"
     try:
@@ -502,6 +512,59 @@ def matching(items: list[dict[str, Any]],
 
 
 # -- the store, and the cursors -------------------------------------------
+
+
+# -- how often a watch may fetch ------------------------------------------
+#
+# A watch used to fetch on every tick. At a 30s heartbeat that is 2,880
+# fetches a day per watch, and a source that rate-limits will refuse it.
+# So a watch fetches at most every `source.every_seconds` (default five
+# minutes, never faster than the heartbeat), and backs off when a source
+# says no: a 429 or 503 honours `Retry-After`, or else waits twice as long
+# each time up to an hour, and a success resets it. The trigger dry run
+# ignores all of this -- it is pressed on purpose. (pu vision follow-up,
+# 2026-10-24.)
+
+DEFAULT_FETCH_SECONDS = 300
+MAX_BACKOFF_SECONDS = 3600
+BACKOFF_STATUSES = (429, 503)
+
+
+def fetch_due(source: dict[str, Any], cursor: dict[str, Any],
+              moment: datetime, floor: float = 0) -> tuple[bool, str]:
+    """Whether a watching trigger may fetch now. A schedule always may: it
+    fetches nothing."""
+    if source.get("kind") == "schedule":
+        return True, ""
+    until = cursor.get("backoff_until")
+    if until and moment < datetime.fromisoformat(until):
+        return False, f"backing off until {until}"
+    interval = max(float(source.get("every_seconds") or DEFAULT_FETCH_SECONDS),
+                   floor)
+    age = _age_seconds(cursor.get("fetched_at"), moment)
+    if age is not None and age < interval:
+        return False, "fetched recently"
+    return True, ""
+
+
+def after_fetch(cursor: dict[str, Any], moment: datetime, status: int,
+                retry_after: str | None = None) -> dict[str, Any]:
+    """The cursor's fetch bookkeeping after one attempt."""
+    out = dict(cursor, fetched_at=moment.isoformat())
+    if status in BACKOFF_STATUSES:
+        try:
+            wait = float(retry_after) if retry_after else None
+        except ValueError:
+            wait = None
+        if wait is None:
+            wait = min(max(float(cursor.get("backoff_seconds") or 0) * 2, 60),
+                       MAX_BACKOFF_SECONDS)
+        out["backoff_seconds"] = wait
+        out["backoff_until"] = (moment + timedelta(seconds=wait)).isoformat()
+    elif 200 <= status < 300:
+        out.pop("backoff_seconds", None)
+        out.pop("backoff_until", None)
+    return out
 
 
 def _now() -> datetime:

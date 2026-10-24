@@ -853,9 +853,26 @@ def emit_due_work(
     for trigger in trigger_store.enabled():
         name = trigger["name"]
         cursor = trigger_store.cursor(name)
+        moment = now()
+        # A watch fetches at most every source.every_seconds, and not at
+        # all while a source has told it to back off. Skipped silently: a
+        # watch that is simply not due is not news.
+        due, _ = triggers.fetch_due(trigger["source"], cursor, moment,
+                                    floor=control.heartbeat_seconds())
+        if not due:
+            continue
+        attempt: dict[str, Any] = {}
+
+        def recording(url, _fetch=fetch or triggers.http_fetch,
+                      _attempt=attempt):
+            result = _fetch(url)
+            _attempt["status"] = result[0]
+            _attempt["retry_after"] = result[2] if len(result) > 2 else None
+            return result
+
         try:
-            kwargs = {"fetch": fetch} if fetch is not None else {}
-            evaluation = triggers.evaluate(trigger, cursor, now=now, **kwargs)
+            evaluation = triggers.evaluate(trigger, cursor, now=now,
+                                           fetch=recording)
         except triggers.TriggerError as exc:
             # ponytail: reported in the tick result and nowhere else, so a
             # permanently broken trigger is visible only to whoever reads a
@@ -901,7 +918,19 @@ def emit_due_work(
             emitted.append({"trigger": name, "fired": True,
                             "note": "no emits, so no task was created"})
 
-        if evaluation.advance:
-            trigger_store.save_cursor(
-                name, triggers.advanced(cursor, evaluation, now=now))
+        updated = triggers.advanced(cursor, evaluation, now=now)
+        if "status" in attempt:
+            # Carried over the advance, which rebuilds the cursor from its
+            # own four fields and would otherwise drop the fetch history.
+            for key in ("fetched_at", "backoff_seconds", "backoff_until"):
+                if key in cursor:
+                    updated.setdefault(key, cursor[key])
+            updated = triggers.after_fetch(updated, moment, attempt["status"],
+                                           attempt["retry_after"])
+            if updated.get("backoff_until") not in (None, cursor.get("backoff_until")):
+                emitted.append({"trigger": name, "error":
+                                f"the source refused (status {attempt['status']}); "
+                                f"backing off until {updated['backoff_until']}"})
+        if updated != cursor:
+            trigger_store.save_cursor(name, updated)
     return tuple(emitted)

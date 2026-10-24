@@ -311,7 +311,7 @@ TOOLS = [
                         "url": {"type": "string"},
                         "items_path": {"type": "string", "description": "dotted path to the list of items, when a json source does not return one at the top level"},
                         "id_path": {"type": "string", "description": "dotted path to an item's stable identity; defaults to guid, id, link or url"},
-                        "every_seconds": {"type": "number", "description": "schedule only: the interval"},
+                        "every_seconds": {"type": "number", "description": "a schedule: the interval. A watch (http-json, rss): how often it may fetch, default 300, never faster than the heartbeat. A watch also backs off when its source answers 429 or 503."},
                     },
                     "required": ["kind"],
                 },
