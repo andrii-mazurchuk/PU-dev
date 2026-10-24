@@ -14,8 +14,9 @@ Order of operations, and each is load-bearing:
    sooner or later. A second tick declines rather than queueing: two
    sessions running at once is not a busier unit, it is two sessions
    racing for the same top-of-queue task.
-2. **Collect stale claims**, before anything reads the queue -- a claim
-   left by a process that died is otherwise invisible forever.
+2. **Recover a lost run, report stale claims**, before anything reads the
+   queue. A run this process lost is released; a claim anyone else holds
+   is only ever reported.
 3. **Cost gate before selection**, on every path into this function. A
    gate that runs after selection can be skipped by whatever selected
    differently, and a gate an external trigger can route around is not a
@@ -535,7 +536,16 @@ def _tick(
 
     inflight_path = tracker_path.parent / "inflight.json"
     _recover_lost_run(store, session_store, inflight_path, mcp_bridge_url)
-    guards.release_stale_claims(store, stale_claim_seconds, moment)
+    for stale in guards.newly_stale(
+            store, tracker_path.parent / "stale_claims.json",
+            stale_claim_seconds, moment):
+        notify.notify_owner(
+            mcp_bridge_url,
+            f"A trigger-created task has been claimed for over a day and "
+            f"nothing is working it.\n\n{stale.description}\ntask "
+            f"{stale.uuid}\n\npu does not release claims. Release it "
+            f"(task {stale.uuid} stop) or resolve it.",
+            source_unit=UNIT_NAME)
     guards.prune_runs(store, tracker_path.parent / "prune.json", moment)
 
     policy = read_cost_policy(cost_policy_path)

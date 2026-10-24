@@ -31,7 +31,7 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from pu import (
-    bodies, mcpstore, notify, pipeline, records, roles, session_types,
+    bodies, guards, mcpstore, notify, pipeline, records, roles, session_types,
     taskstore, triggers,
 )
 
@@ -679,6 +679,8 @@ def stats(
         "pending_tasks": len(pending),
         "by_kind": by_kind,
         "runs_pending": runs_pending,
+        # Trigger-created tasks claimed over a day: reported, never released.
+        "stale_run_claims": len(guards.stale_run_claims(store)),
         "runnable_now": runnable_now,
         "claimed": sum(1 for t in pending if t.active),
         # `+BLOCKED`, not "has depends": a finished blocker blocks nothing.

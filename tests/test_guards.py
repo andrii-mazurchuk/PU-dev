@@ -93,32 +93,31 @@ def test_a_task_that_resolves_first_time_is_never_blocked(
     assert result.outcome.startswith("resolved")
 
 
-# -- the stale-claim reaper -----------------------------------------------
+# -- stale claims: reported, never released -------------------------------
 
 
-def test_a_fresh_claim_is_left_alone(store):
-    uuid = store.add("work", tags=["afk"], kind="research")
-    store.claim(uuid)
-    assert guards.release_stale_claims(store, max_age_seconds=3600) == []
-    assert store.get(uuid).active is True
+def test_a_stale_run_claim_is_reported_once_and_never_released(store, tmp_path):
+    run = store.add("digest: fired", tags=["afk"], kind="research",
+                    project="pu.runs")
+    mine = store.add("a person's task", kind="task", project="hub")
+    store.claim(run)
+    store.claim(mine)
+
+    later = datetime.now(timezone.utc) + timedelta(days=2)
+    state = tmp_path / "stale.json"
+    assert [t.uuid for t in guards.newly_stale(store, state, now=later)] == [run]
+    assert guards.newly_stale(store, state, now=later) == [], "once"
+
+    # Nothing is released -- neither the run-task nor, above all, the
+    # person's own claim, which is not even watched.
+    assert store.get(run).active is True
+    assert store.get(mine).active is True
 
 
-def test_a_claim_older_than_the_cutoff_is_released(store):
-    """A claim is store state, not memory, which is what makes it survive a
-    crash -- and therefore what makes it need collecting."""
-    uuid = store.add("work", tags=["afk"], kind="research")
-    store.claim(uuid)
-
-    later = datetime.now(timezone.utc) + timedelta(hours=5)
-    released = guards.release_stale_claims(store, max_age_seconds=3600, now=later)
-
-    assert released == [uuid]
-    task = store.get(uuid)
-    assert task.active is False
-    assert any("claim released" in a for a in task.annotations)
-    # Released, not resolved: the work still needs doing.
-    assert task.status == "pending"
-    assert task.runnable is True
+def test_a_fresh_run_claim_is_not_stale(store):
+    run = store.add("digest: fired", kind="research", project="pu.runs")
+    store.claim(run)
+    assert guards.stale_run_claims(store) == []
 
 
 def test_an_unparseable_start_stamp_leaves_the_claim_alone():
@@ -130,23 +129,20 @@ def test_an_unparseable_start_stamp_leaves_the_claim_alone():
     )
 
 
-def test_a_tick_collects_a_stale_claim_before_selecting(
-    store, body_store, tmp_path
-):
-    """A task stranded by a dead process must become selectable again."""
-    uuid = store.add("stranded", tags=["afk"], kind="research")
+def test_a_tick_never_takes_a_claim_away(store, body_store, tmp_path):
+    """Someone else's claim stays theirs, however old. A run pu itself lost
+    is recovered by the in-flight marker instead (see crash recovery)."""
+    uuid = store.add("someone is on it", tags=["afk"], kind="research")
     store.claim(uuid)
-    assert store.runnable() == [], "claimed work is out of the queue"
 
-    later = datetime.now(timezone.utc) + timedelta(hours=5)
+    later = datetime.now(timezone.utc) + timedelta(days=3)
     result = _tick(
         store, body_store, tmp_path,
-        lambda **k: runner.SessionResult(0, text="picked it up", is_error=False),
+        lambda **k: runner.SessionResult(0, text="should not run", is_error=False),
         now=lambda: later,
     )
-    assert result.ran is True
-    assert result.task_uuid == uuid
-    assert store.get(uuid).status == "completed"
+    assert result.ran is False
+    assert store.get(uuid).active is True
 
 
 # -- one tick at a time ----------------------------------------------------

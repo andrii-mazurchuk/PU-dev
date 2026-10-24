@@ -14,10 +14,14 @@ being agent-runnable and a person is told why.
 The sibling unit built this after a real incident: one task won selection
 eight times and produced eight no-op sessions before anybody noticed.
 
-**The stale-claim reaper** releases claims left behind by a process that
-died mid-session. A claim is `+ACTIVE` in the store rather than state in
-memory, which is what makes it survive a crash -- and therefore what makes
-it need collecting.
+**Stale claims are reported, never released** (pu vision follow-up,
+2026-10-24). The old reaper released any claim held two hours, whoever
+held it -- which meant pu took claims away from people and interactive
+sessions, since pu's own runs can never be reaped mid-run (the tick lock)
+and a pu run that died is caught on the next tick by the in-flight marker.
+So releasing is a person's decision. What is left here is watching: a
+claim on a trigger-created task (`pu.runs`) held past a day is counted and
+reported once. People's own tasks are not watched at all.
 
 Blocking is expressed by removing the `afk` tag, not by inventing a status.
 Taskwarrior's statuses are a closed set, and this is the honest encoding
@@ -40,9 +44,9 @@ from pu import records, taskstore
 # a more expensive way to reach the same conclusion.
 DEFAULT_REPEAT_THRESHOLD = 3
 
-# Long enough for a slow execution session against a large repository,
-# short enough that a crash is recovered the same working day.
-DEFAULT_STALE_CLAIM_SECONDS = 2 * 60 * 60
+# A day: no session runs that long, so a run-task still claimed after one
+# was claimed by something that is gone.
+DEFAULT_STALE_CLAIM_SECONDS = 24 * 60 * 60
 
 BLOCK_PREFIX = "auto-blocked:"
 
@@ -112,41 +116,46 @@ def parse_started_at(value: str | None) -> datetime | None:
         return None
 
 
-def release_stale_claims(
+def stale_run_claims(
     store: taskstore.TaskStore,
     max_age_seconds: int = DEFAULT_STALE_CLAIM_SECONDS,
     now: datetime | None = None,
-) -> list[str]:
-    """Release claims older than the cutoff. Returns what was released.
-
-    Run at the start of a tick rather than on a timer: it needs no thread,
-    it is deterministic to test, and the only moment it matters is just
-    before selection anyway."""
+) -> list[records.Task]:
+    """Trigger-created tasks claimed longer than the cutoff. Read only."""
     moment = now or datetime.now(timezone.utc)
     cutoff = moment - timedelta(seconds=max_age_seconds)
-
-    released: list[str] = []
     try:
-        claimed = store.export("+ACTIVE", "status:pending")
+        claimed = store.export("+ACTIVE", "status:pending",
+                               f"project:{records.RUNS_PROJECT}")
     except taskstore.TaskError:
-        return released
+        return []
+    return [t for t in claimed
+            if (started := parse_started_at(t.start)) is not None
+            and started <= cutoff]
 
-    for task in claimed:
-        started = parse_started_at(task.start)
-        if started is None or started > cutoff:
-            continue
-        age = int((moment - started).total_seconds())
-        try:
-            store.release(task.uuid)
-            store.annotate(
-                task.uuid,
-                f"claim released: held {age}s with no result, so the session "
-                f"holding it is gone",
-            )
-            released.append(task.uuid)
-        except taskstore.TaskError:
-            continue
-    return released
+
+def newly_stale(
+    store: taskstore.TaskStore,
+    state_path: Path,
+    max_age_seconds: int = DEFAULT_STALE_CLAIM_SECONDS,
+    now: datetime | None = None,
+) -> list[records.Task]:
+    """The stale run claims not reported before, remembered so each is
+    reported once. Nothing is released: that is a person's call."""
+    stale = stale_run_claims(store, max_age_seconds, now)
+    try:
+        told = set(json.loads(Path(state_path).read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        told = set()
+    fresh = [t for t in stale if t.uuid not in told]
+    try:
+        Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+        # Only what is still stale is kept, so the file cannot grow forever.
+        Path(state_path).write_text(json.dumps(sorted(t.uuid for t in stale)),
+                                    encoding="utf-8")
+    except OSError:
+        pass
+    return fresh
 
 
 # How long a finished run-task stays. The run record -- the report -- is
