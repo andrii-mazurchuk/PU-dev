@@ -52,6 +52,7 @@ class SessionStore:
         result: runner_mod.SessionResult,
         outcome: str,
         detail: str = "",
+        agent_role: str = "system",
     ) -> Path:
         """Persist one run. Returns the directory it went to.
 
@@ -67,6 +68,7 @@ class SessionStore:
                 json.dumps({
                     "task_uuid": task_uuid,
                     "session_type": session_type,
+                    "agent_role": agent_role,
                     "recorded_at": datetime.now(timezone.utc).isoformat(),
                     "outcome": outcome,
                     "detail": detail,
@@ -106,15 +108,26 @@ class SessionStore:
                 out.append(parsed)
         return out
 
-    def runs(self, limit: int = 50) -> list[dict[str, Any]]:
+    def runs(self, limit: int = 50, task: str | None = None,
+             agent_role: str | None = None) -> list[dict[str, Any]]:
         """Every recorded run, most recent first.
 
         Ordered on `recorded_at` rather than on the directory name: the
         stamp is the moment the directory was created, and a session
         that ran for four minutes finishes out of that order.
+
+        Filtered **before** the limit. Filtering the newest fifty would
+        report "no runs" for a task whose runs are all older than that.
+        A run recorded before roles existed is system work.
         """
+        results = [
+            r for r in self._results()
+            if (task is None or r.get("task_uuid") == task)
+            and (agent_role is None
+                 or (r.get("agent_role") or "system") == agent_role)
+        ]
         ordered = sorted(
-            self._results(),
+            results,
             key=lambda r: str(r.get("recorded_at") or ""),
             reverse=True,
         )

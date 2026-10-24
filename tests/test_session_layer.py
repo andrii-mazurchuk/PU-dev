@@ -531,6 +531,11 @@ def test_a_research_tick_claims_runs_and_resolves(store, body_store, tmp_path):
     assert result.ran and result.outcome == "resolved"
     assert seen["cwd"].name == "research"
     assert "what does it cost" in seen["prompt"]
+    # A committed type is system work, and the session is told so.
+    assert "- agent role: `system`" in seen["prompt"]
+    [run] = _session_store(tmp_path).runs(agent_role="system")
+    assert run["task_uuid"] == uuid
+    assert _session_store(tmp_path).runs(agent_role="finance") == []
 
     done = store.get(uuid)
     assert done.status == "completed"

@@ -156,6 +156,14 @@ RUNS_IN_TARGET_REPO = frozenset({"execution"})
 REACHES_PEERS = frozenset({"research", "execution"})
 
 
+# The role every session runs under unless its type names another. An
+# agent across the node is one or more session types here, a channel in cu
+# and a memory namespace in mu-agent, joined by this name. The list of roles
+# is the gateway's, written by cu; `system` is the one that always exists,
+# so system work never depends on either. (pu vision, 2026-10-24.)
+DEFAULT_AGENT_ROLE = "system"
+
+
 class SessionTypeError(ValueError):
     pass
 
@@ -208,6 +216,11 @@ class SessionType:
         if self.record is not None:
             return self.grant.reaches_peers
         return self.name in REACHES_PEERS
+
+    @property
+    def agent_role(self) -> str:
+        """The committed directories are system work by definition."""
+        return (self.record or {}).get("agent_role") or DEFAULT_AGENT_ROLE
 
     @property
     def claim_tags(self) -> tuple[str, ...]:

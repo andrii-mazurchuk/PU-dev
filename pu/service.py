@@ -30,7 +30,9 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from pu import bodies, notify, pipeline, records, taskstore, triggers
+from pu import (
+    bodies, notify, pipeline, records, session_types, taskstore, triggers,
+)
 
 
 class ServiceError(ValueError):
@@ -635,8 +637,19 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
     # Read before the write, so every question below is answered about the
     # state from before this call rather than the one it just created.
     previous = type_store.get(payload.get("name") or "")
+    # The role defaults on both sides before they are compared. Otherwise a
+    # record written before the field existed, re-sent with its default
+    # spelled out, would read as an edit and switch a live type off. A
+    # *real* role change does count as an edit, on purpose: once a role
+    # carries MCP permissions, moving a type between roles is a permission
+    # change and needs approval again.
+    def with_role(r):
+        return dict(r, agent_role=r.get("agent_role")
+                    or session_types.DEFAULT_AGENT_ROLE)
+    if previous is not None:
+        previous = with_role(previous)
     record, transition = apply_activation_rules(
-        previous, dict(payload, origin="authored"))
+        previous, with_role(dict(payload, origin="authored")))
     written = type_store.append(record)
 
     if transition == "deactivated_by_edit":

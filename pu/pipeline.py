@@ -224,6 +224,7 @@ def build_prompt(
     body: str | None,
     unit_root: Path,
     extra_context: str = "",
+    agent_role: str = session_types_mod.DEFAULT_AGENT_ROLE,
 ) -> str:
     """Everything the session gets, assembled here rather than fetched by
     the session itself.
@@ -239,6 +240,10 @@ def build_prompt(
         "",
         f"- kind: `{task.kind}`",
         f"- project: `{task.project or '(none)'}`",
+        # Which agent this session acts for. Its memory in mu-agent lives
+        # under this name, so a session that is not told reads and writes
+        # the wrong namespace -- or none.
+        f"- agent role: `{agent_role}`",
     ]
     if task.url:
         lines.append(f"- authoritative source: {task.url}")
@@ -447,7 +452,8 @@ def _run(
 ) -> TickResult:
     store.claim(task.uuid)
 
-    prompt = build_prompt(task, body_store.get(task.uuid), unit_root)
+    prompt = build_prompt(task, body_store.get(task.uuid), unit_root,
+                          agent_role=stype.agent_role)
     if instructions:
         prompt = "\n\n---\n\n".join([instructions, prompt])
 
@@ -477,7 +483,8 @@ def _run(
     else:
         outcome, detail = _apply_resolution(store, task, result)
 
-    session_store.record(task.uuid, stype.name, prompt, result, outcome, detail)
+    session_store.record(task.uuid, stype.name, prompt, result, outcome, detail,
+                         agent_role=stype.agent_role)
     # What this session saw of the account's rolling windows, back to the
     # gateway, which records it once for the whole node. Best-effort: the
     # session has already succeeded and a bridge that is down must not

@@ -430,6 +430,36 @@ def test_a_field_dropped_from_a_live_type_also_switches_it_off(base_url):
     assert edited["enabled"] is False
 
 
+def test_a_type_without_an_agent_role_runs_as_system(base_url):
+    _, written = post(f"{base_url}/session-types", a_type())
+    assert written["agent_role"] == "system"
+
+
+def test_moving_a_live_type_to_another_agent_role_switches_it_off(base_url):
+    """Once a role carries MCP permissions, a role change is a permission
+    change -- so it needs approval again, like any other edit."""
+    post(f"{base_url}/session-types", a_type())
+    _, live = post(f"{base_url}/session-types", a_type(enabled=True))
+    assert live["enabled"] is True
+
+    # Spelling out the default is not an edit...
+    _, same = post(f"{base_url}/session-types",
+                   a_type(enabled=True, agent_role="system"))
+    assert same["enabled"] is True
+
+    # ...but a different role is.
+    _, moved = post(f"{base_url}/session-types",
+                    a_type(enabled=True, agent_role="finance"))
+    assert moved["enabled"] is False
+    assert moved["agent_role"] == "finance"
+
+
+def test_an_agent_role_is_a_name_not_a_path(base_url):
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/session-types", a_type(agent_role="../etc"))
+    assert excinfo.value.code == 400
+
+
 def test_a_second_write_to_one_name_is_a_revision(base_url):
     """`name` is the identity and the store is append-only, so there is one
     endpoint for create and update rather than a POST/PUT pair -- the

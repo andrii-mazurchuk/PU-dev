@@ -53,7 +53,7 @@ _NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # absence is meaningful.
 REQUIRED = ("name", "purpose", "prompt", "grant", "origin")
 OPTIONAL = ("model", "mcp_servers", "plugins", "trigger", "enabled", "claims",
-            "retired")
+            "retired", "agent_role")
 
 ORIGINS = ("authored", "declared")
 
@@ -164,6 +164,15 @@ def _validate(record: dict[str, Any]) -> dict[str, Any]:
         raise TypeStoreError(
             f"unknown grant {grant!r} "
             f"(allowed: {sorted(session_types.GRANTS)})")
+
+    # Named `agent_role`, not `role`: the glossary's Role is a delivery slot
+    # (owner, logs, thinking). Absent means system, filled in here so a
+    # record never carries "unknown" -- and so every record written before
+    # the field existed reads the same as one that says system.
+    role = record.get("agent_role") or session_types.DEFAULT_AGENT_ROLE
+    if not isinstance(role, str) or not _NAME.match(role) or ".." in role:
+        raise TypeStoreError(f"not a usable agent role: {role!r}")
+    record = dict(record, agent_role=role)
 
     origin = record["origin"]
     if origin not in ORIGINS:

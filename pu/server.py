@@ -254,6 +254,7 @@ TOOLS = [
                 "prompt": {"type": "string", "description": "the type's instructions; pu generates its CLAUDE.md from this on every write"},
                 "grant": {"type": "string", "enum": sorted(session_types.GRANTS), "description": "the permission bundle: none, read, web or repo"},
                 "model": {"type": "string", "description": "absent means whatever the CLI defaults to; set it only where the work differs in reasoning load"},
+                "agent_role": {"type": "string", "description": "the agent this type acts for, e.g. finance or manager; absent means system. Not a display name. Changing it on a live type switches the type off, like any edit."},
                 "mcp_servers": {"type": "array", "items": {"type": "string"}},
                 "plugins": {"type": "array", "items": {"type": "string"}},
                 "trigger": {"type": "object", "description": "what fires this type"},
@@ -382,7 +383,7 @@ TOOLS = [
     },
     {
         "name": "list_session_runs",
-        "description": "Recorded session runs, most recent first: which session type ran, against which task, what it cost, how long it took, how many turns, which tools it was refused, and what it concluded. This is the history of what this unit's agents have actually done. Filter by `task` for one task's runs.",
+        "description": "Recorded session runs, most recent first: which session type ran, against which task, what it cost, how long it took, how many turns, which tools it was refused, and what it concluded. This is the history of what this unit's agents have actually done. Filter by `task` for one task's runs, or by `agent_role` for everything one agent did.",
         "method": "GET",
         "path": "/sessions",
         "input_schema": {
@@ -390,6 +391,7 @@ TOOLS = [
             "properties": {
                 "limit": {"type": "integer", "description": "most recent first; default 50, capped at 500"},
                 "task": {"type": "string", "description": "only runs against this task uuid"},
+                "agent_role": {"type": "string", "description": "only runs under this agent role, e.g. system or finance"},
             },
         },
     },
@@ -605,10 +607,11 @@ def make_handler(
                     if session_store is None:
                         return self._json(200, {"sessions": []})
                     limit = int(one("limit") or 50)
-                    runs = session_store.runs(limit=min(max(limit, 1), 500))
-                    task = one("task")
-                    if task:
-                        runs = [r for r in runs if r.get("task_uuid") == task]
+                    runs = session_store.runs(
+                        limit=min(max(limit, 1), 500),
+                        task=one("task") or None,
+                        agent_role=one("agent_role") or None,
+                    )
                     return self._json(200, {"sessions": runs})
 
                 if len(parts) == 3 and parts[0] == "sessions":
