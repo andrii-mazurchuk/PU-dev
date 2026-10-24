@@ -59,12 +59,14 @@ def test_a_task_that_never_resolves_is_blocked_not_retried_forever(
 
     first = _tick(store, body_store, tmp_path, always_fails)
     assert first.outcome == "failed"
+    # Retry once, then hand it to a person (pu vision, 2026-10-24) -- the
+    # failure policy reaches this before the repeat breaker, which stays
+    # as the backstop for a task that is selected and never even runs.
     second = _tick(store, body_store, tmp_path, always_fails)
-    assert second.outcome == "failed"
+    assert second.outcome == "failed_twice"
 
     third = _tick(store, body_store, tmp_path, always_fails)
     assert third.ran is False
-    assert third.outcome == "auto_blocked"
 
     # Two attempts, then stop -- the third tick spends nothing.
     assert runs["n"] == 2
@@ -88,7 +90,7 @@ def test_a_task_that_resolves_first_time_is_never_blocked(
     store.add("fine", tags=["afk"], kind="research")
     result = _tick(store, body_store, tmp_path,
                    lambda **k: runner.SessionResult(0, text="done", is_error=False))
-    assert result.outcome == "resolved"
+    assert result.outcome.startswith("resolved")
 
 
 # -- the stale-claim reaper -----------------------------------------------

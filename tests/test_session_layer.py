@@ -420,7 +420,7 @@ def test_blocking_a_task_tells_a_person(store, body_store, tmp_path):
     original = pipeline.notify.notify_owner
     pipeline.notify.notify_owner = fake_notify
     try:
-        for _ in range(guards.DEFAULT_REPEAT_THRESHOLD):
+        for _ in range(pipeline.MAX_FAILURES):
             result = pipeline.tick(
                 store, body_store, _session_store(tmp_path), UNIT_ROOT,
                 tmp_path / "peers.json", tmp_path / "cost_policy.json",
@@ -431,11 +431,72 @@ def test_blocking_a_task_tells_a_person(store, body_store, tmp_path):
     finally:
         pipeline.notify.notify_owner = original
 
-    assert result.outcome == "auto_blocked"
+    assert result.outcome == "failed_twice"
+    # Every failure is told, and the last one says a person is needed.
+    assert len(sent) == pipeline.MAX_FAILURES
+    assert all(url == "http://bridge:9005" for url, _ in sent)
+    assert "will be retried once" in sent[0][1]
+    assert "needs a person" in sent[-1][1]
+    assert "cannot be resolved" in sent[-1][1]
+
+
+def _tick_with(store, body_store, tmp_path, text, sent):
+    original = pipeline.notify.notify_owner
+    pipeline.notify.notify_owner = lambda url, t, source_unit, **kw: sent.append(t) or True
+    try:
+        return pipeline.tick(
+            store, body_store, _session_store(tmp_path), UNIT_ROOT,
+            tmp_path / "peers.json", tmp_path / "cost_policy.json",
+            session_runner=lambda **k: runner.SessionResult(
+                0, text=text, is_error=False),
+            tracker_path=tmp_path / "tracker.json",
+        )
+    finally:
+        pipeline.notify.notify_owner = original
+
+
+REPORT = ("OUTCOME: {outcome}\nGOAL: g\nACTIONS: a\nREASONING: r\n"
+          "EVIDENCE: e\nNEEDS HUMAN: {needs}\n\nbody")
+
+
+def test_an_agent_failure_is_retried_with_its_report_in_hand(
+        store, body_store, tmp_path):
+    uuid = store.add("try it", tags=["afk"], kind="research")
+    sent = []
+    first = _tick_with(store, body_store, tmp_path,
+                       REPORT.format(outcome="failed", needs="none"), sent)
+    assert first.outcome == "failed"
+    task = store.get(uuid)
+    assert task.status == "pending" and task.runnable, "left for one retry"
+    # The report is an annotation, and annotations go into the next prompt.
+    prompt = pipeline.build_prompt(task, None, UNIT_ROOT)
+    assert "the agent reported failure" in prompt
     assert len(sent) == 1
-    assert sent[0][0] == "http://bridge:9005"
-    assert "needs a person" in sent[0][1]
-    assert "cannot be resolved" in sent[0][1]
+
+
+def test_needs_human_keeps_the_answer_and_hands_the_task_over(
+        store, body_store, tmp_path):
+    uuid = store.add("decide it", tags=["afk"], kind="research")
+    sent = []
+    result = _tick_with(store, body_store, tmp_path,
+                        REPORT.format(outcome="done",
+                                      needs="approve the spend"), sent)
+    assert result.outcome == "needs_human"
+    task = store.get(uuid)
+    assert task.status == "pending" and task.afk is False
+    assert any("approve the spend" in a for a in task.annotations)
+    assert "approve the spend" in sent[0]
+
+
+def test_a_clean_report_resolves_without_telling_anyone(
+        store, body_store, tmp_path):
+    uuid = store.add("easy", tags=["afk"], kind="research")
+    sent = []
+    result = _tick_with(store, body_store, tmp_path,
+                        REPORT.format(outcome="done", needs="none"), sent)
+    assert result.outcome == "resolved"
+    assert store.get(uuid).status == "completed"
+    assert sent == []
 
 
 # -- session artifacts and aggregates --------------------------------------
@@ -520,8 +581,10 @@ def test_a_research_tick_claims_runs_and_resolves(store, body_store, tmp_path):
                     mcp_bridge_url=mcp_bridge_url)
         # The claim must already be in place before any work happens.
         assert store.get(uuid).active is True
-        return runner.SessionResult(0, text="It costs nothing.", cost_usd=0.2,
-                                    duration_ms=1000, is_error=False)
+        return runner.SessionResult(
+            0, text=REPORT.format(outcome="done", needs="none")
+            + "\nIt costs nothing.",
+            cost_usd=0.2, duration_ms=1000, is_error=False)
 
     result = pipeline.tick(
         store, body_store, _session_store(tmp_path), UNIT_ROOT,
@@ -539,7 +602,7 @@ def test_a_research_tick_claims_runs_and_resolves(store, body_store, tmp_path):
 
     done = store.get(uuid)
     assert done.status == "completed"
-    assert "It costs nothing." in done.annotations
+    assert any(a.endswith("It costs nothing.") for a in done.annotations)
 
 
 def test_a_failed_session_releases_the_claim(store, body_store, tmp_path):

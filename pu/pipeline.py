@@ -292,17 +292,95 @@ def build_prompt(
 # -- outcome handling -----------------------------------------------------
 
 
-def _apply_resolution(
-    store: taskstore.TaskStore, task: records.Task, result: runner_mod.SessionResult
+# The failure policy (pu vision, 2026-10-24). Two classes, because a crash
+# and an agent that says it failed deserve different second attempts:
+#
+# - **infrastructure** -- the launch failed, the process exited non-zero, or
+#   it said nothing. Retry once, as it was.
+# - **agent** -- the report says `OUTCOME: failed`. Retry once, with that
+#   report in hand: it is an annotation, and annotations are in the prompt.
+#
+# After a second failure the task stops being agent-runnable and goes to a
+# person. Every failure tells the owner. The count lives on the task, so a
+# pu restart does not reset it.
+FAILURE_PREFIX = "run failed:"
+MAX_FAILURES = 2
+
+
+def _failures(store: taskstore.TaskStore, uuid: str) -> int:
+    task = store.get(uuid)
+    return sum(a.startswith(FAILURE_PREFIX) for a in (task.annotations if task else ()))
+
+
+def _fail(
+    store: taskstore.TaskStore, task: records.Task, why: str,
+    mcp_bridge_url: str | None,
 ) -> tuple[str, str]:
-    """For every other session type: the final message is the answer."""
+    """Release, count, and either leave it for one retry or hand it over."""
+    store.release(task.uuid)
+    store.annotate(task.uuid, f"{FAILURE_PREFIX} {why}")
+    count = _failures(store, task.uuid)
+    first_line = why.splitlines()[0]
+    if count >= MAX_FAILURES:
+        guards.block(store, task.uuid,
+                     f"failed {count} times; a person needs to look at this")
+        notify.notify_owner(
+            mcp_bridge_url,
+            f"pu gave up on a task after {count} failed runs and needs a "
+            f"person.\n\n{task.description}\nlast: {first_line}\n"
+            f"task {task.uuid}",
+            source_unit=UNIT_NAME)
+        return "failed_twice", first_line
+    notify.notify_owner(
+        mcp_bridge_url,
+        f"pu's run failed and will be retried once.\n\n{task.description}\n"
+        f"{first_line}\ntask {task.uuid}",
+        source_unit=UNIT_NAME)
+    return "failed", first_line
+
+
+def _settle(
+    store: taskstore.TaskStore, task: records.Task,
+    result: runner_mod.SessionResult, mcp_bridge_url: str | None,
+) -> tuple[str, str]:
+    """Decide what a finished run means for its task."""
+    if not result.ok:
+        return _fail(store, task, f"infrastructure: exit {result.exit_code}",
+                     mcp_bridge_url)
     answer = (result.text or "").strip()
     if not answer:
-        store.annotate(task.uuid, "session produced no answer")
-        store.release(task.uuid)
-        return "empty", "session produced no answer"
-    store.annotate(task.uuid, answer)
+        return _fail(store, task, "infrastructure: the session said nothing",
+                     mcp_bridge_url)
+
+    report = report_mod.parse(answer)
+    if report.outcome == "failed":
+        return _fail(store, task, f"the agent reported failure\n\n{report.text}",
+                     mcp_bridge_url)
+
+    store.annotate(task.uuid, report.text)
+    if report.outcome == "partial" or report.needs_human:
+        # Not a failure and not finished: the answer is kept, the task stays
+        # open, and it is a person's now. No retry -- a second agent run
+        # would not supply what a person has to.
+        need = report.needs_human or "the agent finished only part of it"
+        guards.block(store, task.uuid, f"needs a person: {need}")
+        notify.notify_owner(
+            mcp_bridge_url,
+            f"pu ran a task that now needs a person.\n\n{task.description}\n"
+            f"{need}\ntask {task.uuid}",
+            source_unit=UNIT_NAME)
+        return "needs_human", need
+
     store.complete(task.uuid)
+    if not report.structured:
+        # Done as far as anyone can tell, but the report did not follow the
+        # contract -- which is worth a look before it becomes a habit.
+        notify.notify_owner(
+            mcp_bridge_url,
+            f"pu resolved a task, but the session's report was unstructured."
+            f"\n\n{task.description}\ntask {task.uuid}",
+            source_unit=UNIT_NAME)
+        return "resolved_unstructured", answer[:200]
     return "resolved", answer[:200]
 
 
@@ -475,19 +553,17 @@ def _run(
             mcp_bridge_url=mcp_bridge_url if stype.reaches_peers else None,
         )
     except Exception as exc:  # a launch failure must not strand the claim
-        store.release(task.uuid)
-        store.annotate(task.uuid, f"session failed to launch: {exc}")
+        outcome, detail = _fail(
+            store, task, f"infrastructure: session failed to launch: {exc}",
+            mcp_bridge_url)
         return TickResult(
             ran=False, reason="launch failed", task_uuid=task.uuid,
-            session_type=stype.name, outcome="launch_failed", detail=str(exc),
+            session_type=stype.name,
+            outcome="launch_failed" if outcome == "failed" else outcome,
+            detail=str(exc),
         )
 
-    if not result.ok:
-        store.release(task.uuid)
-        store.annotate(task.uuid, f"session failed (exit {result.exit_code})")
-        outcome, detail = "failed", f"exit {result.exit_code}"
-    else:
-        outcome, detail = _apply_resolution(store, task, result)
+    outcome, detail = _settle(store, task, result, mcp_bridge_url)
 
     session_store.record(
         task.uuid, stype.name, prompt, result, outcome, detail,
