@@ -78,7 +78,6 @@ class Grant:
     """
 
     tools: str
-    reaches_peers: bool
     runs_in_target_repo: bool
 
 
@@ -96,13 +95,13 @@ class Grant:
 # every peer exposes, and that is not something a deployment setting should
 # widen by filling in an env var.
 GRANTS: dict[str, Grant] = {
-    "none": Grant(tools="", reaches_peers=False, runs_in_target_repo=False),
+    "none": Grant(tools="", runs_in_target_repo=False),
     "read": Grant(tools=f"Read,{LOOKUP}",
-                  reaches_peers=False, runs_in_target_repo=False),
+                  runs_in_target_repo=False),
     "web": Grant(tools=f"Read,WebSearch,WebFetch,{LOOKUP}",
-                 reaches_peers=True, runs_in_target_repo=False),
+                 runs_in_target_repo=False),
     "repo": Grant(tools=f"Bash,Read,Write,Edit,{LOOKUP}",
-                  reaches_peers=True, runs_in_target_repo=True),
+                  runs_in_target_repo=True),
 }
 
 # Which grant each of the four directory-defined types would carry. Not
@@ -148,13 +147,16 @@ MODELS: dict[str, str] = {}
 # own CLAUDE.md no longer loads from cwd, so it is injected instead.
 RUNS_IN_TARGET_REPO = frozenset({"execution"})
 
-# A type that may reach other units' tools through the gateway's MCP bridge.
+# Every session the queue runs reaches holonic MCP, whatever its grant;
+# grants are local tools only (pu vision, 2026-10-24). The one exception is
+# `ask`, which answers untrusted text typed into the dashboard and gets
+# nothing at all -- it never comes through the queue, so it is excluded by
+# name here as a second guard.
 #
-# This is a grant, so it belongs here beside ALLOWED_TOOLS rather than in
-# config: handing a session a bridge URL adds `mcp__mcp-bridge__*`, which is
-# every tool every peer exposes -- a far wider surface than anything in the
-# list above, and one that grows whenever somebody registers a new unit.
-REACHES_PEERS = frozenset({"research", "execution"})
+# ponytail: holonic is hard-coded onto every session. Remove the hard-coding
+# once the bridge scopes tools per agent role and holonic can be one entry
+# in the MCP registry like any other server.
+NO_PEER_REACH = frozenset({"ask"})
 
 
 # The role every session runs under unless its type names another. An
@@ -214,9 +216,13 @@ class SessionType:
 
     @property
     def reaches_peers(self) -> bool:
-        if self.record is not None:
-            return self.grant.reaches_peers
-        return self.name in REACHES_PEERS
+        return self.name not in NO_PEER_REACH
+
+    @property
+    def mcp_servers(self) -> tuple[str, ...]:
+        """Names from the MCP registry, attached to this type only. The
+        committed directories attach none beyond holonic."""
+        return tuple((self.record or {}).get("mcp_servers") or ())
 
     @property
     def version(self) -> str | None:

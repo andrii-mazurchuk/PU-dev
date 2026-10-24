@@ -49,6 +49,7 @@ from pu import (
     control,
     guards,
     logs_client,
+    mcpstore,
     notify,
     records,
     repo_setup,
@@ -398,6 +399,32 @@ def _settle(
     return "resolved", answer[:200]
 
 
+# -- MCP servers a type attaches ------------------------------------------
+
+
+def _write_mcp_config(stype, mcp_store, bridge_url: str | None) -> str:
+    """Write this type's MCP config into its own directory and return the
+    path. Per type, per launch: servers are attached where the type says,
+    never set up system-wide, and the file carries resolved tokens so it
+    stays in private storage rather than in argv."""
+    if mcp_store is None:
+        raise mcpstore.McpStoreError("no MCP registry wired")
+    servers: dict[str, Any] = {}
+    if bridge_url:
+        servers["mcp-bridge"] = {"type": "http", "url": bridge_url}
+    for name in stype.mcp_servers:
+        record = mcp_store.get(name)
+        if record is None:
+            raise mcpstore.McpStoreError(
+                f"session type {stype.name!r} attaches MCP server {name!r}, "
+                f"which is not in the registry")
+        servers[name] = mcpstore.resolve(record)
+    path = Path(stype.dir) / ".mcp-session.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"mcpServers": servers}), encoding="utf-8")
+    return str(path)
+
+
 # -- crash recovery -------------------------------------------------------
 #
 # A run pu was in the middle of when it stopped. The stale-claim reaper
@@ -632,6 +659,7 @@ def _tick(
             store, body_store, session_store, unit_root, peers_path,
             candidate, stype, cwd, instructions, session_runner,
             mcp_bridge_url, inflight_path, role_description,
+            mcpstore.McpStore(type_store.root) if type_store is not None else None,
         ), emitted=emitted)
 
     return TickResult(ran=False, reason="nothing runnable", emitted=emitted)
@@ -640,7 +668,7 @@ def _tick(
 def _run(
     store, body_store, session_store, unit_root, peers_path,
     task, stype, cwd, instructions, session_runner, mcp_bridge_url,
-    inflight_path, role_description="",
+    inflight_path, role_description="", mcp_store=None,
 ) -> TickResult:
     store.claim(task.uuid)
     _write_inflight(inflight_path, task, stype)
@@ -648,7 +676,7 @@ def _run(
         return _run_claimed(
             store, body_store, session_store, unit_root, peers_path,
             task, stype, cwd, instructions, session_runner, mcp_bridge_url,
-            role_description)
+            role_description, mcp_store)
     finally:
         # Cleared on every way out this process survives. Only a process
         # that dies mid-run leaves it behind, which is exactly what makes
@@ -659,7 +687,7 @@ def _run(
 def _run_claimed(
     store, body_store, session_store, unit_root, peers_path,
     task, stype, cwd, instructions, session_runner, mcp_bridge_url,
-    role_description="",
+    role_description="", mcp_store=None,
 ) -> TickResult:
 
     prompt = build_prompt(task, body_store.get(task.uuid), unit_root,
@@ -668,16 +696,32 @@ def _run_claimed(
     if instructions:
         prompt = "\n\n---\n\n".join([instructions, prompt])
 
+    bridge = mcp_bridge_url if stype.reaches_peers else None
+    extra: dict[str, Any] = {}
+    if stype.mcp_servers:
+        try:
+            extra = {
+                "mcp_servers": stype.mcp_servers,
+                "mcp_config_path": _write_mcp_config(
+                    stype, mcp_store, bridge),
+            }
+        except mcpstore.McpStoreError as exc:
+            outcome, detail = _fail(store, task, f"infrastructure: {exc}",
+                                    mcp_bridge_url)
+            return TickResult(ran=False, reason="mcp config failed",
+                              task_uuid=task.uuid, session_type=stype.name,
+                              outcome=outcome, detail=str(exc))
+
     try:
         result = session_runner(
             prompt=prompt,
             cwd=cwd,
             allowed_tools=stype.allowed_tools,
             model=stype.model,
-            # Gated on the type, not merely on the URL being configured:
-            # passing one grants `mcp__mcp-bridge__*`, every tool every peer
-            # exposes. See session_types.REACHES_PEERS.
-            mcp_bridge_url=mcp_bridge_url if stype.reaches_peers else None,
+            # Holonic is attached to every queue session (hard-coded for
+            # now); see session_types.NO_PEER_REACH.
+            mcp_bridge_url=bridge,
+            **extra,
         )
     except Exception as exc:  # a launch failure must not strand the claim
         outcome, detail = _fail(

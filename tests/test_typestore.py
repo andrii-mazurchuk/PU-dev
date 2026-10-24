@@ -165,21 +165,17 @@ def test_the_generated_file_states_the_contract_above_the_author_s_prompt(
     assert text.index("final message") < text.index("Summarise the payload")
 
 
-def test_the_reach_sentence_is_derived_from_the_grant(tmp_path):
-    """Derived rather than templated per grant, so a fifth grant inherits
-    it instead of needing a paragraph somebody remembers to write."""
+def test_every_generated_type_is_told_it_reaches_holonic(tmp_path):
+    """Grants are local tools only now; holonic MCP is attached to every
+    queue session, so every generated type is told so -- and told not to
+    resolve its own task."""
     store = typestore.TypeStore(tmp_path)
     store.append(record(name="quiet", grant="read"))
-    store.append(record(name="reaching", grant="web"))
 
-    def generated(name):
-        return (tmp_path / "session_types" / name / "CLAUDE.md").read_text(
-            encoding="utf-8")
-
-    assert "no way back into this unit" in generated("quiet")
-    assert "no way back into this unit" not in generated("reaching")
-    assert "mcp__mcp-bridge__*" in generated("reaching")
-    assert "Do not resolve this task yourself" in generated("reaching")
+    text = (tmp_path / "session_types" / "quiet" / "CLAUDE.md").read_text(
+        encoding="utf-8")
+    assert "mcp__mcp-bridge__*" in text
+    assert "Do not resolve this task yourself" in text
 
 
 def test_a_grant_with_no_tools_says_so_rather_than_leaving_it_blank(tmp_path):

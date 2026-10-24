@@ -121,8 +121,17 @@ def build_argv(
     model: str | None = None,
     mcp_bridge_url: str | None = None,
     command: Sequence[str] = ("claude",),
+    mcp_servers: Sequence[str] = (),
+    mcp_config_path: str | None = None,
 ) -> list[str]:
     """The command, exactly.
+
+    A type that attaches MCP servers gets them through a config *file* in
+    its own directory (`mcp_config_path`), written by the tick, rather than
+    inline: resolved headers carry tokens, and argv is readable by anyone
+    who can list processes on the host. Attaching a server allows all of
+    its tools, `mcp__<name>__*` -- narrowing that per agent role is the
+    bridge's job, later.
 
     `--allowedTools` matters more than it looks: without it every tool call
     sits behind an interactive permission prompt, and there is nobody
@@ -139,7 +148,12 @@ def build_argv(
         argv += ["--model", model]
 
     grants = [allowed_tools] if allowed_tools else []
-    if mcp_bridge_url:
+    if mcp_config_path:
+        argv += ["--mcp-config", mcp_config_path]
+        if mcp_bridge_url:
+            grants.append("mcp__mcp-bridge__*")
+        grants += [f"mcp__{name}__*" for name in mcp_servers]
+    elif mcp_bridge_url:
         argv += ["--mcp-config", json.dumps(
             {"mcpServers": {"mcp-bridge": {"type": "http", "url": mcp_bridge_url}}}
         )]
@@ -228,9 +242,12 @@ def run_session(
     mcp_bridge_url: str | None = None,
     runner: Runner = subprocess_runner,
     command: Sequence[str] | None = None,
+    mcp_servers: Sequence[str] = (),
+    mcp_config_path: str | None = None,
 ) -> SessionResult:
     argv = build_argv(
-        allowed_tools, model, mcp_bridge_url, command or claude_command()
+        allowed_tools, model, mcp_bridge_url, command or claude_command(),
+        mcp_servers=mcp_servers, mcp_config_path=mcp_config_path,
     )
     completed = runner(argv, cwd, prompt)
     parsed = parse_stream(completed.stdout)

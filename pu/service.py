@@ -31,8 +31,8 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from pu import (
-    bodies, notify, pipeline, records, roles, session_types, taskstore,
-    triggers,
+    bodies, mcpstore, notify, pipeline, records, roles, session_types,
+    taskstore, triggers,
 )
 
 
@@ -467,6 +467,49 @@ def rename_trigger(trigger_store, name: str, to: str) -> dict[str, Any]:
     return written
 
 
+def _require_servers(record: dict[str, Any], type_store) -> None:
+    """A type may attach only servers the registry holds. Attaching one is
+    an edit like any other, so on a live type the activation rules have
+    already switched it off by the time this runs."""
+    names = record.get("mcp_servers") or []
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise ServiceError("mcp_servers is a list of server names")
+    known = mcpstore.McpStore(type_store.root).current()
+    missing = [n for n in names if n not in known]
+    if missing:
+        raise ServiceError(
+            f"MCP server(s) {missing} are not in the registry "
+            f"(known: {sorted(known) or 'none'}); add them with "
+            f"write_mcp_server first. Holonic is attached to every session "
+            f"already and is not listed here")
+
+
+# -- write door 5: the MCP server registry --------------------------------
+#
+# Same rules as session types: agents may write, the record is append-only,
+# and every write tells the owner -- a server is reach into somewhere else.
+
+
+def list_mcp_servers(mcp_store) -> dict[str, Any]:
+    return {"mcp_servers": list(mcp_store.current().values())}
+
+
+def write_mcp_server(mcp_store, payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ServiceError("an MCP server is a JSON object")
+    try:
+        written = mcp_store.append(payload)
+    except mcpstore.McpStoreError as exc:
+        raise ServiceError(str(exc)) from None
+    notify.notify_owner(
+        notify.bridge_url(),
+        f"pu's MCP registry changed: {written['name']} -> {written['url']}\n"
+        f"{written.get('purpose', '')}\n\nA session type reaches it only "
+        f"once it attaches it, and attaching switches a live type off.",
+        source_unit="pu")
+    return written
+
+
 def dry_run_session_type(
     type_store, payload: dict[str, Any], store: taskstore.TaskStore | None = None,
     body_store: bodies.BodyStore | None = None, unit_root=None,
@@ -492,14 +535,17 @@ def dry_run_session_type(
         "agent_role": record["agent_role"],
         "grant": record["grant"],
         "allowed_tools": grant.tools or None,
-        "reaches_peers": grant.reaches_peers,
+        "mcp_servers": ["mcp-bridge", *(record.get("mcp_servers") or [])],
         "cwd": ("the task's target repository" if grant.runs_in_target_repo
                 else str(type_store.dirs / record["name"])),
         "model": record.get("model"),
         "claude_md": typestore.render(record),
         "argv": runner.build_argv(
             allowed_tools=grant.tools or None, model=record.get("model"),
-            mcp_bridge_url="<bridge>" if grant.reaches_peers else None),
+            mcp_bridge_url="<bridge>",
+            mcp_servers=record.get("mcp_servers") or (),
+            mcp_config_path=("<type dir>/.mcp-session.json"
+                             if record.get("mcp_servers") else None)),
         "note": "Nothing was written and nothing was launched.",
     }
     task_uuid = payload.get("task")
@@ -745,6 +791,7 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
         roles.require(record["agent_role"], notify.bridge_url(), type_store.root)
     except ValueError as exc:
         raise ServiceError(str(exc)) from None
+    _require_servers(record, type_store)
     written = type_store.append(record)
 
     if transition == "deactivated_by_edit":

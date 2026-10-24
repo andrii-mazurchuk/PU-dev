@@ -141,7 +141,9 @@ def test_a_runtime_type_answers_its_properties_from_its_grant(types):
     assert found["builder"].reaches_peers is True
     assert found["builder"].model == "opus"
     assert found["looker"].runs_in_target_repo is False
-    assert found["looker"].reaches_peers is False
+    # Every queue session reaches holonic MCP, whatever its grant; grants
+    # are local tools only (pu vision, 2026-10-24).
+    assert found["looker"].reaches_peers is True
     assert found["looker"].model is None
 
 

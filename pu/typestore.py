@@ -78,10 +78,9 @@ def contract_preamble(grant_name: str) -> str:
     the task was still open -- while pu took that complaint as the answer
     and completed the task.
 
-    **Derived from the grant, not templated per grant.** The reach sentence
-    follows from `Grant.reaches_peers`, so a fifth grant inherits this
-    rather than needing a fifth paragraph somebody has to remember to
-    write.
+    **Derived from the grant, not templated per grant**, so a fifth grant
+    inherits this rather than needing a fifth paragraph somebody has to
+    remember to write.
 
     This goes **above** the author's prompt, and it wins. A prompt telling
     the session to call `pu_resolve_task` is wrong whatever its author
@@ -90,19 +89,14 @@ def contract_preamble(grant_name: str) -> str:
     """
     grant = session_types.GRANTS[grant_name]
 
-    if grant.reaches_peers:
-        reach = (
-            "You can reach other units' tools through the bridge "
-            "(`mcp__mcp-bridge__*`). **Do not resolve this task yourself "
-            "even though you can** -- this unit does it from your final "
-            "message, and doing both records the answer twice."
-        )
-    else:
-        reach = (
-            "You have no way back into this unit. There are no `pu_*` tools "
-            "in this session, and attempting one is refused rather than "
-            "queued -- it only costs you part of the turn."
-        )
+    # Every queue session reaches holonic MCP, whatever its grant.
+    reach = (
+        "You can reach other units' tools through the bridge "
+        "(`mcp__mcp-bridge__*`), plus any MCP server this type attaches. "
+        "**Do not resolve this task yourself even though you can** -- this "
+        "unit does it from your final message, and doing both records the "
+        "answer twice."
+    )
 
     return "\n".join([
         "## How this session ends",

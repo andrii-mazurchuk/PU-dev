@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pu import (
-    ask, bodies, control, docs, pipeline, records, service, session_types, sops,
+    ask, bodies, control, docs, mcpstore, pipeline, records, service, session_types, sops,
     taskstore, triggers, typestore,
 )
 
@@ -255,7 +255,7 @@ TOOLS = [
                 "grant": {"type": "string", "enum": sorted(session_types.GRANTS), "description": "the permission bundle: none, read, web or repo"},
                 "model": {"type": "string", "description": "absent means whatever the CLI defaults to; set it only where the work differs in reasoning load"},
                 "agent_role": {"type": "string", "description": "the agent this type acts for, e.g. finance or manager; absent means system. Not a display name. Changing it on a live type switches the type off, like any edit."},
-                "mcp_servers": {"type": "array", "items": {"type": "string"}},
+                "mcp_servers": {"type": "array", "items": {"type": "string"}, "description": "names from the MCP registry (list_mcp_servers) to attach to this type's sessions; all of each server's tools are allowed. Holonic MCP is attached to every session already and is not listed."},
                 "plugins": {"type": "array", "items": {"type": "string"}},
                 "trigger": {"type": "object", "description": "what fires this type"},
                 "enabled": {"type": "boolean", "description": "a type claims tasks and runs only while this is true. Ignored on the first write -- a new type is always created inactive. Activation is the owner's decision and nothing enforces that, so every flip notifies them."},
@@ -399,6 +399,29 @@ TOOLS = [
                 "emits": {"type": "object"},
             },
             "required": ["name", "source"],
+        },
+    },
+    {
+        "name": "list_mcp_servers",
+        "description": "The MCP servers a session type can attach, by name. Holonic MCP is not listed: it is attached to every session.",
+        "method": "GET",
+        "path": "/mcp-servers",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "write_mcp_server",
+        "description": "Add or revise a named MCP server in the registry (append-only; writing an existing name adds a revision). http only. A header value must be a ${ENV_VAR} placeholder filled from pu's environment at launch -- a literal token is refused, since the log is kept forever. Every write notifies the owner. A session type reaches a server only once it lists it in mcp_servers.",
+        "method": "POST",
+        "path": "/mcp-servers",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "lowercase letters, digits, - and _; no dot"},
+                "url": {"type": "string"},
+                "headers": {"type": "object", "description": "e.g. {\"Authorization\": \"Bearer ${GITHUB_TOKEN}\"}"},
+                "purpose": {"type": "string"},
+            },
+            "required": ["name", "url"],
         },
     },
     {
@@ -643,6 +666,12 @@ def make_handler(
                 if parts == ["gate"]:
                     return self._json(200, self._gate())
 
+                if parts == ["mcp-servers"]:
+                    if type_store is None:
+                        return self._json(200, {"mcp_servers": []})
+                    return self._json(200, service.list_mcp_servers(
+                        mcpstore.McpStore(type_store.root)))
+
                 if parts == ["ticks"]:
                     limit = int(one("limit") or 50)
                     return self._json(200, {"ticks": control.ticks(
@@ -855,6 +884,12 @@ def make_handler(
                               else service.rename_session_type)
                     return self._json(200, rename(
                         target, parts[1], payload.get("to") or ""))
+
+                if parts == ["mcp-servers"]:
+                    if type_store is None:
+                        return self._json(503, {"error": "no state wired"})
+                    return self._json(201, service.write_mcp_server(
+                        mcpstore.McpStore(type_store.root), payload))
 
                 if parts == ["session-types", "dry-run"]:
                     if type_store is None:
