@@ -148,12 +148,13 @@ def test_a_tick_never_takes_a_claim_away(store, body_store, tmp_path):
 # -- one tick at a time ----------------------------------------------------
 
 
-def test_an_overlapping_tick_declines_rather_than_racing(
+def test_a_poke_mid_session_is_refused_at_the_default_ceiling_of_one(
     store, body_store, tmp_path
 ):
-    """Two sessions at once is not a busier unit, it is two sessions racing
-    for the same top-of-queue task."""
+    """The lock covers deciding, not running, so the next poke gets in --
+    and at the default ceiling of one, it starts nothing."""
     store.add("work", tags=["afk"], kind="research")
+    store.add("more work", tags=["afk"], kind="research")
     inner: dict = {}
 
     def reentrant(**kwargs):
@@ -165,7 +166,7 @@ def test_an_overlapping_tick_declines_rather_than_racing(
     outer = _tick(store, body_store, tmp_path, reentrant)
     assert outer.ran is True
     assert inner["result"].ran is False
-    assert inner["result"].reason == "a tick is already running"
+    assert "concurrency ceiling" in inner["result"].reason
 
 
 def test_blocking_removes_only_the_afk_tag(store):

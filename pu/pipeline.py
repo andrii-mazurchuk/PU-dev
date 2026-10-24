@@ -9,11 +9,11 @@ hand with `task next`.
 
 Order of operations, and each is load-bearing:
 
-1. **One tick at a time.** The server is threaded and the gateway pokes
-   `/trigger` on a schedule, so a slow session and the next poke overlap
-   sooner or later. A second tick declines rather than queueing: two
-   sessions running at once is not a busier unit, it is two sessions
-   racing for the same top-of-queue task.
+1. **One tick decides at a time.** The lock covers gates, selection and
+   the claim -- not the session. Claim-before-work (step 5) is what closes
+   the race for the head of the queue, so a session can run outside the
+   lock and the next poke can start another, up to `PU_MAX_CONCURRENT`
+   (default 1). Two sessions never share a target repository.
 2. **Recover a lost run, report stale claims**, before anything reads the
    queue. A run this process lost is released; a claim anyone else holds
    is only ever reported.
@@ -39,7 +39,9 @@ Order of operations, and each is load-bearing:
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
+import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,6 +73,75 @@ UNIT_NAME = "pu"
 # declined and says so, rather than queueing up behind a long session and
 # firing into a queue that has moved on since.
 _TICK_LOCK = threading.Lock()
+
+# Sessions in flight in this process, by task uuid, with the repository each
+# runs in. The ceiling and the one-session-per-repo rule read it; crash
+# recovery reads it to tell a live run's marker from a dead process's.
+_RUNNING: dict[str, dict[str, Any]] = {}
+_RUNNING_LOCK = threading.Lock()
+
+
+@dataclasses.dataclass(frozen=True)
+class _Launch:
+    """What a tick decided to run, claimed and registered, to be run after
+    the deciding lock is released."""
+    run: Callable[[], "TickResult"]
+    task_uuid: str
+    marker: Path
+    emitted: tuple = ()
+
+
+def max_concurrent(environ: dict[str, str] | None = None) -> int:
+    """`PU_MAX_CONCURRENT`, gateway-injected, default 1 -- so this changes
+    nothing until someone raises it. Set a cost cap before you do."""
+    raw = (os.environ if environ is None else environ).get("PU_MAX_CONCURRENT", "")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 1
+
+
+def headroom_fraction(environ: dict[str, str] | None = None) -> float:
+    """The share of the daily cap past which work goes on one at a time.
+    A fraction, like the usage ceilings, not a dollar figure beside them."""
+    raw = (os.environ if environ is None else environ).get("PU_HEADROOM_FRACTION", "")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.8
+    return value if 0 < value <= 1 else 0.8
+
+
+def _ceiling(policy, session_store, today: str, state_dir: Path,
+             mcp_bridge_url: str | None) -> int:
+    """How many sessions may run right now. Near the cost cap the ceiling
+    drops to one -- work continues, unparallel -- and the owner is told on
+    the change, never every tick."""
+    wanted = max_concurrent()
+    reason = None
+    cap = policy.get("daily_cost_cap_usd")
+    if wanted > 1 and cap is not None:
+        try:
+            cap = float(cap)
+            spent = session_store.cost_since(today)
+            if spent >= headroom_fraction() * cap:
+                reason = f"spent ${spent:.2f} of the ${cap:.2f} daily cap"
+        except (TypeError, ValueError):
+            pass
+    path = Path(state_dir) / "headroom.json"
+    previous = usage_gate.load_blocked_state(path)
+    if reason != previous:
+        notify.notify_owner(
+            mcp_bridge_url,
+            f"pu dropped to one session at a time: {reason}." if reason else
+            f"pu is back to running up to {wanted} sessions at once.",
+            source_unit=UNIT_NAME)
+        usage_gate.save_blocked_state(path, reason)
+    return 1 if reason else wanted
+
+
+def _repo_key(repo: str | None) -> str | None:
+    return os.path.normcase(os.path.abspath(repo)) if repo else None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -436,7 +507,9 @@ def _write_mcp_config(stype, mcp_store, bridge_url: str | None) -> str:
 # present then belongs to a process that is gone. (pu vision, 2026-10-24.)
 
 
-def _write_inflight(path: Path, task: records.Task, stype) -> None:
+def _write_inflight(state_dir: Path, task: records.Task, stype) -> Path:
+    """One marker per run, so several runs can be in flight at once."""
+    path = Path(state_dir) / "inflight" / f"{task.uuid}.json"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
@@ -447,6 +520,7 @@ def _write_inflight(path: Path, task: records.Task, stype) -> None:
         }), encoding="utf-8")
     except OSError:
         pass
+    return path
 
 
 def _clear_inflight(path: Path) -> None:
@@ -456,26 +530,40 @@ def _clear_inflight(path: Path) -> None:
         pass
 
 
-def _recover_lost_run(store, session_store, path: Path, mcp_bridge_url) -> None:
-    try:
-        lost = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    _clear_inflight(path)
-    task = store.get(lost.get("task_uuid") or "") if isinstance(lost, dict) else None
-    if task is None or task.status != "pending":
-        return
-    why = (f"infrastructure: run lost -- pu stopped mid-session "
-           f"(started {lost.get('started_at')})")
-    # A lost run is an infrastructure failure: retried once, counted.
-    outcome, detail = _fail(store, task, why, mcp_bridge_url)
-    session_store.record(
-        task.uuid, lost.get("session_type") or "unknown", "",
-        runner_mod.SessionResult(exit_code=-1), "lost", detail,
-        agent_role=lost.get("agent_role") or "system",
-        extra={"started_by": (f"trigger:{task.trigger}" if task.trigger
-                              else "task")},
-    )
+def _recover_lost_runs(store, session_store, state_dir: Path,
+                       mcp_bridge_url) -> None:
+    """Every marker whose run this process is not running belongs to a
+    process that is gone. `inflight.json` is the single marker the one-
+    session build wrote, still read so a deploy mid-run loses nothing."""
+    markers = sorted((Path(state_dir) / "inflight").glob("*.json"))
+    legacy = Path(state_dir) / "inflight.json"
+    if legacy.exists():
+        markers.append(legacy)
+    for path in markers:
+        try:
+            lost = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _clear_inflight(path)
+            continue
+        uuid = lost.get("task_uuid") if isinstance(lost, dict) else None
+        with _RUNNING_LOCK:
+            if uuid in _RUNNING:
+                continue
+        _clear_inflight(path)
+        task = store.get(uuid or "")
+        if task is None or task.status != "pending":
+            continue
+        why = (f"infrastructure: run lost -- pu stopped mid-session "
+               f"(started {lost.get('started_at')})")
+        # A lost run is an infrastructure failure: retried once, counted.
+        outcome, detail = _fail(store, task, why, mcp_bridge_url)
+        session_store.record(
+            task.uuid, lost.get("session_type") or "unknown", "",
+            runner_mod.SessionResult(exit_code=-1), "lost", detail,
+            agent_role=lost.get("agent_role") or "system",
+            extra={"started_by": (f"trigger:{task.trigger}" if task.trigger
+                                  else "task")},
+        )
 
 
 # -- the tick -------------------------------------------------------------
@@ -500,10 +588,10 @@ def tick(
     """Do at most one unit of work, and write down what was decided."""
     tracker_path = tracker_path or (unit_root / "state" / "repeat_tracker.json")
     if not _TICK_LOCK.acquire(blocking=False):
-        result = TickResult(ran=False, reason="a tick is already running")
+        result = TickResult(ran=False, reason="another tick is deciding")
     else:
         try:
-            result = _tick(
+            decided = _tick(
                 store, body_store, session_store, unit_root, peers_path,
                 cost_policy_path, session_runner, now, tracker_path,
                 repeat_threshold, stale_claim_seconds, mcp_bridge_url,
@@ -511,6 +599,19 @@ def tick(
             )
         finally:
             _TICK_LOCK.release()
+        if isinstance(decided, _Launch):
+            try:
+                result = dataclasses.replace(decided.run(),
+                                             emitted=decided.emitted)
+            finally:
+                # On every exit a live process makes. Only a process that
+                # dies mid-run leaves its marker behind -- which is what
+                # makes a marker with no registered run mean "lost".
+                with _RUNNING_LOCK:
+                    _RUNNING.pop(decided.task_uuid, None)
+                _clear_inflight(decided.marker)
+        else:
+            result = decided
     control.note_tick(tracker_path.parent, result.as_dict())
     return result
 
@@ -522,8 +623,6 @@ def _tick(
 ) -> TickResult:
     moment = now()
 
-    # Before anything reads the queue: a claim left behind by a process
-    # that died is otherwise invisible to every future tick.
     # Before the gates: silence is about whether ticks happened at all,
     # and a blocked tick still happened.
     gap = control.silence(tracker_path.parent, moment, control.heartbeat_seconds())
@@ -534,8 +633,7 @@ def _tick(
             f"time; schedules that came due fire late now, once each.",
             source_unit=UNIT_NAME)
 
-    inflight_path = tracker_path.parent / "inflight.json"
-    _recover_lost_run(store, session_store, inflight_path, mcp_bridge_url)
+    _recover_lost_runs(store, session_store, tracker_path.parent, mcp_bridge_url)
     for stale in guards.newly_stale(
             store, tracker_path.parent / "stale_claims.json",
             stale_claim_seconds, moment):
@@ -585,6 +683,19 @@ def _tick(
             reason=f"paused since {pause.get('since')}"
                    + (f": {pause['reason']}" if pause.get("reason") else ""))
 
+    # The ceiling, checked inside the lock like the gates: a launch decided
+    # here is a launch counted here.
+    ceiling = _ceiling(policy, session_store, moment.strftime("%Y-%m-%d"),
+                       tracker_path.parent, mcp_bridge_url)
+    with _RUNNING_LOCK:
+        running = dict(_RUNNING)
+    if len(running) >= ceiling:
+        return TickResult(
+            ran=False, emitted=emitted,
+            reason=f"at the concurrency ceiling: {len(running)} running, "
+                   f"at most {ceiling}")
+    busy_repos = {r["repo"] for r in running.values() if r.get("repo")}
+
     try:
         types = session_types_mod.discover(
             unit_root / "session_types", store=type_store)
@@ -618,6 +729,13 @@ def _tick(
                 f"{stype.agent_role!r} is no longer in the gateway's registry."
                 f"\n\nNothing ran. Give it an existing role and activate it "
                 f"again.", source_unit=UNIT_NAME)
+            continue
+
+        # One session per target repository, whatever the ceiling: a session
+        # is handed the repo itself as cwd, so two would share a tree, an
+        # index and a branch. Checked before the repeat breaker counts a
+        # selection, so waiting for a repo is never mistaken for being stuck.
+        if stype.runs_in_target_repo and _repo_key(candidate.repo) in busy_repos:
             continue
 
         # Winning selection repeatedly means it is not resolving: a
@@ -665,33 +783,24 @@ def _tick(
             cwd = stype.dir
             instructions = ""
 
-        return dataclasses.replace(_run(
-            store, body_store, session_store, unit_root, peers_path,
-            candidate, stype, cwd, instructions, session_runner,
-            mcp_bridge_url, inflight_path, role_description,
-            mcpstore.McpStore(type_store.root) if type_store is not None else None,
-        ), emitted=emitted)
+        # Claim before work, still inside the lock: the claim is what takes
+        # the task off every other tick's queue.
+        store.claim(candidate.uuid)
+        marker = _write_inflight(tracker_path.parent, candidate, stype)
+        with _RUNNING_LOCK:
+            _RUNNING[candidate.uuid] = {
+                "repo": (_repo_key(candidate.repo)
+                         if stype.runs_in_target_repo else None)}
+        return _Launch(
+            run=functools.partial(
+                _run_claimed, store, body_store, session_store, unit_root,
+                peers_path, candidate, stype, cwd, instructions,
+                session_runner, mcp_bridge_url, role_description,
+                mcpstore.McpStore(type_store.root)
+                if type_store is not None else None),
+            task_uuid=candidate.uuid, marker=marker, emitted=emitted)
 
     return TickResult(ran=False, reason="nothing runnable", emitted=emitted)
-
-
-def _run(
-    store, body_store, session_store, unit_root, peers_path,
-    task, stype, cwd, instructions, session_runner, mcp_bridge_url,
-    inflight_path, role_description="", mcp_store=None,
-) -> TickResult:
-    store.claim(task.uuid)
-    _write_inflight(inflight_path, task, stype)
-    try:
-        return _run_claimed(
-            store, body_store, session_store, unit_root, peers_path,
-            task, stype, cwd, instructions, session_runner, mcp_bridge_url,
-            role_description, mcp_store)
-    finally:
-        # Cleared on every way out this process survives. Only a process
-        # that dies mid-run leaves it behind, which is exactly what makes
-        # its presence at the next tick mean "lost".
-        _clear_inflight(inflight_path)
 
 
 def _run_claimed(
