@@ -428,6 +428,14 @@ class TaskStore:
         if "kind" in fields:
             records.check_kind(fields["kind"])  # type: ignore[arg-type]
         args = _encode_fields(fields)
+        # A tag goes onto the command line as `+tag`, where the CLI parses
+        # anything but letters, digits and `_` as an expression -- measured:
+        # `+needs-human` failed, and once overwrote the task's description.
+        for tag in (*add_tags, *remove_tags):
+            if not re.fullmatch(r"[A-Za-z0-9_]+", tag):
+                raise TaskError([f"+{tag}"], 0,
+                                f"tag {tag!r} cannot be changed safely through "
+                                f"the CLI; use letters, digits and _ only")
         args += [f"+{t}" for t in add_tags]
         args += [f"-{t}" for t in remove_tags]
         if not args:

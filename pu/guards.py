@@ -49,6 +49,9 @@ DEFAULT_REPEAT_THRESHOLD = 3
 DEFAULT_STALE_CLAIM_SECONDS = 24 * 60 * 60
 
 BLOCK_PREFIX = "auto-blocked:"
+# An underscore, not a hyphen: the CLI reads `+needs-human` as arithmetic,
+# fails, and in one case overwrote the task's description with it.
+NEEDS_HUMAN_TAG = "needs_human"
 
 
 def read_tracker(path: Path) -> dict[str, Any]:
@@ -97,7 +100,10 @@ def block(store: taskstore.TaskStore, uuid: str, reason: str) -> None:
     Not deleted and not closed: it stays open and stays visible to a
     person, who is the one who can now do something about it."""
     store.annotate(uuid, f"{BLOCK_PREFIX} {reason}")
-    store.modify(uuid, remove_tags=[records.AFK_TAG])
+    # `needs_human` makes "handed to a person" something a query can find,
+    # not only something an annotation says.
+    store.modify(uuid, add_tags=[NEEDS_HUMAN_TAG],
+                 remove_tags=[records.AFK_TAG])
 
 
 def parse_started_at(value: str | None) -> datetime | None:

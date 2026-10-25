@@ -172,6 +172,21 @@ def _ceiling(policy, session_store, today: str, state_dir: Path,
     return 1 if reason else wanted
 
 
+def running() -> list[dict[str, Any]]:
+    """The sessions in flight in this process, longest-running first."""
+    now = datetime.now(timezone.utc)
+    with _RUNNING_LOCK:
+        items = [dict(info, task_uuid=uuid) for uuid, info in _RUNNING.items()]
+    for item in items:
+        item.pop("repo", None)
+        try:
+            item["elapsed_seconds"] = int(
+                (now - datetime.fromisoformat(item["started_at"])).total_seconds())
+        except (KeyError, TypeError, ValueError):
+            item["elapsed_seconds"] = None
+    return sorted(items, key=lambda i: i.get("started_at") or "")
+
+
 def _repo_key(repo: str | None) -> str | None:
     return os.path.normcase(os.path.abspath(repo)) if repo else None
 

@@ -218,13 +218,6 @@ TOOLS = [
         },
     },
     {
-        "name": "run_tick",
-        "description": "Do at most one unit of work now: gate, select the most urgent runnable task, claim it, run a session against it, record the result. Spends money. The gate runs inside the tick, so there is no path in that routes around it; a blocked gate returns ran=false with the reason and changes no task's state.",
-        "method": "POST",
-        "path": "/trigger",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
         "name": "list_session_types",
         "description": "Every session type this unit holds, as its current record. A session type is what a session runs as: its instructions, its grant, and what fires it. Reading is open to every peer.",
         "method": "GET",
@@ -447,6 +440,34 @@ TOOLS = [
         "method": "GET",
         "path": "/audit",
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_running",
+        "description": "The sessions running right now: task, session type, agent role, when it started and how long it has run.",
+        "method": "GET",
+        "path": "/running",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "needs_attention",
+        "description": "Everything waiting on a person, in two groups. waiting_on_you: open grilling and prototype tickets on the frontier, tasks pu handed to a person (tagged needs_human), and session types or triggers written but never activated. faults: stale run claims and placement faults -- each was also notified when it appeared.",
+        "method": "GET",
+        "path": "/attention",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_spend",
+        "description": "What sessions cost, totalled per day, ISO week (Monday start) or month, over any date range. Periods with no spend appear as zero. With no range: the last 14 days, 8 weeks or 6 months.",
+        "method": "GET",
+        "path": "/spend",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "by": {"type": "string", "enum": ["day", "week", "month"]},
+                "from": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
+                "to": {"type": "string", "description": "YYYY-MM-DD, inclusive; default today"},
+            },
+        },
     },
     {
         "name": "list_tick_log",
@@ -718,10 +739,24 @@ def make_handler(
                 if parts == ["spend"]:
                     if session_store is None:
                         return self._json(200, {"days": []})
+                    if one("by") or one("from") or one("to"):
+                        try:
+                            return self._json(200, session_store.cost_by_period(
+                                one("by") or "day", one("from"), one("to")))
+                        except ValueError as exc:
+                            raise service.ServiceError(str(exc)) from None
+                    # The dashboard's original call, kept working.
                     days = int(one("days") or 14)
                     return self._json(200, {
                         "days": session_store.cost_by_day(min(max(days, 1), 90))
                     })
+
+                if parts == ["running"]:
+                    return self._json(200, {"running": pipeline.running()})
+
+                if parts == ["attention"]:
+                    return self._json(200, service.needs_attention(
+                        store, type_store, trigger_store))
 
                 if parts == ["sessions"]:
                     if session_store is None:

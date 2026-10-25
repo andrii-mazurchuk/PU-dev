@@ -181,6 +181,53 @@ class SessionStore:
             out.append({"day": day, "cost_usd": round(totals.get(day, 0.0), 6)})
         return out
 
+    def cost_by_period(self, by: str = "day", start: str | None = None,
+                       end: str | None = None) -> dict[str, Any]:
+        """Cost per day, ISO week or month between two dates, inclusive.
+        Empty periods are zero for the same reason as in `cost_by_day`:
+        a chart that skips them reads as steady work that never happened.
+        """
+        if by not in ("day", "week", "month"):
+            raise ValueError("by is day, week or month")
+        today = datetime.now(timezone.utc).date()
+        try:
+            last = datetime.fromisoformat(end).date() if end else today
+            first = (datetime.fromisoformat(start).date() if start else
+                     last - timedelta(days={"day": 13, "week": 7 * 7 + 6,
+                                            "month": 0}[by]))
+        except ValueError:
+            raise ValueError("from and to are dates, YYYY-MM-DD") from None
+        if by == "month" and not start:
+            first = (last.replace(day=1) - timedelta(days=150)).replace(day=1)
+        if first > last:
+            raise ValueError("from is after to")
+
+        def key(day) -> str:
+            if by == "day":
+                return day.isoformat()
+            if by == "week":
+                year, week, _ = day.isocalendar()
+                return f"{year}-W{week:02d}"
+            return f"{day.year}-{day.month:02d}"
+
+        totals: dict[str, float] = {}
+        day = first
+        while day <= last:
+            totals.setdefault(key(day), 0.0)
+            day += timedelta(days=1)
+        for record in self._results():
+            stamp = str(record.get("recorded_at") or "")[:10]
+            try:
+                when = datetime.fromisoformat(stamp).date()
+            except ValueError:
+                continue
+            if first <= when <= last:
+                totals[key(when)] += float(record.get("cost_usd") or 0.0)
+        return {"by": by, "from": first.isoformat(), "to": last.isoformat(),
+                "periods": [{"period": k, "cost_usd": round(v, 6)}
+                            for k, v in totals.items()],
+                "total_usd": round(sum(totals.values()), 6)}
+
     def cost_since(self, iso_prefix: str) -> float:
         """Total cost of runs whose `recorded_at` starts with `iso_prefix`
         -- a date string gives the day's spend. Used by the cost gate."""

@@ -434,6 +434,47 @@ def audit(store: taskstore.TaskStore) -> dict[str, list[dict[str, Any]]]:
     return out
 
 
+def needs_attention(store: taskstore.TaskStore, type_store=None,
+                    trigger_store=None) -> dict[str, Any]:
+    """Everything waiting on a person, kept in two groups on purpose: work
+    that is theirs by design, and faults that were escalated as they
+    happened and are collected here so there is one place to look."""
+    def row(t):
+        return {"uuid": t.uuid, "title": t.description[:80],
+                "kind": t.kind, "project": t.project}
+
+    human_kinds = {"grilling", "prototype"}
+    frontier_hitl = [row(t) for t in store.ready(*_hide_runs(None))
+                     if t.kind in human_kinds]
+    handed_over = [row(t) for t in store.export(
+        "status:pending", f"+{guards.NEEDS_HUMAN_TAG}")]
+
+    unactivated = []
+    for kind, source in (("session_type", type_store), ("trigger", trigger_store)):
+        if source is None:
+            continue
+        for name, record in source.current().items():
+            if record.get("retired") or record.get("enabled"):
+                continue
+            if kind == "session_type" and source.has_ever_been_enabled(name):
+                continue
+            unactivated.append({"kind": kind, "name": name,
+                                "purpose": record.get("purpose", "")})
+
+    faults = audit(store)
+    return {
+        "waiting_on_you": {
+            "decisions": frontier_hitl,
+            "handed_to_you": handed_over,
+            "never_activated": unactivated,
+        },
+        "faults": {
+            "stale_run_claims": [row(t) for t in guards.stale_run_claims(store)],
+            **{k: v for k, v in faults.items() if v},
+        },
+    }
+
+
 def wire_blocking(
     store: taskstore.TaskStore, uuid: str, blocked_by: Sequence[str]
 ) -> dict[str, Any]:
