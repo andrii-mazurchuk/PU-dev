@@ -59,7 +59,7 @@ def test_two_tasks_on_one_repo_never_run_at_once(
     assert inner["result"].outcome is None
 
 
-def test_near_the_cap_the_ceiling_drops_to_one_and_says_so_once(
+def test_within_the_runway_of_the_cap_the_ceiling_drops_to_one_once(
         tmp_path, monkeypatch):
     monkeypatch.setenv("PU_MAX_CONCURRENT", "4")
     sent = []
@@ -71,13 +71,90 @@ def test_near_the_cap_the_ceiling_drops_to_one_and_says_so_once(
     today = session_store.runs()[0]["recorded_at"][:10]
     policy = {"daily_cost_cap_usd": 10}
 
+    # 8.50 of 10 is inside the default 15% runway.
     assert pipeline._ceiling(policy, session_store, today, tmp_path, None) == 1
     assert pipeline._ceiling(policy, session_store, today, tmp_path, None) == 1
-    assert len(sent) == 1 and "one session at a time" in sent[0]
+    assert len(sent) == 1 and "budget is running low" in sent[0]
 
-    # Without a cap there is no headroom rule: the configured ceiling holds.
+    # Without a cap there is no budget runway: the configured ceiling holds.
     assert pipeline._ceiling({}, session_store, today, tmp_path, None) == 4
-    assert "back to running up to 4" in sent[-1]
+    assert "recovered" in sent[-1]
+
+
+def test_a_usage_window_inside_its_runway_also_drops_to_one(tmp_path, monkeypatch):
+    monkeypatch.setenv("PU_MAX_CONCURRENT", "3")
+    monkeypatch.setattr(pipeline.notify, "notify_owner", lambda *a, **k: True)
+    session_store = sessions.SessionStore(tmp_path / "s")
+    # 0.62 against a 0.70 ceiling is past 85% of it.
+    assert pipeline._ceiling({}, session_store, "2026-10-25", tmp_path, None,
+                             {"five_hour": {"utilization": 0.62}},
+                             {"five_hour": 0.70}) == 1
+    assert pipeline._ceiling({}, session_store, "2026-10-25", tmp_path, None,
+                             {"five_hour": {"utilization": 0.30}},
+                             {"five_hour": 0.70}) == 3
+
+
+def test_running_sessions_count_at_their_type_s_average(tmp_path):
+    """The reserve: N sessions in flight cannot carry spend past the cap
+    unseen."""
+    session_store = sessions.SessionStore(tmp_path / "s")
+    for cost in (2.0, 4.0):
+        session_store.record("t", "research", "", runner.SessionResult(0, cost_usd=cost),
+                             "resolved")
+    with pipeline._RUNNING_LOCK:
+        pipeline._RUNNING["a"] = {"session_type": "research"}
+        pipeline._RUNNING["b"] = {"session_type": "brand-new"}
+    try:
+        # research averages 3.0; a type with no history counts at the overall 3.0.
+        assert pipeline.reserved_cost(session_store) == 6.0
+        today = session_store.runs()[0]["recorded_at"][:10]
+        assert pipeline.check_cost_gate({"daily_cost_cap_usd": 10}, session_store,
+                                        today, reserved=6.0) is not None
+    finally:
+        with pipeline._RUNNING_LOCK:
+            pipeline._RUNNING.clear()
+
+
+def test_the_live_ceiling_outranks_the_env_and_survives_a_restart(
+        tmp_path, monkeypatch):
+    from pu import control
+
+    monkeypatch.setenv("PU_MAX_CONCURRENT", "2")
+    assert pipeline.max_concurrent(state_dir=tmp_path) == 2
+    control.set_max_concurrent(tmp_path, 5)
+    assert pipeline.max_concurrent(state_dir=tmp_path) == 5
+
+
+def test_queue_runs_high_before_medium_before_low_then_oldest_first(store):
+    low = store.add("flexible", tags=["afk"], kind="research", priority="L")
+    first = store.add("first fired", tags=["afk"], kind="execution")
+    high = store.add("the 08:00 brief", tags=["afk"], kind="research", priority="H")
+    second = store.add("second fired", tags=["afk"], kind="research")
+    assert [t.uuid for t in store.runnable()] == [high, first, second, low]
+
+
+def test_stale_trigger_work_expires_unstarted_and_says_so(
+        store, body_store, tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    sent = []
+    monkeypatch.setattr(pipeline.notify, "notify_owner",
+                        lambda url, text, **k: sent.append(text) or True)
+    now = datetime(2026, 10, 25, 14, tzinfo=timezone.utc)
+    old = store.add("08:00 brief", tags=["afk"], kind="research", project="pu.runs",
+                    expires=(now - timedelta(hours=5)).isoformat())
+    started = store.add("long run", tags=["afk"], kind="research", project="pu.runs",
+                        expires=(now - timedelta(hours=5)).isoformat())
+    store.claim(started)
+    fresh = store.add("still fine", tags=["afk"], kind="research", project="pu.runs",
+                      expires=(now + timedelta(hours=1)).isoformat())
+
+    pipeline._expire_stale(store, now, None)
+    assert store.get(old).status == "completed"
+    assert any(a.startswith("expired:") for a in store.get(old).annotations)
+    assert store.get(started).status == "pending", "a started run is never cut off"
+    assert store.get(fresh).status == "pending"
+    assert len(sent) == 1
 
 
 def test_the_default_is_one_session():

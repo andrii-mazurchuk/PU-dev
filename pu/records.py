@@ -75,6 +75,24 @@ SESSION_TYPE_FOR_KIND: dict[str, str] = {
 # agent-runnable by accident.
 AFK_TAG = "afk"
 
+# Priority, in the words pu speaks, onto Taskwarrior's own attribute.
+# Time-bound work (the 08:00 brief) is high; work that can run any time in a
+# window is low; everything else is medium, which is also what no priority
+# means. pu's queue runs high before medium before low, oldest first.
+PRIORITIES = {"high": "H", "medium": "M", "low": "L"}
+PRIORITY_RANK = {"H": 0, "M": 1, None: 1, "": 1, "L": 2}
+
+
+def check_priority(priority: str | None) -> str | None:
+    """The Taskwarrior value for a priority word, or None for none given."""
+    if priority in (None, ""):
+        return None
+    if priority not in PRIORITIES:
+        raise RecordError(
+            f"unknown priority {priority!r} (allowed: high, medium, low)")
+    return PRIORITIES[priority]
+
+
 # The reserved project trigger-fired work lands in. Hidden from every read
 # but the queue -- see service.py, "the run namespace".
 RUNS_PROJECT = "pu.runs"
@@ -108,6 +126,10 @@ class Task:
     modified: str | None = None
     start: str | None = None
     trigger: str | None = None
+    priority: str | None = None
+    # When trigger work stops being worth starting (ISO, UTC), if its
+    # trigger said so. Started work is never cut off.
+    expires: str | None = None
 
     @property
     def afk(self) -> bool:
@@ -183,6 +205,8 @@ def from_export(raw: dict[str, Any]) -> Task:
         modified=raw.get("modified"),
         start=raw.get("start"),
         trigger=raw.get("trigger"),
+        priority=raw.get("priority"),
+        expires=raw.get("expires"),
     )
 
 

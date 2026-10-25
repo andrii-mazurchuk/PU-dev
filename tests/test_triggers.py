@@ -487,6 +487,27 @@ def test_without_retry_after_the_wait_doubles_up_to_an_hour():
     assert cursor["backoff_seconds"] == triggers.MAX_BACKOFF_SECONDS
 
 
+def test_a_trigger_sets_priority_and_stale_after_on_its_work(
+        store, body_store, tmp_path):
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting(name="brief", source={
+        "kind": "schedule", "every_seconds": 3600},
+        emits={"kind": "research", "priority": "high",
+               "stale_after_seconds": 7200}))
+    [made] = pipeline.emit_due_work(trigger_store, store, body_store, now=at())
+    task = store.get(made["task_uuid"])
+    assert task.priority == "H"
+    assert task.expires.startswith("2026-10-09T14:00")
+
+
+def test_an_unknown_priority_is_refused(tmp_path):
+    with pytest.raises(triggers.TriggerError, match="priority"):
+        triggers.TriggerStore(tmp_path).append(
+            emitting(emits={"kind": "research", "priority": "urgent"}))
+
+
 def test_one_broken_trigger_does_not_silence_the_others(
         store, body_store, tmp_path):
     """A single unusable regex would otherwise stop every watch in the

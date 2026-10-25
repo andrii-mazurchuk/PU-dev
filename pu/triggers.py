@@ -184,6 +184,19 @@ def validated(record: dict[str, Any]) -> dict[str, Any]:
         records.check_kind(emits.get("kind"))
         if not isinstance(emits.get("tags") or [], list):
             raise TriggerError("emits.tags is a list")
+        try:
+            records.check_priority(emits.get("priority"))
+        except records.RecordError as exc:
+            raise TriggerError(str(exc)) from None
+        stale = emits.get("stale_after_seconds")
+        if stale is not None:
+            try:
+                if float(stale) <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise TriggerError(
+                    "emits.stale_after_seconds is a positive number of "
+                    "seconds") from None
 
     for clause in record.get("predicate") or ():
         if not isinstance(clause, (list, tuple)) or len(clause) != 3:

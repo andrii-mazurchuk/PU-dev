@@ -43,7 +43,7 @@ import functools
 import json
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -91,9 +91,14 @@ class _Launch:
     emitted: tuple = ()
 
 
-def max_concurrent(environ: dict[str, str] | None = None) -> int:
-    """`PU_MAX_CONCURRENT`, gateway-injected, default 1 -- so this changes
-    nothing until someone raises it. Set a cost cap before you do."""
+def max_concurrent(environ: dict[str, str] | None = None,
+                   state_dir: Path | None = None) -> int:
+    """How many sessions may run at once. A live setting the owner changes
+    (`set_max_concurrent`, persisted in private storage) wins; otherwise
+    `PU_MAX_CONCURRENT`; otherwise 1. Set a cost cap before raising it."""
+    configured = control.configured_max(state_dir)
+    if configured:
+        return configured
     raw = (os.environ if environ is None else environ).get("PU_MAX_CONCURRENT", "")
     try:
         return max(1, int(raw))
@@ -101,40 +106,67 @@ def max_concurrent(environ: dict[str, str] | None = None) -> int:
         return 1
 
 
-def headroom_fraction(environ: dict[str, str] | None = None) -> float:
-    """The share of the daily cap past which work goes on one at a time.
-    A fraction, like the usage ceilings, not a dollar figure beside them."""
-    raw = (os.environ if environ is None else environ).get("PU_HEADROOM_FRACTION", "")
+def runway_fraction(environ: dict[str, str] | None = None) -> float:
+    """The margin kept before a limit, as a fraction of it: at 0.15, work
+    goes on one session at a time from 85% of the daily cap or of any usage
+    ceiling. One number for both, like the ceilings themselves."""
+    raw = (os.environ if environ is None else environ).get("PU_RUNWAY_FRACTION", "")
     try:
         value = float(raw)
     except ValueError:
-        return 0.8
-    return value if 0 < value <= 1 else 0.8
+        return 0.15
+    return value if 0 <= value < 1 else 0.15
+
+
+def reserved_cost(session_store) -> float:
+    """What the sessions running now are expected to cost when they finish:
+    each counted at its type's average, or the overall average for a type
+    with no history. Added to finished spend wherever spend is compared to
+    the cap, so N sessions in flight cannot carry spend past it unseen."""
+    with _RUNNING_LOCK:
+        running = [r.get("session_type") for r in _RUNNING.values()]
+    if not running:
+        return 0.0
+    agg = session_store.aggregates()
+    overall = (agg["cost_usd_total"] / agg["runs"]) if agg["runs"] else 0.0
+    by_type = agg["by_session_type"]
+    return round(sum(by_type.get(t, {}).get("avg_cost_usd", overall)
+                     for t in running), 6)
 
 
 def _ceiling(policy, session_store, today: str, state_dir: Path,
-             mcp_bridge_url: str | None) -> int:
-    """How many sessions may run right now. Near the cost cap the ceiling
-    drops to one -- work continues, unparallel -- and the owner is told on
-    the change, never every tick."""
-    wanted = max_concurrent()
+             mcp_bridge_url: str | None, windows=None, ceilings=None) -> int:
+    """How many sessions may run right now. Within the runway of the daily
+    cap (projected spend) or of any usage ceiling, it drops to one -- work
+    continues, unparallel -- and the owner is told on the change, never
+    every tick."""
+    wanted = max_concurrent(state_dir=state_dir)
+    edge = 1 - runway_fraction()
     reason = None
     cap = policy.get("daily_cost_cap_usd")
-    if wanted > 1 and cap is not None:
+    if cap is not None:
         try:
             cap = float(cap)
-            spent = session_store.cost_since(today)
-            if spent >= headroom_fraction() * cap:
-                reason = f"spent ${spent:.2f} of the ${cap:.2f} daily cap"
+            projected = session_store.cost_since(today) + reserved_cost(session_store)
+            if projected >= edge * cap:
+                reason = f"the budget is running low: ${projected:.2f} of the ${cap:.2f} daily cap, counting running sessions"
         except (TypeError, ValueError):
             pass
+    for name, ceiling in (ceilings or {}).items():
+        reading = (windows or {}).get(name)
+        used = reading.get("utilization") if isinstance(reading, dict) else None
+        if reason is None and isinstance(used, (int, float)) and used >= edge * ceiling:
+            reason = (f"usage limits are running low: the {name.replace('_', '-')} "
+                      f"window is at {used:.0%} of its {ceiling:.0%} ceiling")
     path = Path(state_dir) / "headroom.json"
     previous = usage_gate.load_blocked_state(path)
     if reason != previous:
         notify.notify_owner(
             mcp_bridge_url,
-            f"pu dropped to one session at a time: {reason}." if reason else
-            f"pu is back to running up to {wanted} sessions at once.",
+            f"pu: {reason}. One session at a time until it recovers."
+            if reason else
+            f"pu: budget and limits have recovered; up to {wanted} sessions "
+            f"may run at once again.",
             source_unit=UNIT_NAME)
         usage_gate.save_blocked_state(path, reason)
     return 1 if reason else wanted
@@ -180,7 +212,8 @@ def read_cost_policy(path: Path) -> dict[str, Any]:
 
 
 def check_cost_gate(
-    policy: dict[str, Any], session_store: sessions_mod.SessionStore, today: str
+    policy: dict[str, Any], session_store: sessions_mod.SessionStore, today: str,
+    reserved: float = 0.0,
 ) -> str | None:
     """The reason work is blocked, or None to proceed.
 
@@ -194,7 +227,8 @@ def check_cost_gate(
         cap = float(cap)
     except (TypeError, ValueError):
         return None
-    spent = session_store.cost_since(today)
+    # Finished spend plus what running sessions are expected to cost.
+    spent = round(session_store.cost_since(today) + reserved, 6)
     if spent >= cap:
         return f"daily cost cap reached: {spent} >= {cap}"
     return None
@@ -227,7 +261,8 @@ def gate_state(
     today = moment.strftime("%Y-%m-%d")
 
     policy = read_cost_policy(cost_policy_path)
-    cost_blocked = check_cost_gate(policy, session_store, today)
+    reserved = reserved_cost(session_store)
+    cost_blocked = check_cost_gate(policy, session_store, today, reserved)
 
     windows = usage_gate.read_usage(unit_root / usage_gate.USAGE_FILENAME)
     ceilings = usage_gate.ceilings_from_env()
@@ -299,6 +334,14 @@ def gate_state(
         },
         "windows": window_rows(),
         "ceilings": dict(ceilings),
+        # How many may run, how many are, and what those are expected to
+        # cost -- the reserve every cap comparison above already counts.
+        "concurrency": {
+            "max": max_concurrent(state_dir=state_dir),
+            "running": len(_RUNNING),
+            "reserved_usd": reserved,
+            "runway_fraction": runway_fraction(),
+        },
     }
 
 
@@ -497,6 +540,33 @@ def _write_mcp_config(stype, mcp_store, bridge_url: str | None) -> str:
     return str(path)
 
 
+# -- stale trigger work ---------------------------------------------------
+
+
+def _expire_stale(store, moment: datetime, mcp_bridge_url: str | None) -> None:
+    """Close queued trigger work its trigger said would go stale. Only work
+    nobody has started: a run in progress is never cut off."""
+    try:
+        waiting = store.export("status:pending", "-ACTIVE", "expires.any:")
+    except taskstore.TaskError:
+        return
+    for task in waiting:
+        try:
+            deadline = datetime.fromisoformat(task.expires)
+        except (TypeError, ValueError):
+            continue
+        if deadline > moment:
+            continue
+        store.annotate(task.uuid, f"expired: not started by {task.expires}, "
+                                  f"so no longer worth running")
+        store.complete(task.uuid)
+        notify.notify_owner(
+            mcp_bridge_url,
+            f"pu let a task expire unrun: it waited past its trigger's "
+            f"stale_after.\n\n{task.description}\ntask {task.uuid}",
+            source_unit=UNIT_NAME)
+
+
 # -- the placement audit, daily ------------------------------------------
 
 
@@ -691,7 +761,8 @@ def _tick(
                  mcp_bridge_url)
 
     policy = read_cost_policy(cost_policy_path)
-    blocked = check_cost_gate(policy, session_store, moment.strftime("%Y-%m-%d"))
+    blocked = check_cost_gate(policy, session_store, moment.strftime("%Y-%m-%d"),
+                              reserved=reserved_cost(session_store))
     if blocked:
         return TickResult(ran=False, reason=blocked)
 
@@ -718,6 +789,11 @@ def _tick(
     # selection, so work a trigger just created is selectable on this tick.
     emitted = emit_due_work(trigger_store, store, body_store, now)
 
+    # Trigger work that waited past its stale_after is not worth starting.
+    # Swept here, whether or not sessions are switched on: it goes stale
+    # either way.
+    _expire_stale(store, moment, mcp_bridge_url)
+
     # The kill switch. After triggers, so work keeps being created and
     # nothing is lost while paused; before selection, so nothing launches.
     pause = control.paused(tracker_path.parent)
@@ -730,7 +806,9 @@ def _tick(
     # The ceiling, checked inside the lock like the gates: a launch decided
     # here is a launch counted here.
     ceiling = _ceiling(policy, session_store, moment.strftime("%Y-%m-%d"),
-                       tracker_path.parent, mcp_bridge_url)
+                       tracker_path.parent, mcp_bridge_url,
+                       usage_gate.read_usage(unit_root / usage_gate.USAGE_FILENAME),
+                       usage_gate.ceilings_from_env())
     with _RUNNING_LOCK:
         running = dict(_RUNNING)
     if len(running) >= ceiling:
@@ -834,7 +912,10 @@ def _tick(
         with _RUNNING_LOCK:
             _RUNNING[candidate.uuid] = {
                 "repo": (_repo_key(candidate.repo)
-                         if stype.runs_in_target_repo else None)}
+                         if stype.runs_in_target_repo else None),
+                "session_type": stype.name,
+                "agent_role": stype.agent_role,
+                "started_at": datetime.now(timezone.utc).isoformat()}
         return _Launch(
             run=functools.partial(
                 _run_claimed, store, body_store, session_store, unit_root,
@@ -1049,6 +1130,13 @@ def emit_due_work(
             # every tick. A cron schedule did exactly that once, through a
             # KeyError in here.
             body = payload_body(trigger, evaluation)
+            extra_fields = {}
+            if emits.get("priority"):
+                extra_fields["priority"] = records.check_priority(
+                    emits["priority"])
+            if emits.get("stale_after_seconds"):
+                extra_fields["expires"] = (moment + timedelta(
+                    seconds=float(emits["stale_after_seconds"]))).isoformat()
             uuid = store.add(
                 triggers.fill_title(
                     emits.get("title") or f"{name}: {evaluation.reason}",
@@ -1060,6 +1148,7 @@ def emit_due_work(
                 # year of run-tasks into every task view.
                 project=emits.get("project") or records.RUNS_PROJECT,
                 trigger=name,
+                **extra_fields,
             )
             body_store.set(uuid, body)
             emitted.append({"trigger": name, "task_uuid": uuid,

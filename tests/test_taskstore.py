@@ -131,12 +131,14 @@ def test_claiming_removes_it_from_the_frontier(store):
     assert [t.uuid for t in store.runnable()] == [uuid]
 
 
-def test_urgency_orders_the_frontier_by_kind(store):
-    """Ordering across sources is a coefficient, not a priority ladder in
-    code. research outranks execution by configuration alone."""
+def test_urgency_orders_the_frontier_but_not_pu_s_queue(store):
+    """The frontier a person reads is ranked by urgency coefficients --
+    research outranks execution by configuration alone. pu's own queue is
+    first fired, first run within a priority (2026-10-25)."""
     execution = store.add("code", tags=["afk"], kind="execution")
     research = store.add("find out", tags=["afk"], kind="research")
-    assert [t.uuid for t in store.runnable()] == [research, execution]
+    assert [t.uuid for t in store.ready()] == [research, execution]
+    assert [t.uuid for t in store.runnable()] == [execution, research]
 
 
 def test_annotations_round_trip(store):

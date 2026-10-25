@@ -270,6 +270,7 @@ def create_ticket(
     tags: Sequence[str] = (),
     afk: bool = False,
     project: str | None = None,
+    priority: str | None = None,
 ) -> dict[str, Any]:
     """A child of a map.
 
@@ -290,12 +291,16 @@ def create_ticket(
     if afk:
         tag_list.append(records.AFK_TAG)
 
+    fields = {}
+    if records.check_priority(priority):
+        fields["priority"] = records.check_priority(priority)
     uuid = store.add(
         title,
         tags=tag_list,
         kind=kind,
         parent_uuid=parent,
         project=project,
+        **fields,
     )
     if body:
         body_store.set(uuid, body)

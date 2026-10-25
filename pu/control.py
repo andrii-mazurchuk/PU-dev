@@ -61,6 +61,33 @@ def set_paused(state_dir: Path, value: bool, reason: str = "") -> dict[str, Any]
     return record
 
 
+# -- the concurrency ceiling, as a live setting ---------------------------
+
+CONCURRENCY_FILE = "concurrency.json"
+
+
+def configured_max(state_dir: Path | None) -> int | None:
+    """The owner's live ceiling, or None to fall back to the env var."""
+    if state_dir is None:
+        return None
+    try:
+        value = int(json.loads((Path(state_dir) / CONCURRENCY_FILE)
+                               .read_text(encoding="utf-8"))["max"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return value if value >= 1 else None
+
+
+def set_max_concurrent(state_dir: Path, value: int) -> dict[str, Any]:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError("max is a whole number of sessions, at least 1")
+    record = {"max": value, "since": _now()}
+    path = Path(state_dir) / CONCURRENCY_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return record
+
+
 # -- the why-not log ------------------------------------------------------
 
 

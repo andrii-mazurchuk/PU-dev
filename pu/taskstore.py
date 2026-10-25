@@ -73,6 +73,10 @@ RC_SCHEMA: dict[str, str] = {
     # session reports.
     "uda.trigger.type": "string",
     "uda.trigger.label": "Trigger",
+    # A trigger's stale_after, as a deadline: not started by then means not
+    # worth starting. Not Taskwarrior's `until`, which deletes silently.
+    "uda.expires.type": "string",
+    "uda.expires.label": "Expires",
     # Ordering across every source lives here rather than in a priority
     # ladder in code. Retuning what PU works on next is a config change.
     "urgency.uda.kind.research.coefficient": "4.0",
@@ -350,8 +354,19 @@ class TaskStore:
         string, deliberately: runnability is "carries `afk` **and** has a
         session type behind its kind", and expressing that as a Taskwarrior
         filter would be a second copy of `SESSION_TYPE_FOR_KIND` that
-        drifts the first time a kind is added."""
-        return [t for t in self.ready(*extra_filters) if t.runnable]
+        drifts the first time a kind is added.
+
+        **Ordered for pu, not for people:** priority first (high, medium,
+        low), then oldest first -- first fired, first run. The frontier a
+        person reads keeps Taskwarrior's urgency; this is only what pu
+        selects. (2026-10-25.)"""
+        # Straight from the export, which comes back in Taskwarrior id order
+        # -- creation order -- so a stable sort keeps first-fired-first-run
+        # even for tasks created in the same second (entry has 1s grain).
+        found = [t for t in self.export("+READY", "-ACTIVE", *extra_filters)
+                 if t.runnable]
+        return sorted(found, key=lambda t: (
+            records.PRIORITY_RANK.get(t.priority, 1), t.entry or ""))
 
     def count(self, *filters: str) -> int:
         result = self.run([*filters, "count"])

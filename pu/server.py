@@ -127,6 +127,7 @@ TOOLS = [
                 "body": {"type": "string", "description": "the question this ticket resolves"},
                 "tags": {"type": "array", "items": {"type": "string"}, "description": "each tag selects a mandatory SOP by exact name"},
                 "afk": {"type": "boolean", "description": "may an agent resolve this alone"},
+                "priority": {"type": "string", "enum": ["high", "medium", "low"], "description": "pu runs high before medium before low, oldest first; absent means medium"},
                 "project": {"type": "string"},
             },
             "required": ["parent", "title", "kind"],
@@ -295,7 +296,7 @@ TOOLS = [
     },
     {
         "name": "write_trigger",
-        "description": "Write a trigger. One call for create and update: `name` is the identity and the store is append-only, so writing an existing name adds a revision. A trigger is **created inactive** whatever `enabled` says, and **editing a live one switches it off** -- an edit can change what it watches or what it creates. A write touching only `enabled` is the activation path. `source.kind` is http-json, rss, or schedule; a schedule fetches nothing and takes no predicate, its interval is the whole condition. The predicate is a flat ANDed list of [field, operator, value]; fields are count_since_fire, age_since_last_seen, or a dotted path into one fetched item. `emits` is the task a firing creates, and `emits.afk` true means an agent may run it alone -- which is what makes a trigger spend money unattended.",
+        "description": "Write a trigger. One call for create and update: `name` is the identity and the store is append-only, so writing an existing name adds a revision. A trigger is **created inactive** whatever `enabled` says, and **editing a live one switches it off** -- an edit can change what it watches or what it creates. A write touching only `enabled` is the activation path. `source.kind` is http-json, rss, or schedule; a schedule fetches nothing and takes no predicate, its interval is the whole condition. The predicate is a flat ANDed list of [field, operator, value]; fields are count_since_fire, age_since_last_seen, or a dotted path into one fetched item. `emits` is the task a firing creates, and `emits.afk` true means an agent may run it alone -- which is what makes a trigger spend money unattended. `emits.priority` (high, medium, low; default medium) orders pu's queue -- high for runs meant for a specific time, like a morning brief; low for work that may run any time in a window. `emits.stale_after_seconds` closes the task as expired, and tells the owner, if no session has started it by then; a started run is never cut off. Every firing creates its own task, even while an earlier one from the same trigger is still open.",
         "method": "POST",
         "path": "/triggers",
         "input_schema": {
@@ -457,6 +458,17 @@ TOOLS = [
             "properties": {
                 "limit": {"type": "integer", "description": "default 50, capped at 500"},
             },
+        },
+    },
+    {
+        "name": "set_max_concurrent",
+        "description": "How many sessions may run at once, as a live setting kept across restarts (default from PU_MAX_CONCURRENT, else 1). Still only one session starts per tick, and never two in one repository. Within the runway of the daily cap or a usage ceiling the effective ceiling drops to one on its own. Set a daily cost cap before raising this.",
+        "method": "POST",
+        "path": "/concurrency",
+        "input_schema": {
+            "type": "object",
+            "properties": {"max": {"type": "integer", "minimum": 1}},
+            "required": ["max"],
         },
     },
     {
@@ -855,7 +867,17 @@ def make_handler(
                         tags=payload.get("tags") or (),
                         afk=bool(payload.get("afk")),
                         project=payload.get("project"),
+                        priority=payload.get("priority"),
                     ))
+
+                if parts == ["concurrency"]:
+                    if state_dir is None:
+                        return self._json(503, {"error": "no state dir wired"})
+                    try:
+                        return self._json(200, control.set_max_concurrent(
+                            state_dir, payload.get("max")))
+                    except ValueError as exc:
+                        raise service.ServiceError(str(exc)) from None
 
                 if parts == ["pause"]:
                     if state_dir is None:
