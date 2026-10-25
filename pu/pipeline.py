@@ -558,9 +558,16 @@ def _write_mcp_config(stype, mcp_store, bridge_url: str | None) -> str:
 # -- stale trigger work ---------------------------------------------------
 
 
-def _expire_stale(store, moment: datetime, mcp_bridge_url: str | None) -> None:
-    """Close queued trigger work its trigger said would go stale. Only work
-    nobody has started: a run in progress is never cut off."""
+DEFAULT_HIGH_STALE_SECONDS = 3600
+EXPIRED_TAG = "expired"
+
+
+def _expire_stale(store, moment: datetime, mcp_bridge_url: str | None,
+                  state_dir: Path | None = None) -> None:
+    """Close queued trigger work its trigger said would go stale, tagged
+    `expired` so it is never mistaken for work that ran, counted in stats,
+    and pruned with the other finished run-tasks. Only work nobody has
+    started: a run in progress is never cut off."""
     try:
         waiting = store.export("status:pending", "-ACTIVE", "expires.any:")
     except taskstore.TaskError:
@@ -572,8 +579,11 @@ def _expire_stale(store, moment: datetime, mcp_bridge_url: str | None) -> None:
             continue
         if deadline > moment:
             continue
-        store.annotate(task.uuid, f"expired: not started by {task.expires}, "
-                                  f"so no longer worth running")
+        why = ("sessions were switched off" if control.paused(state_dir)
+               else "no session slot came free in time")
+        store.annotate(task.uuid, f"expired: not started by {task.expires} "
+                                  f"({why}), so never run")
+        store.modify(task.uuid, add_tags=[EXPIRED_TAG])
         store.complete(task.uuid)
         notify.notify_owner(
             mcp_bridge_url,
@@ -807,7 +817,7 @@ def _tick(
     # Trigger work that waited past its stale_after is not worth starting.
     # Swept here, whether or not sessions are switched on: it goes stale
     # either way.
-    _expire_stale(store, moment, mcp_bridge_url)
+    _expire_stale(store, moment, mcp_bridge_url, tracker_path.parent)
 
     # The kill switch. After triggers, so work keeps being created and
     # nothing is lost while paused; before selection, so nothing launches.
@@ -1149,9 +1159,14 @@ def emit_due_work(
             if emits.get("priority"):
                 extra_fields["priority"] = records.check_priority(
                     emits["priority"])
-            if emits.get("stale_after_seconds"):
+            stale = emits.get("stale_after_seconds")
+            if stale is None and emits.get("priority") == "high":
+                # High priority means "meant for a time"; run hours late it
+                # is the wrong run. An hour unless the trigger says otherwise.
+                stale = DEFAULT_HIGH_STALE_SECONDS
+            if stale:
                 extra_fields["expires"] = (moment + timedelta(
-                    seconds=float(emits["stale_after_seconds"]))).isoformat()
+                    seconds=float(stale))).isoformat()
             uuid = store.add(
                 triggers.fill_title(
                     emits.get("title") or f"{name}: {evaluation.reason}",

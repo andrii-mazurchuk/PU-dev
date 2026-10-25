@@ -81,6 +81,7 @@ class SessionStore:
                     "tool_calls": list(result.tool_calls),
                     "models_used": list(result.models_used),
                     "permission_denials": list(result.permission_denials),
+                    "tokens": dict(result.tokens),
                     **(extra or {}),
                 }, indent=1),
                 encoding="utf-8",
@@ -255,6 +256,10 @@ class SessionStore:
             bucket["cost_usd"] = round(bucket["cost_usd"] + cost, 6)
             total_cost += cost
             bucket["duration_ms_total"] += int(record.get("duration_ms") or 0)
+            for key, value in (record.get("tokens") or {}).items():
+                if isinstance(value, int):
+                    bucket.setdefault("tokens", {})
+                    bucket["tokens"][key] = bucket["tokens"].get(key, 0) + value
 
             outcome = str(record.get("outcome") or "unknown")
             by_outcome[outcome] = by_outcome.get(outcome, 0) + 1

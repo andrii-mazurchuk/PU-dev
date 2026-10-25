@@ -161,3 +161,32 @@ def test_the_default_is_one_session():
     assert pipeline.max_concurrent({}) == 1
     assert pipeline.max_concurrent({"PU_MAX_CONCURRENT": "nonsense"}) == 1
     assert pipeline.max_concurrent({"PU_MAX_CONCURRENT": "3"}) == 3
+
+
+def test_expired_work_is_tagged_never_run_and_counted(store, body_store, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from pu import service
+
+    monkeypatch.setattr(pipeline.notify, "notify_owner", lambda *a, **k: True)
+    now = datetime(2026, 10, 25, 14, tzinfo=timezone.utc)
+    old = store.add("08:00 brief", tags=["afk"], kind="research", project="pu.runs",
+                    trigger="morning", expires=(now - timedelta(hours=5)).isoformat())
+    pipeline._expire_stale(store, now, None)
+    task = store.get(old)
+    assert pipeline.EXPIRED_TAG in task.tags and task.status == "completed"
+    assert service.stats(store, body_store)["expired_runs"] == {"morning": 1}
+
+
+def test_high_priority_goes_stale_in_an_hour_by_default(store, body_store, tmp_path):
+    from datetime import datetime, timezone
+
+    from pu import triggers
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append({"name": "brief", "enabled": True,
+                          "source": {"kind": "schedule", "every_seconds": 86400},
+                          "emits": {"kind": "research", "priority": "high"}})
+    at = lambda: datetime(2026, 10, 25, 8, tzinfo=timezone.utc)
+    [made] = pipeline.emit_due_work(trigger_store, store, body_store, now=at)
+    assert store.get(made["task_uuid"]).expires.startswith("2026-10-25T09:00")

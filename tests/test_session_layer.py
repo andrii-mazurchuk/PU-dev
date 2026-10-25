@@ -707,3 +707,14 @@ def test_the_prompt_names_an_interpreter_the_grant_actually_allows():
     grant = session_types.ALLOWED_TOOLS["execution"]
     assert session_types.LOOKUP_COMMAND in prompt
     assert f"Bash({session_types.LOOKUP_COMMAND}:*)" in grant
+
+
+def test_tokens_are_read_from_the_result_line():
+    line = json.dumps({"type": "result", "result": "ok", "usage": {
+        "input_tokens": 4, "output_tokens": 672,
+        "cache_creation_input_tokens": 26091, "cache_read_input_tokens": 56596,
+        "output_tokens_details": {"thinking_tokens": 183}}})
+    assert runner.parse_stream(line).tokens == {
+        "input_tokens": 4, "output_tokens": 672,
+        "cache_creation_input_tokens": 26091, "cache_read_input_tokens": 56596,
+        "thinking_tokens": 183}

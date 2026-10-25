@@ -430,18 +430,21 @@ def test_a_type_is_created_inactive_and_activated_by_a_second_write(base_url):
     assert stored["enabled"] is True
 
 
-def test_editing_a_live_type_switches_it_off(base_url):
-    """The exploit this closes is specific: `prompt` is the whole
-    behaviour, so editing it on an approved type silently changes what an
-    approved session does, with no new approval anywhere."""
+def test_a_permission_change_on_a_live_type_switches_it_off(base_url):
+    """What a type may do needs approval again when an agent changes it;
+    what it says does not (dashboard review, 2026-10-25)."""
     post(f"{base_url}/session-types", a_type())
     post(f"{base_url}/session-types", a_type(enabled=True))
 
-    _, edited = post(f"{base_url}/session-types",
-                     a_type(enabled=True, prompt="Do something else.\n"))
+    _, reworded = post(f"{base_url}/session-types",
+                       a_type(enabled=True, prompt="Do something else.\n"))
+    assert reworded["enabled"] is True, "a prompt fix keeps it on"
 
-    assert edited["enabled"] is False
-    assert edited["prompt"] == "Do something else.\n"
+    _, widened = post(f"{base_url}/session-types",
+                      a_type(enabled=True, prompt="Do something else.\n",
+                             grant="web"))
+    assert widened["enabled"] is False
+    assert widened["grant"] == "web"
 
 
 def test_a_field_dropped_from_a_live_type_also_switches_it_off(base_url):
@@ -449,13 +452,13 @@ def test_a_field_dropped_from_a_live_type_also_switches_it_off(base_url):
     record per line, so a field the caller left out has been removed. Treating
     that as unchanged would let an edit strip a field from a live type and
     leave it running."""
-    post(f"{base_url}/session-types", a_type(model="opus"))
+    post(f"{base_url}/session-types", a_type(claims={"kind": "research"}))
     _, live = post(f"{base_url}/session-types",
-                   a_type(model="opus", enabled=True))
+                   a_type(claims={"kind": "research"}, enabled=True))
     assert live["enabled"] is True
 
     _, edited = post(f"{base_url}/session-types", a_type(enabled=True))
-    assert "model" not in edited
+    assert "claims" not in edited
     assert edited["enabled"] is False
 
 
@@ -577,9 +580,14 @@ def test_the_enable_flip_tells_the_owner_and_a_re_save_does_not(
     post(f"{base_url}/session-types", a_type(enabled=True))
     assert len(sent) == 1
 
-    # Editing it while live is the other transition worth telling: it was
-    # switched off, and the owner has to know why it stopped running.
+    # Rewording is not a permission change: it stays on, and says nothing.
     post(f"{base_url}/session-types", a_type(enabled=True, purpose="reworded"))
+    assert len(sent) == 1
+
+    # A permission change while live is the other transition worth telling:
+    # it was switched off, and the owner has to know why it stopped running.
+    post(f"{base_url}/session-types",
+         a_type(enabled=True, purpose="reworded", grant="web"))
     assert len(sent) == 2
     assert "deactivated a live session type because it was edited" in sent[1]
 

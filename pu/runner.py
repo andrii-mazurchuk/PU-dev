@@ -86,6 +86,9 @@ class SessionResult:
     # reported them. Empty when the CLI emitted no rate_limit_event --
     # which is normal, and means the previous reading stands.
     rate_limit_windows: dict = dataclasses.field(default_factory=dict)
+    # Tokens as the CLI's final result line reports them: input, output,
+    # cache writes, cache reads, and thinking. Empty when there was none.
+    tokens: dict = dataclasses.field(default_factory=dict)
     raw_stream: str = ""
 
     @property
@@ -230,8 +233,21 @@ def parse_stream(stdout: str) -> SessionResult:
         models_used=models,
         permission_denials=tuple(denials),
         rate_limit_windows=rate_limit_windows,
+        tokens=_tokens(final.get("usage")),
         raw_stream=stdout,
     )
+
+
+def _tokens(usage) -> dict:
+    if not isinstance(usage, dict):
+        return {}
+    out = {key: usage[key] for key in (
+        "input_tokens", "output_tokens", "cache_creation_input_tokens",
+        "cache_read_input_tokens") if isinstance(usage.get(key), int)}
+    thinking = (usage.get("output_tokens_details") or {}).get("thinking_tokens")
+    if isinstance(thinking, int):
+        out["thinking_tokens"] = thinking
+    return out
 
 
 def run_session(

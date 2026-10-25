@@ -884,6 +884,16 @@ def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
 # -- stats ----------------------------------------------------------------
 
 
+def _expired_by_trigger(store: taskstore.TaskStore) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    try:
+        for t in store.export("status:completed", "+expired"):
+            counts[t.trigger or "(none)"] = counts.get(t.trigger or "(none)", 0) + 1
+    except taskstore.TaskError:
+        pass
+    return counts
+
+
 def stats(
     store: taskstore.TaskStore, body_store: bodies.BodyStore
 ) -> dict[str, Any]:
@@ -917,6 +927,9 @@ def stats(
         "runs_pending": runs_pending,
         # Trigger-created tasks claimed over a day: reported, never released.
         "stale_run_claims": len(guards.stale_run_claims(store)),
+        # Trigger work that expired unrun, per trigger, over the run-task
+        # retention window (30 days).
+        "expired_runs": _expired_by_trigger(store),
         # Placement faults by kind; audit_tasks names them.
         "placement_faults": {k: len(v) for k, v in audit(store).items()},
         "runnable_now": runnable_now,
@@ -1023,7 +1036,8 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
     if previous is not None:
         previous = with_role(previous)
     record, transition = apply_activation_rules(
-        previous, with_role(dict(payload, origin="authored")))
+        previous, with_role(dict(payload, origin="authored")),
+        fields=PERMISSION_FIELDS)
     # Only an existing role can be named. Checked against the gateway's
     # registry, strictly: an unreachable registry refuses a non-system role
     # rather than letting a typo through.
@@ -1063,7 +1077,8 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _changes_more_than_enabled(
-    record: dict[str, Any], previous: dict[str, Any]
+    record: dict[str, Any], previous: dict[str, Any],
+    fields: tuple[str, ...] | None = None,
 ) -> bool:
     """Whether this write alters anything but the switch.
 
@@ -1072,12 +1087,24 @@ def _changes_more_than_enabled(
     and treating that as "unchanged" would let an edit drop a field from a
     live record without deactivating it.
     """
+    if fields is not None:
+        return any(record.get(k) != previous.get(k) for k in fields)
     return ({k: v for k, v in record.items() if k != "enabled"}
             != {k: v for k, v in previous.items() if k != "enabled"})
 
 
+# What a session type may do, as opposed to what it says. Changing one of
+# these on a live type is a permission change and needs approval again;
+# a prompt or purpose fix does not (dashboard review, 2026-10-25). For a
+# trigger every field counts: what it watches and what it creates are both
+# what makes it spend.
+PERMISSION_FIELDS = ("grant", "agent_role", "mcp_servers", "plugins", "claims",
+                     "origin")
+
+
 def apply_activation_rules(
-    previous: dict[str, Any] | None, record: dict[str, Any]
+    previous: dict[str, Any] | None, record: dict[str, Any],
+    fields: tuple[str, ...] | None = None, by_human: bool = False,
 ) -> tuple[dict[str, Any], str | None]:
     """The two rules from the accessibility grilling, for both doors.
 
@@ -1100,7 +1127,11 @@ def apply_activation_rules(
     """
     if previous is None:
         return dict(record, enabled=False), None
-    if previous.get("enabled") and _changes_more_than_enabled(record, previous):
+    # A person editing has nothing to re-approve: they are the approver.
+    # Nothing authenticates a caller yet, so only the dashboard's future
+    # human-only write door passes by_human; every API write is an agent's.
+    if (previous.get("enabled") and not by_human
+            and _changes_more_than_enabled(record, previous, fields)):
         return dict(record, enabled=False), "deactivated_by_edit"
     if record.get("enabled") and not previous.get("enabled", False):
         return record, "activated"
