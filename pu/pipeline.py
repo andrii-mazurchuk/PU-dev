@@ -497,6 +497,48 @@ def _write_mcp_config(stype, mcp_store, bridge_url: str | None) -> str:
     return str(path)
 
 
+# -- the placement audit, daily ------------------------------------------
+
+
+def _daily_audit(store, state_path: Path, moment: datetime,
+                 mcp_bridge_url: str | None) -> None:
+    """Run the placement audit at most once a day and tell the owner about
+    faults it has not reported before. Programmatic, inside the unit; a
+    fault already told stays quiet until it is fixed and comes back."""
+    from pu import service  # service imports this module
+
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        if (moment - datetime.fromisoformat(state["at"])).total_seconds() < 86400:
+            return
+        told = set(state.get("told") or ())
+    except (OSError, ValueError, KeyError, TypeError):
+        told = set()
+    try:
+        faults = service.audit(store)
+    except taskstore.TaskError:
+        return
+    keys = {f"{kind}:{row['uuid']}" for kind, rows in faults.items() for row in rows}
+    new = [(kind, row) for kind, rows in faults.items() for row in rows
+           if f"{kind}:{row['uuid']}" not in told]
+    if new:
+        lines = [f"- {kind}: {row['title'][:60]} ({row['uuid'][:8]}) -- {row['why']}"
+                 for kind, row in new[:15]]
+        notify.notify_owner(
+            mcp_bridge_url,
+            f"pu's daily audit found {len(new)} new placement fault(s):\n"
+            + "\n".join(lines)
+            + ("\n..." if len(new) > 15 else "")
+            + "\n\nmove_task fixes placement; audit_tasks lists them all.",
+            source_unit=UNIT_NAME)
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps({"at": moment.isoformat(),
+                                          "told": sorted(keys)}), encoding="utf-8")
+    except OSError:
+        pass
+
+
 # -- crash recovery -------------------------------------------------------
 #
 # A run pu was in the middle of when it stopped. The stale-claim reaper
@@ -645,6 +687,8 @@ def _tick(
             f"(task {stale.uuid} stop) or resolve it.",
             source_unit=UNIT_NAME)
     guards.prune_runs(store, tracker_path.parent / "prune.json", moment)
+    _daily_audit(store, tracker_path.parent / "audit.json", moment,
+                 mcp_bridge_url)
 
     policy = read_cost_policy(cost_policy_path)
     blocked = check_cost_gate(policy, session_store, moment.strftime("%Y-%m-%d"))

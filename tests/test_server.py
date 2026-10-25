@@ -153,7 +153,7 @@ def test_map_ticket_frontier_claim_resolve(base_url):
 
 
 def test_a_map_is_never_runnable(base_url):
-    _, created = post(f"{base_url}/maps", {"destination": "somewhere"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "somewhere"})
     _, task = get(f"{base_url}/tasks/{created['uuid']}")
     assert task["kind"] == "map"
     assert task["runnable"] is False
@@ -163,7 +163,7 @@ def test_a_map_is_never_runnable(base_url):
 def test_hitl_ticket_is_stored_but_never_runnable(base_url):
     """A grilling ticket must be holdable without ever being selectable,
     even if a caller marks it afk."""
-    _, created = post(f"{base_url}/maps", {"destination": "somewhere"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "somewhere"})
     _, ticket = post(f"{base_url}/tickets", {
         "parent": created["uuid"], "title": "talk it through",
         "kind": "grilling", "afk": True,
@@ -183,7 +183,7 @@ def test_hitl_ticket_is_stored_but_never_runnable(base_url):
 
 
 def test_ticket_defaults_to_not_afk(base_url):
-    _, created = post(f"{base_url}/maps", {"destination": "somewhere"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "somewhere"})
     _, ticket = post(f"{base_url}/tickets", {
         "parent": created["uuid"], "title": "a thing", "kind": "research",
     })
@@ -192,7 +192,7 @@ def test_ticket_defaults_to_not_afk(base_url):
 
 
 def test_unknown_kind_is_400(base_url):
-    _, created = post(f"{base_url}/maps", {"destination": "somewhere"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "somewhere"})
     with pytest.raises(HTTPError) as excinfo:
         post(f"{base_url}/tickets", {
             "parent": created["uuid"], "title": "x", "kind": "nonsense",
@@ -211,7 +211,7 @@ def test_ticket_on_a_missing_parent_is_400(base_url):
 
 
 def test_claiming_twice_reports_not_claimed(base_url):
-    _, created = post(f"{base_url}/maps", {"destination": "somewhere"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "somewhere"})
     _, ticket = post(f"{base_url}/tickets", {
         "parent": created["uuid"], "title": "x", "kind": "research", "afk": True,
     })
@@ -224,14 +224,14 @@ def test_claiming_twice_reports_not_claimed(base_url):
 
 
 def test_projects_are_derived_and_nest(base_url):
-    _, m = post(f"{base_url}/maps", {"destination": "d", "project": "thing.behaviour"})
+    _, m = post(f"{base_url}/maps", {"destination": "d", "project": "thing"})
     post(f"{base_url}/tickets", {
         "parent": m["uuid"], "title": "x", "kind": "research",
         "project": "thing.architecture",
     })
     _, projects = get(f"{base_url}/projects")
     assert {p["project"] for p in projects["projects"]} == {
-        "thing.behaviour", "thing.architecture"
+        "thing", "thing.architecture"
     }
     # a parent scope returns everything nested under it
     _, nested = get(f"{base_url}/tasks", project="thing")
@@ -248,7 +248,7 @@ def post_text(url, text, content_type="text/markdown"):
 def test_a_body_round_trips_as_raw_markdown(base_url):
     """The path a session outside this unit uses: one curl out, one curl
     in, no JSON escaping and no jq."""
-    _, created = post(f"{base_url}/maps", {"destination": "somewhere"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "somewhere"})
     uuid = created["uuid"]
 
     body = (
@@ -267,7 +267,7 @@ def test_a_body_round_trips_as_raw_markdown(base_url):
 def test_a_raw_body_replaces_rather_than_appends(base_url):
     """Replace-in-place is why the body store exists at all: a map is
     rewritten as decisions land and fog graduates."""
-    _, created = post(f"{base_url}/maps", {"destination": "somewhere",
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "somewhere",
                                            "body": "first"})
     uuid = created["uuid"]
     post_text(f"{base_url}/tasks/{uuid}/body", "second")
@@ -278,7 +278,7 @@ def test_a_raw_body_replaces_rather_than_appends(base_url):
 def test_the_json_body_form_still_works(base_url):
     """An absent or unrecognised content type must fall through to JSON,
     so no existing caller is silently reinterpreted."""
-    _, created = post(f"{base_url}/maps", {"destination": "somewhere"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "somewhere"})
     uuid = created["uuid"]
     post(f"{base_url}/tasks/{uuid}/body", {"body": "via json"})
     _, got = get(f"{base_url}/tasks/{uuid}/body")
@@ -286,7 +286,7 @@ def test_the_json_body_form_still_works(base_url):
 
 
 def test_a_task_with_no_body_is_404_not_empty(base_url):
-    _, created = post(f"{base_url}/maps", {"destination": "no body here"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "no body here"})
     with pytest.raises(HTTPError) as excinfo:
         get(f"{base_url}/tasks/{created['uuid']}/body")
     assert excinfo.value.code == 404
@@ -301,7 +301,7 @@ def test_unknown_task_is_404(base_url):
 def test_a_short_uuid_names_its_task_on_reads_and_writes(base_url):
     """pu's own listings show 8 characters. A prefix of a permanent uuid is
     not a renumbering short id, so it is accepted wherever a uuid is."""
-    _, created = post(f"{base_url}/maps", {"destination": "short",
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "short",
                                            "body": "the body"})
     full, prefix = created["uuid"], created["uuid"][:8]
 
@@ -315,7 +315,7 @@ def test_a_short_uuid_names_its_task_on_reads_and_writes(base_url):
 
 
 def test_a_prefix_too_short_is_refused_not_guessed(base_url):
-    _, created = post(f"{base_url}/maps", {"destination": "short"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "short"})
     with pytest.raises(HTTPError) as excinfo:
         get(f"{base_url}/tasks/{created['uuid'][:6]}")
     assert excinfo.value.code == 400
@@ -721,7 +721,7 @@ def test_resolving_a_finished_task_is_refused_and_keeps_the_first_answer(base_ur
     """Live 2026-09-27: a retried resolve appended a new answer to an
     already-completed task, then 502'd -- inviting the next retry. The
     considered answer was buried under a one-word probe."""
-    _, created = post(f"{base_url}/maps", {"destination": "resolve twice"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "resolve twice"})
     uuid = created["uuid"]
     assert post(f"{base_url}/tasks/{uuid}/resolve",
                 {"answer": "the considered answer"})[0] == 200
@@ -771,7 +771,7 @@ def test_run_tasks_are_hidden_from_every_view_but_the_queue(store, body_store):
 
 
 def test_nobody_but_a_trigger_writes_into_the_run_namespace(base_url):
-    _, created = post(f"{base_url}/maps", {"destination": "a map"})
+    _, created = post(f"{base_url}/maps", {"project": "hub", "destination": "a map"})
     for path, payload in (
         ("/maps", {"destination": "sneaky", "project": "pu.runs"}),
         ("/tickets", {"parent": created["uuid"], "title": "t",
@@ -806,7 +806,7 @@ def test_a_finished_run_task_is_pruned_after_thirty_days(store, tmp_path):
 
 def test_a_session_type_dry_run_shows_everything_and_writes_nothing(
         base_url, tmp_path):
-    _, task = post(f"{base_url}/maps", {"destination": "what does it cost"})
+    _, task = post(f"{base_url}/maps", {"project": "hub", "destination": "what does it cost"})
     status, preview = post(f"{base_url}/session-types/dry-run",
                            a_type(agent_role="finance", task=task["uuid"]))
     assert status == 200
@@ -826,3 +826,110 @@ def test_a_dry_run_refuses_what_a_write_would_refuse(base_url):
     with pytest.raises(HTTPError) as excinfo:
         post(f"{base_url}/session-types/dry-run", a_type(grant="root"))
     assert excinfo.value.code == 400
+
+
+# -- placement: every ticket hangs off a map in its own project ----------
+
+
+def test_a_map_needs_a_project(base_url):
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/maps", {"destination": "nowhere"})
+    assert excinfo.value.code == 400
+
+
+def test_a_ticket_inherits_its_maps_project_or_nests_under_it(base_url):
+    _, v1 = post(f"{base_url}/maps", {"destination": "v1", "project": "node"})
+    _, t = post(f"{base_url}/tickets", {"parent": v1["uuid"], "title": "t",
+                                        "kind": "task"})
+    assert get(f"{base_url}/tasks/{t['uuid']}")[1]["project"] == "node"
+    # Nested under the map's project: the v1-map pattern.
+    _, nested = post(f"{base_url}/tickets", {
+        "parent": v1["uuid"], "title": "pu vision", "kind": "grilling",
+        "project": "node.pu"})
+    assert get(f"{base_url}/tasks/{nested['uuid']}")[1]["project"] == "node.pu"
+
+
+def test_a_ticket_from_another_project_is_refused(base_url):
+    """What went wrong: cu's dashboard hanging off the gateway's map."""
+    _, gw = post(f"{base_url}/maps", {"destination": "gw", "project": "node.gateway"})
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/tickets", {"parent": gw["uuid"], "title": "cu dash",
+                                     "kind": "task", "project": "node.cu"})
+    assert excinfo.value.code == 400
+
+
+def test_move_task_relocates_and_keeps_history(base_url):
+    _, gw = post(f"{base_url}/maps", {"destination": "gw", "project": "node.gateway"})
+    _, cu = post(f"{base_url}/maps", {"destination": "cu", "project": "node.cu"})
+    _, t = post(f"{base_url}/tickets", {"parent": gw["uuid"], "title": "cu dash",
+                                        "kind": "task", "body": "evidence"})
+    _, moved = post(f"{base_url}/tasks/{t['uuid'][:8]}/move",
+                    {"parent": cu["uuid"], "title": "fix cu dash"})
+    assert set(moved["changed"]) == {"parent", "project", "title"}
+    _, task = get(f"{base_url}/tasks/{t['uuid']}")
+    assert (task["parent"], task["project"], task["description"]) == \
+        (cu["uuid"], "node.cu", "fix cu dash")
+    assert task["body"] == "evidence"
+    assert any(a.startswith("moved: was") for a in task["annotations"])
+
+
+def test_a_move_that_breaks_the_rule_is_refused(base_url):
+    _, gw = post(f"{base_url}/maps", {"destination": "gw", "project": "node.gateway"})
+    _, t = post(f"{base_url}/tickets", {"parent": gw["uuid"], "title": "t",
+                                        "kind": "task"})
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/tasks/{t['uuid']}/move", {"project": "node.cu"})
+    assert excinfo.value.code == 400
+
+
+def test_a_map_can_be_retitled_but_not_moved_away_from_its_tickets(base_url):
+    _, m = post(f"{base_url}/maps", {"destination": "The node runs on x",
+                                     "project": "node"})
+    post(f"{base_url}/tickets", {"parent": m["uuid"], "title": "t", "kind": "task"})
+    post(f"{base_url}/tasks/{m['uuid']}/move", {"title": "The node runs on y"})
+    assert get(f"{base_url}/tasks/{m['uuid']}")[1]["description"] == "The node runs on y"
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/tasks/{m['uuid']}/move", {"project": "elsewhere"})
+    assert excinfo.value.code == 400
+
+
+def test_a_map_with_open_tickets_cannot_be_closed(base_url):
+    """Closing it first hides its tickets from every frontier."""
+    _, m = post(f"{base_url}/maps", {"destination": "m", "project": "node"})
+    _, t = post(f"{base_url}/tickets", {"parent": m["uuid"], "title": "t",
+                                        "kind": "grilling"})
+    with pytest.raises(HTTPError) as excinfo:
+        post(f"{base_url}/tasks/{m['uuid']}/resolve", {"answer": "done"})
+    assert excinfo.value.code == 409
+    post(f"{base_url}/tasks/{t['uuid']}/resolve", {"answer": "decided"})
+    assert post(f"{base_url}/tasks/{m['uuid']}/resolve", {"answer": "done"})[0] == 200
+
+
+def test_the_audit_names_faults_made_around_the_api(store):
+    from pu import service
+
+    m = store.add("gw", kind="map", project="node.gateway")
+    store.add("cu dash", kind="task", project="node.cu", parent_uuid=m)
+    store.add("loose", kind="task", project="node")
+    faults = service.audit(store)
+    assert [r["title"] for r in faults["misplaced"]] == ["cu dash"]
+    assert [r["title"] for r in faults["mapless"]] == ["loose"]
+
+
+def test_the_daily_audit_tells_each_new_fault_once(store, tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from pu import pipeline
+
+    sent = []
+    monkeypatch.setattr(pipeline.notify, "notify_owner",
+                        lambda url, text, **k: sent.append(text) or True)
+    store.add("loose", kind="task", project="node")
+    t0 = datetime(2026, 10, 25, 8, tzinfo=timezone.utc)
+    state = tmp_path / "audit.json"
+
+    pipeline._daily_audit(store, state, t0, None)
+    assert len(sent) == 1 and "loose" in sent[0]
+    pipeline._daily_audit(store, state, t0 + timedelta(hours=1), None)
+    pipeline._daily_audit(store, state, t0 + timedelta(days=1, hours=1), None)
+    assert len(sent) == 1, "told once, not daily"

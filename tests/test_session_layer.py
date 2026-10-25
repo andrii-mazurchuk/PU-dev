@@ -414,7 +414,10 @@ def test_blocking_a_task_tells_a_person(store, body_store, tmp_path):
     sent = []
 
     def fake_notify(url, text, source_unit, **kw):
-        sent.append((url, text))
+        # The daily placement audit reports these bare test tasks as
+        # mapless, correctly; this test is about failure notices.
+        if not text.startswith("pu's daily audit"):
+            sent.append((url, text))
         return True
 
     original = pipeline.notify.notify_owner
@@ -442,7 +445,8 @@ def test_blocking_a_task_tells_a_person(store, body_store, tmp_path):
 
 def _tick_with(store, body_store, tmp_path, text, sent):
     original = pipeline.notify.notify_owner
-    pipeline.notify.notify_owner = lambda url, t, source_unit, **kw: sent.append(t) or True
+    pipeline.notify.notify_owner = lambda url, t, source_unit, **kw: (
+        t.startswith("pu's daily audit") or sent.append(t)) or True
     try:
         return pipeline.tick(
             store, body_store, _session_store(tmp_path), UNIT_ROOT,

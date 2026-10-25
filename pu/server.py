@@ -425,6 +425,29 @@ TOOLS = [
         },
     },
     {
+        "name": "move_task",
+        "description": "Move a task to another map, change its project, or retitle it -- body, annotations and blocking are kept, and the task is annotated with where it came from. The placement rule applies: a ticket's project must equal its map's project or be nested under it. Giving a new parent without a project takes the new map's project. A map can be retitled or moved to another project, but not if that would misplace its tickets.",
+        "method": "POST",
+        "path": "/tasks/{uuid}/move",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "uuid": {"type": "string"},
+                "parent": {"type": "string", "description": "uuid (or 8+ char prefix) of the map to move under"},
+                "project": {"type": "string"},
+                "title": {"type": "string"},
+            },
+            "required": ["uuid"],
+        },
+    },
+    {
+        "name": "audit_tasks",
+        "description": "Every placement fault in the queue: tasks without a map, tickets whose project does not belong under their map's, tickets under a closed map, maps without a project. Read-only. The same check runs daily on its own and notifies the owner of new faults.",
+        "method": "GET",
+        "path": "/audit",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "list_tick_log",
         "description": "Why something did or did not run: each tick's decision, most recent first -- a session ran, a gate refused (and which), the unit is paused, nothing was runnable, what triggers created. A decision identical to the previous one is not repeated, so a gate blocked for hours is one entry.",
         "method": "GET",
@@ -671,6 +694,9 @@ def make_handler(
                         return self._json(200, {"mcp_servers": []})
                     return self._json(200, service.list_mcp_servers(
                         mcpstore.McpStore(type_store.root)))
+
+                if parts == ["audit"]:
+                    return self._json(200, service.audit(store))
 
                 if parts == ["ticks"]:
                     limit = int(one("limit") or 50)
@@ -926,6 +952,11 @@ def make_handler(
                         ))
                     if action == "claim":
                         return self._json(200, service.claim(store, uuid))
+                    if action == "move":
+                        return self._json(200, service.move_task(
+                            store, uuid, parent=payload.get("parent"),
+                            project=payload.get("project"),
+                            title=payload.get("title")))
                     if action == "resolve":
                         return self._json(200, service.resolve(
                             store, uuid, payload.get("answer")

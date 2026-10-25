@@ -250,6 +250,9 @@ def create_map(
     """A map is a record with children, never itself worked. It carries no
     `afk` tag and `map` has no session type, so it can never be selected."""
     _require(destination, "destination")
+    # A map always lives in a project: it is the destination that project's
+    # tickets are judged against. (Placement rule, 2026-10-25.)
+    _require(project, "project")
     _refuse_runs(project)
     uuid = store.add(destination, kind="map", project=project)
     if body:
@@ -281,6 +284,7 @@ def create_ticket(
     _refuse_runs(project)
 
     parent = _must_exist(store, parent, "parent")
+    project = _place(store, parent, project)
 
     tag_list = list(tags)
     if afk:
@@ -296,6 +300,133 @@ def create_ticket(
     if body:
         body_store.set(uuid, body)
     return {"uuid": uuid}
+
+
+# -- placement: every ticket hangs off a map in its own project ----------
+#
+# Decided 2026-10-25. A task cannot exist without a map; its project must
+# equal its map's project or be nested under it -- so the v1 map in
+# `holonic-node` may hold `holonic-node.pu`'s vision ticket, and the
+# gateway's map may not hold cu's dashboard. A map always has a project and
+# may have no tickets. Several maps per project are fine. `pu.runs` is the
+# one exemption: trigger work never has a map, by design.
+
+
+def placed(ticket_project: str | None, map_project: str | None) -> bool:
+    if not ticket_project or not map_project:
+        return False
+    return (ticket_project == map_project
+            or ticket_project.startswith(map_project + "."))
+
+
+def _place(store: taskstore.TaskStore, parent: str,
+           project: str | None) -> str:
+    """The project a ticket under `parent` gets: its own if that is placed,
+    the map's when it names none. Refuses anything else."""
+    map_task = store.get(parent)
+    if map_task.kind != "map":
+        raise ServiceError(f"{parent} is not a map; a ticket hangs off a map")
+    if not map_task.project:
+        raise ServiceError(
+            f"map {parent} has no project; give it one with move_task first")
+    project = project or map_task.project
+    _refuse_runs(project)
+    if not placed(project, map_task.project):
+        raise ServiceError(
+            f"project {project!r} does not belong under map "
+            f"{map_task.description[:60]!r} (project {map_task.project!r}): "
+            f"a ticket's project must be its map's or nested under it. Put "
+            f"it on a map of its own project")
+    return project
+
+
+def move_task(
+    store: taskstore.TaskStore, uuid: str, parent: str | None = None,
+    project: str | None = None, title: str | None = None,
+) -> dict[str, Any]:
+    """Change a task's map, project or title, keeping everything else --
+    body, annotations, blocking: the history maps exist to keep. Checked
+    against the placement rule like a new ticket, and every move says on
+    the task where it came from."""
+    uuid = _must_exist(store, uuid, "task")
+    task = store.get(uuid)
+    if parent is None and project is None and title is None:
+        raise ServiceError("nothing to change: give parent, project or title")
+    if title is not None:
+        _require(title, "title")
+
+    fields: dict[str, Any] = {}
+    if task.kind == "map":
+        if parent is not None:
+            raise ServiceError("a map has no parent")
+        if project is not None:
+            _require(project, "project")
+            _refuse_runs(project)
+            stranded = [c for c in store.export(
+                "status:pending", f"parent_uuid:{uuid}")
+                if not placed(c.project, project)]
+            if stranded:
+                raise ServiceError(
+                    f"moving this map to {project!r} would misplace "
+                    f"{len(stranded)} of its tickets: "
+                    + ", ".join(c.uuid[:8] for c in stranded[:10]))
+            fields["project"] = project
+    else:
+        new_parent = (_must_exist(store, parent, "parent")
+                      if parent is not None else task.parent)
+        if not new_parent:
+            raise ServiceError("a task needs a map: give parent")
+        new_project = _place(store, new_parent,
+                             project if project is not None else
+                             (task.project if parent is None else None))
+        if new_parent != task.parent:
+            fields["parent_uuid"] = new_parent
+        if new_project != task.project:
+            fields["project"] = new_project
+    if title is not None and title != task.description:
+        fields["description"] = title
+
+    if fields:
+        was = ", ".join(f"{k}={getattr(task, 'parent' if k == 'parent_uuid' else k)!r}"
+                        for k in fields)
+        store.modify(uuid, **fields)
+        store.annotate(uuid, f"moved: was {was}")
+    return {"uuid": uuid, "changed": sorted(
+        "parent" if k == "parent_uuid" else "title" if k == "description" else k
+        for k in fields)}
+
+
+def audit(store: taskstore.TaskStore) -> dict[str, list[dict[str, Any]]]:
+    """Every placement fault, by kind. Mechanical, like stats: it names
+    what breaks the rule and leaves what to do to whoever reads it."""
+    pending = store.export("status:pending", *_hide_runs(None))
+    maps = {t.uuid: t for t in pending if t.kind == "map"}
+
+    def row(t, why):
+        return {"uuid": t.uuid, "title": t.description[:80],
+                "project": t.project, "why": why}
+
+    out: dict[str, list[dict[str, Any]]] = {
+        "maps_without_project": [row(m, "a map always has a project")
+                                 for m in maps.values() if not m.project],
+        "mapless": [], "misplaced": [], "orphaned": []}
+    for t in pending:
+        if t.kind == "map":
+            continue
+        if not t.parent:
+            out["mapless"].append(row(t, "a task cannot exist without a map"))
+            continue
+        parent = maps.get(t.parent)
+        if parent is None:
+            closed = store.get(t.parent)
+            out["orphaned"].append(row(
+                t, f"its map is {closed.status if closed else 'missing'}, so "
+                   f"no frontier reaches it"))
+        elif not placed(t.project, parent.project):
+            out["misplaced"].append(row(
+                t, f"project {t.project!r} under map project "
+                   f"{parent.project!r}"))
+    return out
 
 
 def wire_blocking(
@@ -345,6 +476,17 @@ def resolve(
     if task.status != "pending":
         raise ConflictError(
             f"task {uuid} is already {task.status}; its answer stands")
+    # A map closes after its tickets, never before: closing it first hides
+    # them from every frontier -- and a hidden grilling is work waiting on
+    # a person who cannot see it.
+    if task.kind == "map":
+        open_children = store.export("status:pending", f"parent_uuid:{uuid}")
+        if open_children:
+            raise ConflictError(
+                f"map has {len(open_children)} open ticket(s); resolve or "
+                f"move them first: " + ", ".join(
+                    f"{c.uuid[:8]} {c.description[:40]}"
+                    for c in open_children[:10]))
     store.annotate(uuid, answer)
     store.complete(uuid)
     return {"uuid": uuid, "resolved": True}
@@ -729,6 +871,8 @@ def stats(
         "runs_pending": runs_pending,
         # Trigger-created tasks claimed over a day: reported, never released.
         "stale_run_claims": len(guards.stale_run_claims(store)),
+        # Placement faults by kind; audit_tasks names them.
+        "placement_faults": {k: len(v) for k, v in audit(store).items()},
         "runnable_now": runnable_now,
         "claimed": sum(1 for t in pending if t.active),
         # `+BLOCKED`, not "has depends": a finished blocker blocks nothing.
