@@ -67,7 +67,14 @@ def store():
     if BASE_CMD is None:
         pytest.skip("no reachable `task` binary")
     location = f"/tmp/pu-tests/{uuidlib.uuid4()}"
-    return taskstore.TaskStore(data_location=location, base_cmd=BASE_CMD)
+    yield taskstore.TaskStore(data_location=location, base_cmd=BASE_CMD)
+    # Removed on the binary's side too: under WSL the data lives in the
+    # distro, where nothing else would clear it until the distro restarts.
+    if BASE_CMD[0] == "wsl":
+        subprocess.run([*BASE_CMD[:-1], "rm", "-rf", location],
+                       capture_output=True, timeout=30)
+    else:
+        shutil.rmtree(location, ignore_errors=True)
 
 
 @pytest.fixture
