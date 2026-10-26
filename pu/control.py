@@ -179,17 +179,34 @@ def silence(state_dir: Path, moment: datetime,
     that gap counts as silence, else None."""
     path = Path(state_dir) / HEARTBEAT_FILE
     gap = None
+    state: dict[str, Any] = {}
     try:
-        last = datetime.fromisoformat(
-            json.loads(path.read_text(encoding="utf-8"))["at"])
-        gap = (moment - last).total_seconds()
+        state = json.loads(path.read_text(encoding="utf-8"))
+        gap = (moment - datetime.fromisoformat(state["at"])).total_seconds()
     except (OSError, ValueError, KeyError, TypeError):
         pass
+    silent = gap is not None and gap > max(SILENT_BEATS * interval,
+                                           SILENT_FLOOR_SECONDS)
+    # Counters that only grow, for stats: ticks, silences, and when the
+    # count started.
+    record = {
+        "at": moment.isoformat(),
+        "since": state.get("since") or moment.isoformat(),
+        "ticks": int(state.get("ticks") or 0) + 1,
+        "silences": int(state.get("silences") or 0) + (1 if silent else 0),
+    }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"at": moment.isoformat()}), encoding="utf-8")
+        path.write_text(json.dumps(record), encoding="utf-8")
     except OSError:
         pass
-    if gap is not None and gap > max(SILENT_BEATS * interval, SILENT_FLOOR_SECONDS):
-        return gap
-    return None
+    return gap if silent else None
+
+
+def heartbeat(state_dir: Path | None) -> dict[str, Any]:
+    if state_dir is None:
+        return {}
+    try:
+        return json.loads((Path(state_dir) / HEARTBEAT_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}

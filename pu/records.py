@@ -127,6 +127,8 @@ class Task:
     start: str | None = None
     trigger: str | None = None
     priority: str | None = None
+    # When it was finished (Taskwarrior's `end`), for time-to-resolve.
+    end: str | None = None
     # When trigger work stops being worth starting (ISO, UTC), if its
     # trigger said so. Started work is never cut off.
     expires: str | None = None
@@ -206,6 +208,7 @@ def from_export(raw: dict[str, Any]) -> Task:
         start=raw.get("start"),
         trigger=raw.get("trigger"),
         priority=raw.get("priority"),
+        end=raw.get("end"),
         expires=raw.get("expires"),
     )
 

@@ -14,7 +14,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pu import (
-    ask, bodies, control, docs, mcpstore, pipeline, records, service, session_types, sops,
+    ask, bodies, control, docs, logs_client, mcpstore, pipeline,
+    stats as stats_mod, records, service, session_types, sops,
     taskstore, triggers, typestore,
 )
 
@@ -689,8 +690,12 @@ def make_handler(
                 if parts == ["stats"]:
                     metrics = service.stats(store, body_store)
                     if session_store is not None:
-                        metrics["sessions"] = session_store.aggregates()
                         metrics["gate"] = self._gate()
+                        metrics["sessions"] = stats_mod.sessions(session_store)
+                        metrics["triggers"] = stats_mod.triggers(
+                            trigger_store, store, session_store)
+                        metrics["unit"] = stats_mod.unit(state_dir, metrics["gate"])
+                    metrics["tasks"] = stats_mod.tasks(store)
                     return self._json(200, {
                         "unit": UNIT_NAME,
                         "computed_at": datetime.now(timezone.utc).isoformat(),
@@ -919,9 +924,18 @@ def make_handler(
                         return self._json(503, {"error": "no state dir wired"})
                     if not isinstance(payload.get("paused"), bool):
                         raise service.ServiceError("paused must be true or false")
-                    return self._json(200, control.set_paused(
+                    was = bool(control.paused(state_dir))
+                    record = control.set_paused(
                         state_dir, payload["paused"],
-                        str(payload.get("reason") or "")))
+                        str(payload.get("reason") or ""))
+                    if was != payload["paused"]:
+                        logs_client.record_event(
+                            "sessions_off" if payload["paused"] else "sessions_on",
+                            "unit", "pu",
+                            record["reason"] or ("sessions switched off"
+                                                 if payload["paused"] else
+                                                 "sessions switched on"))
+                    return self._json(200, record)
 
                 if parts == ["trigger"]:
                     # The gateway pokes an already-running unit here rather

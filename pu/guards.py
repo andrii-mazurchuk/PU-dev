@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from pu import records, taskstore
+from pu import logs_client, records, taskstore
 
 # Three consecutive selections without resolution. Two is too eager -- a
 # transient failure deserves one retry -- and much more than three is just
@@ -104,6 +104,7 @@ def block(store: taskstore.TaskStore, uuid: str, reason: str) -> None:
     # not only something an annotation says.
     store.modify(uuid, add_tags=[NEEDS_HUMAN_TAG],
                  remove_tags=[records.AFK_TAG])
+    logs_client.record_event("handed_to_human", "task", uuid, reason)
 
 
 def parse_started_at(value: str | None) -> datetime | None:

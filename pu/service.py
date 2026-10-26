@@ -32,7 +32,7 @@ import re
 from typing import Any, Sequence
 
 from pu import (
-    bodies, guards, mcpstore, notify, pipeline, records, roles, session_types,
+    bodies, guards, logs_client, mcpstore, notify, pipeline, records, roles, session_types,
     taskstore, triggers,
 )
 
@@ -612,6 +612,16 @@ def write_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
     emits = written.get("emits") or {}
     spends = " It emits agent-runnable work, so it will spend." \
         if emits.get("afk") else ""
+    if transition:
+        logs_client.record_event(
+            "trigger_activated" if transition == "activated"
+            else "trigger_deactivated",
+            "trigger", written["name"],
+            "activated" if transition == "activated" else
+            "edited while live, so it needs approval again",
+            title=written.get("purpose", ""),
+            detail={"source": written["source"].get("kind"),
+                    "spends": bool(emits.get("afk"))})
 
     if transition == "deactivated_by_edit":
         notify.notify_owner(
@@ -1048,6 +1058,15 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
     _require_servers(record, type_store)
     written = type_store.append(record)
 
+    if transition:
+        logs_client.record_event(
+            "type_activated" if transition == "activated" else "type_deactivated",
+            "session_type", written["name"],
+            "activated" if transition == "activated" else
+            "an agent changed what it may do, so it needs approval again",
+            title=written.get("purpose", ""),
+            detail={"grant": written.get("grant"),
+                    "agent_role": written.get("agent_role")})
     if transition == "deactivated_by_edit":
         notify.notify_owner(
             notify.bridge_url(),

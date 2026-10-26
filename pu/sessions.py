@@ -88,7 +88,64 @@ class SessionStore:
             )
         except OSError:
             pass
+        # The all-time rollup, folded forward one run at a time so a poll
+        # of /stats never rereads every record ever written.
+        from pu import stats
+        try:
+            record = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+            stats.fold_into_rollup(self.root, record, self._results)
+        except (OSError, ValueError):
+            pass
         return run_dir
+
+    def recent(self, days: int, now: datetime | None = None) -> list[dict[str, Any]]:
+        """Run records from the last `days` days, reading only those: a run
+        directory is named by the moment it was recorded, so older ones are
+        skipped by name rather than opened."""
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=days)).strftime("%Y%m%dT%H%M%S")
+        out: list[dict[str, Any]] = []
+        try:
+            paths = [p for p in self.root.glob("*/*/result.json")
+                     if p.parent.name >= cutoff]
+        except OSError:
+            return out
+        for path in paths:
+            try:
+                parsed = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(parsed, dict):
+                parsed["task_uuid"] = path.parent.parent.name
+                parsed["run_id"] = path.parent.name
+                out.append(parsed)
+        return out
+
+    def purge_streams(self, days: int = 30, now: datetime | None = None) -> int:
+        """Delete raw transcripts (`stream.jsonl`) older than `days`. The run
+        record and the prompt stay; mu-logs holds the system's copy. Runs at
+        most once a day. Returns how many were deleted."""
+        now = now or datetime.now(timezone.utc)
+        marker = self.root / "stream_purge.json"
+        try:
+            last = datetime.fromisoformat(
+                json.loads(marker.read_text(encoding="utf-8"))["at"])
+            if (now - last).total_seconds() < 86400:
+                return 0
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        cutoff = (now - timedelta(days=days)).strftime("%Y%m%dT%H%M%S")
+        deleted = 0
+        try:
+            for stream in self.root.glob("*/*/stream.jsonl"):
+                if stream.parent.name < cutoff:
+                    stream.unlink()
+                    deleted += 1
+            self.root.mkdir(parents=True, exist_ok=True)
+            marker.write_text(json.dumps({"at": now.isoformat()}), encoding="utf-8")
+        except OSError:
+            pass
+        return deleted
 
     def _results(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -193,8 +250,12 @@ class SessionStore:
         today = datetime.now(timezone.utc).date()
         try:
             last = datetime.fromisoformat(end).date() if end else today
+            # A week's default window starts on a Monday, seven weeks before
+            # the current one: counting back days alone spans nine ISO weeks
+            # on some weekdays.
             first = (datetime.fromisoformat(start).date() if start else
-                     last - timedelta(days={"day": 13, "week": 7 * 7 + 6,
+                     last - timedelta(days={"day": 13,
+                                            "week": last.weekday() + 7 * 7,
                                             "month": 0}[by]))
         except ValueError:
             raise ValueError("from and to are dates, YYYY-MM-DD") from None

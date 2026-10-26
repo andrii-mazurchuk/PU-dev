@@ -73,3 +73,12 @@ def store():
 @pytest.fixture
 def body_store(tmp_path):
     return bodies.BodyStore(tmp_path / "bodies")
+
+
+@pytest.fixture(autouse=True)
+def no_real_logs_unit(monkeypatch, tmp_path_factory):
+    """pu_event entries go to the logs peer in the repo's peers.json, which
+    points at a real local port. Tests must never reach it."""
+    from pu import logs_client
+    monkeypatch.setattr(logs_client, "DEFAULT_PEERS_PATH",
+                        tmp_path_factory.mktemp("nopeers") / "peers.json")

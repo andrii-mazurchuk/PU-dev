@@ -161,6 +161,10 @@ def _ceiling(policy, session_store, today: str, state_dir: Path,
     path = Path(state_dir) / "headroom.json"
     previous = usage_gate.load_blocked_state(path)
     if reason != previous:
+        logs_client.record_event(
+            "runway_on" if reason else "runway_off", "unit", "pu",
+            reason or "budget and limits back outside the runway",
+            detail={"max_concurrent": wanted})
         notify.notify_owner(
             mcp_bridge_url,
             f"pu: {reason}. One session at a time until it recovers."
@@ -585,6 +589,10 @@ def _expire_stale(store, moment: datetime, mcp_bridge_url: str | None,
                                   f"({why}), so never run")
         store.modify(task.uuid, add_tags=[EXPIRED_TAG])
         store.complete(task.uuid)
+        logs_client.record_event(
+            "work_expired", "task", task.uuid,
+            f"not started by {task.expires}: {why}", title=task.description,
+            detail={"trigger": task.trigger, "priority": task.priority})
         notify.notify_owner(
             mcp_bridge_url,
             f"pu let a task expire unrun: it waited past its trigger's "
@@ -668,7 +676,7 @@ def _clear_inflight(path: Path) -> None:
 
 
 def _recover_lost_runs(store, session_store, state_dir: Path,
-                       mcp_bridge_url) -> None:
+                       mcp_bridge_url, peers_path: Path | None = None) -> None:
     """Every marker whose run this process is not running belongs to a
     process that is gone. `inflight.json` is the single marker the one-
     session build wrote, still read so a deploy mid-run loses nothing."""
@@ -694,13 +702,15 @@ def _recover_lost_runs(store, session_store, state_dir: Path,
                f"(started {lost.get('started_at')})")
         # A lost run is an infrastructure failure: retried once, counted.
         outcome, detail = _fail(store, task, why, mcp_bridge_url)
-        session_store.record(
-            task.uuid, lost.get("session_type") or "unknown", "",
-            runner_mod.SessionResult(exit_code=-1), "lost", detail,
-            agent_role=lost.get("agent_role") or "system",
-            extra={"started_by": (f"trigger:{task.trigger}" if task.trigger
-                                  else "task")},
-        )
+        _record_run(session_store, peers_path, task,
+                    lost.get("session_type") or "unknown", "",
+                    runner_mod.SessionResult(exit_code=-1), "lost", detail,
+                    "infrastructure")
+        logs_client.record_event(
+            "run_lost", "task", task.uuid, why, title=task.description,
+            detail={"session_type": lost.get("session_type"),
+                    "started_at": lost.get("started_at")},
+            peers_path=peers_path)
 
 
 # -- the tick -------------------------------------------------------------
@@ -770,7 +780,8 @@ def _tick(
             f"time; schedules that came due fire late now, once each.",
             source_unit=UNIT_NAME)
 
-    _recover_lost_runs(store, session_store, tracker_path.parent, mcp_bridge_url)
+    _recover_lost_runs(store, session_store, tracker_path.parent, mcp_bridge_url,
+                       peers_path)
     for stale in guards.newly_stale(
             store, tracker_path.parent / "stale_claims.json",
             stale_claim_seconds, moment):
@@ -782,12 +793,23 @@ def _tick(
             f"(task {stale.uuid} stop) or resolve it.",
             source_unit=UNIT_NAME)
     guards.prune_runs(store, tracker_path.parent / "prune.json", moment)
+    session_store.purge_streams(30, moment)
     _daily_audit(store, tracker_path.parent / "audit.json", moment,
                  mcp_bridge_url)
 
     policy = read_cost_policy(cost_policy_path)
     blocked = check_cost_gate(policy, session_store, moment.strftime("%Y-%m-%d"),
                               reserved=reserved_cost(session_store))
+    cost_state = tracker_path.parent / "cost_gate.json"
+    if blocked != usage_gate.load_blocked_state(cost_state):
+        logs_client.record_event(
+            "gate_blocked" if blocked else "gate_cleared", "unit", "pu",
+            blocked or "the daily cost cap no longer blocks",
+            detail={"gate": "cost"}, peers_path=peers_path)
+        if blocked:
+            notify.notify_owner(mcp_bridge_url, f"pu stopped starting sessions: "
+                                f"{blocked}.", source_unit=UNIT_NAME)
+        usage_gate.save_blocked_state(cost_state, blocked)
     if blocked:
         return TickResult(ran=False, reason=blocked)
 
@@ -807,6 +829,10 @@ def _tick(
     if message is not None:
         notify.notify_owner(mcp_bridge_url, message, source_unit=UNIT_NAME)
         usage_gate.save_blocked_state(state_path, usage_blocked)
+        logs_client.record_event(
+            "gate_blocked" if usage_blocked else "gate_cleared", "unit", "pu",
+            usage_blocked or "account usage back under its ceilings",
+            detail={"gate": "usage"}, peers_path=peers_path)
     if usage_blocked:
         return TickResult(ran=False, reason=usage_blocked)
 
@@ -870,6 +896,10 @@ def _tick(
         if not exists:
             if type_store is not None and stype.record is not None:
                 type_store.append(dict(stype.record, enabled=False))
+                logs_client.record_event(
+                    "type_deactivated", "session_type", stype.name,
+                    f"agent role {stype.agent_role!r} left the gateway's registry",
+                    peers_path=peers_path)
             notify.notify_owner(
                 mcp_bridge_url,
                 f"pu switched off session type {stype.name}: its agent role "
@@ -958,6 +988,12 @@ def _run_claimed(
     task, stype, cwd, instructions, session_runner, mcp_bridge_url,
     role_description="", mcp_store=None,
 ) -> TickResult:
+    started = datetime.now(timezone.utc)
+    queued = _queued_seconds(task, started)
+
+    def record(result, outcome, detail, failure_class=None):
+        _record_run(session_store, peers_path, task, stype, prompt, result,
+                    outcome, detail, failure_class, queued)
 
     prompt = build_prompt(task, body_store.get(task.uuid), unit_root,
                           agent_role=stype.agent_role,
@@ -977,6 +1013,8 @@ def _run_claimed(
         except mcpstore.McpStoreError as exc:
             outcome, detail = _fail(store, task, f"infrastructure: {exc}",
                                     mcp_bridge_url)
+            record(runner_mod.SessionResult(exit_code=-1), "launch_failed",
+                   str(exc), "infrastructure")
             return TickResult(ran=False, reason="mcp config failed",
                               task_uuid=task.uuid, session_type=stype.name,
                               outcome=outcome, detail=str(exc))
@@ -996,6 +1034,11 @@ def _run_claimed(
         outcome, detail = _fail(
             store, task, f"infrastructure: session failed to launch: {exc}",
             mcp_bridge_url)
+        # A launch that never happened is still an attempt: recorded, or
+        # the analytics undercount failures in exactly the case that most
+        # needs counting.
+        record(runner_mod.SessionResult(exit_code=-1), "launch_failed",
+               str(exc), "infrastructure")
         return TickResult(
             ran=False, reason="launch failed", task_uuid=task.uuid,
             session_type=stype.name,
@@ -1004,36 +1047,68 @@ def _run_claimed(
         )
 
     outcome, detail = _settle(store, task, result, mcp_bridge_url)
-
-    session_store.record(
-        task.uuid, stype.name, prompt, result, outcome, detail,
-        agent_role=stype.agent_role,
-        extra={
-            # The header: measured here, never self-reported.
-            "session_type_version": stype.version,
-            "started_by": (f"trigger:{task.trigger}" if task.trigger
-                           else "task"),
-            # The body, read back.
-            **report_mod.parse(result.text).as_record(),
-        },
-    )
+    failure_class = None
+    if not result.ok or not (result.text or "").strip():
+        failure_class = "infrastructure"
+    elif report_mod.parse(result.text).outcome == "failed":
+        failure_class = "agent"
+    record(result, outcome, detail, failure_class)
     # What this session saw of the account's rolling windows, back to the
     # gateway, which records it once for the whole node. Best-effort: the
     # session has already succeeded and a bridge that is down must not
     # turn that into a failure.
     usage_gate.report_usage(mcp_bridge_url, result.rate_limit_windows)
+
+    return TickResult(
+        ran=True, task_uuid=task.uuid, session_type=stype.name,
+        outcome=outcome, detail=detail, cost_usd=result.cost_usd,
+    )
+
+
+def _queued_seconds(task: records.Task, started: datetime) -> float | None:
+    """How long the task waited between being created and its session
+    starting -- the number that says whether the ceiling is too low."""
+    try:
+        entry = datetime.strptime(task.entry or "", "%Y%m%dT%H%M%SZ").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return max(0.0, round((started - entry).total_seconds(), 3))
+
+
+def _record_run(session_store, peers_path, task, stype, prompt, result,
+                outcome, detail, failure_class=None, queued=None) -> None:
+    """Every attempt, recorded the same way: the local run record (pu's
+    working copy, which its gates and stats read) and a session_run entry
+    in mu-logs (the system's record, which au analyses). Header measured
+    here, never self-reported."""
+    name = stype if isinstance(stype, str) else stype.name
+    role = (session_types_mod.DEFAULT_AGENT_ROLE if isinstance(stype, str)
+            else stype.agent_role)
+    version = None if isinstance(stype, str) else stype.version
+    report = report_mod.parse(result.text)
+    started_by = f"trigger:{task.trigger}" if task.trigger else "task"
+    header = {
+        "session_type_version": version,
+        "started_by": started_by,
+        "failure_class": failure_class,
+        "queued_seconds": queued,
+        "priority": task.priority,
+    }
+    session_store.record(task.uuid, name, prompt, result, outcome, detail,
+                         agent_role=role, extra={**header, **report.as_record()})
     logs_client.record_session_run(
         peers_path,
         source_unit=UNIT_NAME,
         outcome=outcome,
         duration_seconds=(result.duration_ms / 1000.0) if result.duration_ms else None,
         cost=result.cost_usd,
-        extra={"session_type": stype.name, "task_uuid": task.uuid},
-    )
-
-    return TickResult(
-        ran=True, task_uuid=task.uuid, session_type=stype.name,
-        outcome=outcome, detail=detail, cost_usd=result.cost_usd,
+        extra={
+            "session_type": name, "task_uuid": task.uuid, "agent_role": role,
+            "trigger": task.trigger, "tokens": dict(result.tokens),
+            "num_turns": result.num_turns, "report_outcome": report.outcome,
+            "needs_human": report.needs_human, **header,
+        },
     )
 
 
@@ -1121,6 +1196,7 @@ def emit_due_work(
         if not due:
             continue
         attempt: dict[str, Any] = {}
+        fired_items = None
 
         def recording(url, _fetch=fetch or triggers.http_fetch,
                       _attempt=attempt):
@@ -1183,6 +1259,7 @@ def emit_due_work(
             body_store.set(uuid, body)
             emitted.append({"trigger": name, "task_uuid": uuid,
                             "items": len(evaluation.items)})
+            fired_items = len(evaluation.items)
         elif evaluation.fired:
             # Fired with nothing to emit. Recorded rather than silent: a
             # trigger with no `emits` is almost certainly half-written, and
@@ -1191,18 +1268,33 @@ def emit_due_work(
                             "note": "no emits, so no task was created"})
 
         updated = triggers.advanced(cursor, evaluation, now=now)
+        # Carried over the advance, which rebuilds the cursor from its own
+        # four fields and would otherwise drop the history stats reads.
+        for key in ("fetched_at", "backoff_seconds", "backoff_until",
+                    "fetches", "fetch_failures", "backoffs",
+                    "backoff_seconds_total", "consecutive_failures",
+                    "fires", "items_total", "items_max"):
+            if key in cursor:
+                updated.setdefault(key, cursor[key])
+        if fired_items is not None:
+            updated["fires"] = int(cursor.get("fires") or 0) + 1
+            updated["items_total"] = int(cursor.get("items_total") or 0) + fired_items
+            updated["items_max"] = max(int(cursor.get("items_max") or 0), fired_items)
         if "status" in attempt:
-            # Carried over the advance, which rebuilds the cursor from its
-            # own four fields and would otherwise drop the fetch history.
-            for key in ("fetched_at", "backoff_seconds", "backoff_until"):
-                if key in cursor:
-                    updated.setdefault(key, cursor[key])
             updated = triggers.after_fetch(updated, moment, attempt["status"],
                                            attempt["retry_after"])
             if updated.get("backoff_until") not in (None, cursor.get("backoff_until")):
-                emitted.append({"trigger": name, "error":
-                                f"the source refused (status {attempt['status']}); "
-                                f"backing off until {updated['backoff_until']}"})
+                why = (f"the source refused (status {attempt['status']}); "
+                       f"backing off until {updated['backoff_until']}")
+                emitted.append({"trigger": name, "error": why})
+                logs_client.record_event("backoff_started", "trigger", name, why,
+                                         detail={"status": attempt["status"]})
+            elif updated.get("consecutive_failures") == 1:
+                logs_client.record_event(
+                    "fetch_failed", "trigger", name,
+                    f"fetching {trigger['source'].get('url')} did not succeed "
+                    f"(status {attempt['status']})",
+                    detail={"status": attempt["status"]})
         if updated != cursor:
             trigger_store.save_cursor(name, updated)
     return tuple(emitted)

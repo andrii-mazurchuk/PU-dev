@@ -564,6 +564,14 @@ def after_fetch(cursor: dict[str, Any], moment: datetime, status: int,
                 retry_after: str | None = None) -> dict[str, Any]:
     """The cursor's fetch bookkeeping after one attempt."""
     out = dict(cursor, fetched_at=moment.isoformat())
+    # Counters only grow: they are what stats reports about a source's
+    # health (fetches, failures, back-offs and time spent backed off).
+    out["fetches"] = int(cursor.get("fetches") or 0) + 1
+    if not 200 <= status < 300:
+        out["fetch_failures"] = int(cursor.get("fetch_failures") or 0) + 1
+        out["consecutive_failures"] = int(cursor.get("consecutive_failures") or 0) + 1
+    else:
+        out["consecutive_failures"] = 0
     if status in BACKOFF_STATUSES:
         try:
             wait = float(retry_after) if retry_after else None
@@ -574,6 +582,9 @@ def after_fetch(cursor: dict[str, Any], moment: datetime, status: int,
                        MAX_BACKOFF_SECONDS)
         out["backoff_seconds"] = wait
         out["backoff_until"] = (moment + timedelta(seconds=wait)).isoformat()
+        out["backoffs"] = int(cursor.get("backoffs") or 0) + 1
+        out["backoff_seconds_total"] = round(
+            float(cursor.get("backoff_seconds_total") or 0) + wait, 3)
     elif 200 <= status < 300:
         out.pop("backoff_seconds", None)
         out.pop("backoff_until", None)

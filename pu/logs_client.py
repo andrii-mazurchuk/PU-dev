@@ -91,3 +91,66 @@ def record_session_run(
             return 200 <= getattr(response, "status", 200) < 300
     except (urllib.error.URLError, OSError, ValueError):
         return False
+
+
+# -- pu_event: the moments that change pu's state --------------------------
+#
+# Decided 2026-10-26. One entry shape, whatever happened:
+#   {event, at, subject: {kind, id, title}, reason, detail}
+# `reason` is plain text pu composes from facts it holds -- never written by
+# an agent: mu-logs is filled computationally. `detail` carries whatever
+# fits the event, so the vocabulary grows without the shape changing.
+
+EVENTS = frozenset({
+    "work_expired", "handed_to_human", "run_lost",
+    "runway_on", "runway_off", "gate_blocked", "gate_cleared",
+    "sessions_off", "sessions_on",
+    "type_activated", "type_deactivated",
+    "trigger_activated", "trigger_deactivated",
+    "fetch_failed", "backoff_started",
+})
+
+# Where pu's own peers file is: the repository root, which is also what
+# main passes everywhere else. Callers outside the tick (the write doors)
+# have no peers path of their own.
+DEFAULT_PEERS_PATH = Path(__file__).resolve().parent.parent / "peers.json"
+
+
+def record_event(
+    event: str,
+    subject_kind: str,
+    subject_id: str,
+    reason: str,
+    title: str = "",
+    detail: dict[str, Any] | None = None,
+    peers_path: Path | None = None,
+    opener=urllib.request.urlopen,
+) -> bool:
+    """One `pu_event` entry. Best-effort like every write here."""
+    from datetime import datetime, timezone
+
+    if event not in EVENTS:
+        raise ValueError(f"unknown pu_event {event!r}")
+    peer = find_logs_peer(peers_path or DEFAULT_PEERS_PATH)
+    if peer is None:
+        return False
+    body = json.dumps({
+        "source_unit": "pu",
+        "entry_type": "pu_event",
+        "payload": {
+            "event": event,
+            "at": datetime.now(timezone.utc).isoformat(),
+            "subject": {"kind": subject_kind, "id": subject_id,
+                        "title": (title or "")[:120]},
+            "reason": reason,
+            "detail": detail or {},
+        },
+    }).encode("utf-8")
+    url = str(peer["base_url"]).rstrip("/") + CREATE_ENTRY_PATH
+    request = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with opener(request, timeout=TIMEOUT_SECONDS) as response:
+            return 200 <= getattr(response, "status", 200) < 300
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
