@@ -647,7 +647,12 @@ def test_an_execution_task_without_a_repo_is_skipped_with_a_reason(
         session_runner=lambda **k: pytest.fail("must not run without a repo"),
     )
     assert result.ran is False
-    assert any("needs a `repo`" in a for a in store.get(uuid).annotations)
+    task = store.get(uuid)
+    assert any("needs a `repo`" in a for a in task.annotations)
+    # Handed over at once with the real reason -- not skipped every tick
+    # until the repeat breaker blocks it as "not resolving" (live, 10-25).
+    assert task.afk is False and "needs_human" in task.tags
+    assert not any("selected" in a for a in task.annotations)
 
 
 def test_an_execution_tick_runs_in_the_repo_with_injected_instructions(

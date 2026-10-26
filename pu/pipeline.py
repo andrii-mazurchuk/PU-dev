@@ -915,6 +915,38 @@ def _tick(
         if stype.runs_in_target_repo and _repo_key(candidate.repo) in busy_repos:
             continue
 
+        # A task that cannot run as written goes to a person at once, with
+        # the real reason. It used to be skipped and re-annotated every tick
+        # after the breaker below had already counted it, so after three
+        # ticks it was auto-blocked as "not resolving" -- live, 2026-10-25,
+        # on an execution task that simply had no repo.
+        if stype.runs_in_target_repo:
+            why = None
+            if not candidate.repo:
+                why = "an execution task needs a `repo` to run in"
+            else:
+                try:
+                    report = repo_setup.prepare(candidate.repo, stype.dir)
+                except repo_setup.RepoError as exc:
+                    why = f"its repository cannot be prepared: {exc}"
+            if why:
+                guards.block(store, candidate.uuid, f"cannot run: {why}")
+                notify.notify_owner(
+                    mcp_bridge_url,
+                    f"pu cannot run a task as written, so it is yours now.\n\n"
+                    f"{candidate.description}\n{why}\ntask {candidate.uuid}",
+                    source_unit=UNIT_NAME)
+                continue
+            cwd = Path(report.repo)
+            # cwd is the repo, so this type's own CLAUDE.md no longer loads
+            # from it. Folded into the prompt rather than passed as
+            # --append-system-prompt: it is multi-line, and a multi-line
+            # argv value is truncated by a batch shim. See runner.py.
+            instructions = stype.instructions()
+        else:
+            cwd = stype.dir
+            instructions = ""
+
         # Winning selection repeatedly means it is not resolving: a
         # resolved task is closed and cannot win again. Counted here,
         # before any work, so a session that fails to launch counts too.
@@ -937,28 +969,6 @@ def _tick(
                 task_uuid=candidate.uuid, session_type=stype.name,
                 outcome="auto_blocked", emitted=emitted,
             )
-
-        if stype.runs_in_target_repo:
-            if not candidate.repo:
-                store.annotate(
-                    candidate.uuid,
-                    "skipped: an execution task needs a `repo` to run in",
-                )
-                continue
-            try:
-                report = repo_setup.prepare(candidate.repo, stype.dir)
-            except repo_setup.RepoError as exc:
-                store.annotate(candidate.uuid, f"skipped: {exc}")
-                continue
-            cwd = Path(report.repo)
-            # cwd is the repo, so this type's own CLAUDE.md no longer loads
-            # from it. Folded into the prompt rather than passed as
-            # --append-system-prompt: it is multi-line, and a multi-line
-            # argv value is truncated by a batch shim. See runner.py.
-            instructions = stype.instructions()
-        else:
-            cwd = stype.dir
-            instructions = ""
 
         # Claim before work, still inside the lock: the claim is what takes
         # the task off every other tick's queue.

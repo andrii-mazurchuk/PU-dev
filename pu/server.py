@@ -238,7 +238,7 @@ TOOLS = [
     },
     {
         "name": "write_session_type",
-        "description": "Write a session type. One call for create and update: `name` is the identity and the store is append-only, so writing an existing name adds a revision rather than replacing one. `grant` is the permission bundle and is one of none, read, web, repo -- `repo` runs the session in a target repository. A type is **created inactive** whatever `enabled` says, so creating and activating are two calls. A type only runs once `enabled` is true. **Editing a live type switches it off** -- an edit can change what an already-approved session does -- so activate it again after reviewing the change; a write that touches only `enabled` is the activation path and does not deactivate. `origin` is set by this unit and is refused if sent.",
+        "description": "Write a session type. One call for create and update: `name` is the identity and the store is append-only, so writing an existing name adds a revision rather than replacing one. `grant` is the permission bundle and is one of none, read, web, repo -- `repo` runs the session in a target repository. A type is **created inactive** whatever `enabled` says, so creating and activating are two calls. A type only runs once `enabled` is true. **Changing what a live type may do switches it off for new runs** -- grant, agent_role, mcp_servers, plugins or claims -- so activate it again after reviewing the change. A prompt or purpose edit keeps it on. A running session is never stopped by any edit. A write that touches only `enabled` is the activation path. `origin` is set by this unit and is refused if sent.",
         "method": "POST",
         "path": "/session-types",
         "input_schema": {
