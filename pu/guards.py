@@ -191,11 +191,15 @@ def prune_runs(
     except (OSError, ValueError, AttributeError, TypeError):
         pass
 
-    cutoff = (moment - timedelta(days=retention_days)).strftime("%Y-%m-%d")
+    cutoff = moment - timedelta(days=retention_days)
     deleted: list[str] = []
+    # Compared here rather than with `end.before:`: the live node's
+    # Taskwarrior returned nothing for the `end.` filters, so the prune
+    # would have silently never pruned.
     try:
-        old = store.export("status:completed", f"project:{records.RUNS_PROJECT}",
-                           f"end.before:{cutoff}")
+        old = [t for t in store.export("status:completed",
+                                       f"project:{records.RUNS_PROJECT}")
+               if (ended := _ended(t.end)) is not None and ended < cutoff]
     except taskstore.TaskError:
         return deleted
     for task in old:
@@ -211,3 +215,11 @@ def prune_runs(
     except OSError:
         pass
     return deleted
+
+
+def _ended(value: str | None) -> datetime | None:
+    try:
+        return datetime.strptime(value or "", "%Y%m%dT%H%M%SZ").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return None

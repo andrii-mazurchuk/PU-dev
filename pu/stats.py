@@ -334,10 +334,12 @@ def tasks(store, now: datetime | None = None) -> dict[str, Any]:
     try:
         pending = [t for t in store.export("status:pending") if t.kind != "map"]
         blocked_ids = {t.uuid for t in store.export("status:pending", "+BLOCKED")}
-        done = [t for t in store.export(
-            "status:completed",
-            f"end.after:{(now - timedelta(days=30)).strftime('%Y-%m-%d')}")
-            if t.kind != "map"]
+        # Filtered here, not with `end.after:` -- on the live node's
+        # Taskwarrior that filter returned nothing while the same query
+        # worked locally, and every completed count read zero.
+        month_ago = now - timedelta(days=30)
+        done = [t for t in store.export("status:completed")
+                if t.kind != "map" and (_tw_when(t.end) or month_ago) > month_ago]
         maps = store.export("status:pending", "kind:map")
     except Exception:  # noqa: BLE001
         return {}
@@ -350,7 +352,7 @@ def tasks(store, now: datetime | None = None) -> dict[str, Any]:
         return "other"
 
     def ages(ts):
-        values = [(now - w).total_seconds() / 86400
+        values = [round((now - w).total_seconds() / 86400, 3)
                   for w in (_tw_when(t.entry) for t in ts) if w]
         stat = {"n": 0, "sum": 0.0, "min": None, "max": None}
         for v in values:
