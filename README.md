@@ -129,25 +129,30 @@ Everything else about the page tier is a cost paid for that one thing:
 this unit now owns its own look and no longer gains when the node's
 components improve.
 
-The page is one file, `pu/dashboard.html`. Inline CSS and JS, no build
-step, no CDN, and **every fetch is relative with no leading slash** --
-which is what lets the same file work at this unit's `/dashboard` and
-inside the node's `/dashboard/pu/` prefix with no conditional. A leading
-slash would reach the *node*, which answers with plausible JSON of the
-wrong shape rather than an error.
+The page is one file, `pu/dashboard.html`, and it is a **build
+artefact**: its source is the React app in `web/`, built into a single
+file with scripts, styles and fonts inlined and no CDN (rule 1 as
+amended in holonic-node 6b50dfb). CI rebuilds it and fails if the
+committed file differs, so a source edit always ships with its rebuild:
 
-Opened directly it falls back to a sample graph and says so, so the
-layout can be inspected without standing up a node.
+    cd web && bun install && bun run build   # writes ../pu/dashboard.html
+
+**Every fetch is relative with no leading slash** -- which is what lets
+the same file work at this unit's `/dashboard` and inside the node's
+`/dashboard/pu/` prefix with no conditional. A leading slash would reach
+the *node*, which answers with plausible JSON of the wrong shape rather
+than an error. With no unit behind it, the page shows its sample data
+and says so.
+
+**The app is not wired to pu's API yet.** It reads its fixtures, and
+`tests/test_dashboard_page.py` marks the fetch rule as an expected
+failure until it does.
 
 ### The layout is the hard part
 
-`tests/layout.test.mjs` checks the layered-DAG pipeline the page
-hand-rolls. Run it with `node`; it is deliberately not in CI, which is
-Python only. It extracts the functions from `dashboard.html` rather than
-copying them, because a drifted copy of a layout algorithm passes its
-tests while the thing on screen is wrong.
-
-Three guarantees:
+The hand-written page these guarantees were written for (and checked by
+`tests/layout.test.mjs`) was replaced by `web/`; the app's graph has to
+meet them again, and has no test of its own for them yet:
 
 1. **A task is drawn after everything blocking it.** Layer is the
    *longest* path from a root. With shortest path, a task blocked by

@@ -1,0 +1,121 @@
+/* Generated from design.json by tools/design.ts. Do not edit; edit design.json. */
+:root {
+  --background: var(--ground, #e4e7ec);
+  --foreground: var(--ink, #10141c);
+  --card: var(--panel, #fafbfc);
+  --card-foreground: var(--ink, #10141c);
+  --popover: var(--panel, #fafbfc);
+  --popover-foreground: var(--ink, #10141c);
+  --primary: var(--brand, #0e6e77);
+  --primary-foreground: var(--brand-ink, #fafbfc);
+  --secondary: var(--panel-alt, #eff1f5);
+  --secondary-foreground: var(--ink, #10141c);
+  --muted: var(--panel-alt, #eff1f5);
+  --muted-foreground: var(--ink-soft, #3d4654);
+  --accent: var(--panel-alt, #eff1f5);
+  --accent-foreground: var(--ink, #10141c);
+  --destructive: var(--down, #b23a3a);
+  --destructive-foreground: var(--panel, #fafbfc);
+  --border: var(--rule, #c7cdd8);
+  --input: var(--dim, #67707f);
+  --ring: var(--brand, #0e6e77);
+  --status-ok: var(--ok, #2e7a57);
+  --status-warn: var(--warn, #a9741b);
+  --status-down: var(--down, #b23a3a);
+  --subtle: var(--dim, #67707f);
+  --chart-track: var(--panel-3, #e8ebf0);
+  --duration-press: 120ms;
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-overlay: 250ms;
+  --duration-reduced: 150ms;
+}
+.dark {
+  --background: var(--ground, #0c1016);
+  --foreground: var(--ink, #e8ecf2);
+  --card: var(--panel, #141a22);
+  --card-foreground: var(--ink, #e8ecf2);
+  --popover: var(--panel, #141a22);
+  --popover-foreground: var(--ink, #e8ecf2);
+  --primary: var(--brand, #4cc2ce);
+  --primary-foreground: var(--brand-ink, #0c1016);
+  --secondary: var(--panel-alt, #1a212b);
+  --secondary-foreground: var(--ink, #e8ecf2);
+  --muted: var(--panel-alt, #1a212b);
+  --muted-foreground: var(--ink-soft, #b6c0ce);
+  --accent: var(--panel-alt, #1a212b);
+  --accent-foreground: var(--ink, #e8ecf2);
+  --destructive: var(--down, #e06a6a);
+  --destructive-foreground: var(--panel, #141a22);
+  --border: var(--rule, #262e3a);
+  --input: var(--dim, #7d8899);
+  --ring: var(--brand, #4cc2ce);
+  --status-ok: var(--ok, #4fb185);
+  --status-warn: var(--warn, #d9a046);
+  --status-down: var(--down, #e06a6a);
+  --subtle: var(--dim, #7d8899);
+  --chart-track: var(--panel-3, #1f2732);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-press: 0.01ms;
+    --duration-fast: 0.01ms;
+    --duration-base: 0.01ms;
+    --duration-overlay: 0.01ms;
+  }
+}
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-status-ok: var(--status-ok);
+  --color-status-warn: var(--status-warn);
+  --color-status-down: var(--status-down);
+  --color-subtle: var(--subtle);
+  --color-chart-track: var(--chart-track);
+  --font-sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-xs--font-weight: 400;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-sm--font-weight: 400;
+  --text-base: 15px;
+  --text-base--line-height: 22px;
+  --text-base--font-weight: 500;
+  --text-lg: 17px;
+  --text-lg--line-height: 24px;
+  --text-lg--font-weight: 600;
+  --text-xl: 22px;
+  --text-xl--line-height: 30px;
+  --text-xl--font-weight: 600;
+  --text-2xl: 28px;
+  --text-2xl--line-height: 36px;
+  --text-2xl--font-weight: 600;
+  --spacing: 4px;
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px #00000040;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-standard: ease;
+}

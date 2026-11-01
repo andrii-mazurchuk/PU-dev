@@ -24,3 +24,20 @@ jobs:
       - run: task --version
       - run: pip install -e ".[dev]"
       - run: pytest
+
+  # pu/dashboard.html is a build artefact of web/ (UNIT_STANDARDS.md,
+  # page-tier rule 1 as amended in holonic-node 6b50dfb): rebuild it and
+  # fail if the committed file is not exactly what the source produces.
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - run: bun install --frozen-lockfile
+        working-directory: web
+      - run: bun run build
+        working-directory: web
+      - name: the committed page matches a fresh build
+        run: git diff --exit-code -- pu/dashboard.html
