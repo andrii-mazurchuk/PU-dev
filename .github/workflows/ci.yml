@@ -47,3 +47,7 @@ jobs:
         working-directory: web
       - name: the committed page matches a fresh build
         run: git diff --exit-code -- pu/dashboard.html
+      # The frontend pipeline's review tooling (gallery, page index) must
+      # never ship; its own page check enforces the same rule.
+      - name: the page carries no review tooling
+        run: "! grep -q -e 'data-gallery-item' -e 'data-gallery-target' -e '#/gallery' pu/dashboard.html"
