@@ -65,7 +65,7 @@ def test_no_absolute_urls_are_fetched(html):
 # fetch("...") literal to read. The rule is checked where the URLs are
 # written: every read the app makes goes through these two files.
 DATA_SOURCES = (WEB_SRC / "lib" / "live.ts", WEB_SRC / "lib" / "pu-data.ts")
-READ = re.compile(r"""(?:\bjson<.*?>|\bget|\bfetcher)\(\s*[`"]([^`"]*)""")
+READ = re.compile(r"""(?:\bjson<.*?>|\bget|\bfetcher|\bact)\(\s*[`"]([^`"]*)""")
 
 
 @pytest.fixture(scope="module")
@@ -99,10 +99,24 @@ def test_the_paths_it_fetches_are_ones_this_unit_serves(reads):
     as an error -- so nothing on screen says it is wrong."""
     served = {"tasks", "stats", "spend", "projects", "sessions",
               "session-types", "triggers", "running", "attention", "ticks",
-              "mcp-servers"}
+              "mcp-servers", "pause"}
     for call in reads:
         root = call.split("/")[0].split("?")[0].strip()
         assert root in served, f"{call} -> /{root} is not served by this unit"
+
+
+def test_every_write_is_a_declared_action(reads):
+    """A POST from the framed page reaches pu only at a path pu declares in
+    GET /actions; the node refuses the rest before pu sees them. So every
+    write the app makes must be one of those paths, or it is a button that
+    works standalone and silently fails in the node."""
+    declared = [re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", a["path"].lstrip("/")) + "$")
+                for a in server.ACTIONS]
+    writes = [c for c in reads if c.endswith("/enabled") or c == "pause"]
+    assert writes, "no writes found -- have the switches stopped writing?"
+    for call in writes:
+        path = re.sub(r"\$\{[^}]*\}", "x", call)
+        assert any(p.match(path) for p in declared), call
 
 
 def test_the_bundle_writes_no_absolute_pu_path(html):

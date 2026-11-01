@@ -132,6 +132,26 @@ async function loadTasks(scope: string): Promise<ApiTask[]> {
   return lists.flat()
 }
 
+// ---- the write door: the paths pu declares in GET /actions, and nothing else ---------------------------------
+// The node's proxy forwards a POST only to a declared path and audits it. A refusal is JSON with an `error` key,
+// from the node (an undeclared path, 405) or from pu (400/409): that sentence is what the page shows, then the raw
+// body, then the status only when there is nothing else (UNIT_STANDARDS "GET /actions").
+async function act(path: string, body: object): Promise<unknown> {
+  const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+  const text = await r.text()
+  if (!r.ok) {
+    let msg = text
+    try { msg = (JSON.parse(text) as { error?: string }).error ?? text } catch { /* not JSON: the raw body */ }
+    throw new Error(msg || `HTTP ${r.status}`)
+  }
+  poll()
+  return text ? JSON.parse(text) : {}
+}
+export const setEnabled = (kind: "type" | "trigger", name: string, enabled: boolean) => kind === "type"
+  ? act(`session-types/${encodeURIComponent(name)}/enabled`, { enabled })
+  : act(`triggers/${encodeURIComponent(name)}/enabled`, { enabled })
+export const setPaused = (paused: boolean) => act("pause", { paused, reason: paused ? "paused from the dashboard" : "resumed from the dashboard" })
+
 /** The Tasks view says which scope it shows; a new scope is fetched at once rather than at the next poll. */
 export function useScopeTasks(root: string, sub: string, archive: boolean): S.Task[] {
   useEffect(() => {

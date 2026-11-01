@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { useScreenState, type ScreenState } from "@/lib/screen-state"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -29,6 +29,8 @@ const go = (h: string) => { location.hash = h }
 const retry = () => { const [path, query = ""] = location.hash.split("?"); const p = new URLSearchParams(query); p.delete("state"); go(`${path}${p.size ? `?${p}` : ""}`) }
 /** Inside the node frame (or offline) pu can't take a write: every write shows why it is off. */
 const writeBlock = (state: ScreenState) => (window.self !== window.top || state === "permission" ? "writes are not open inside the node yet" : state === "offline" ? "pu is not reachable; nothing can be saved" : undefined)
+/** The switches are the writes pu declares in GET /actions, so they work inside the node frame too. */
+const switchBlock = (state: ScreenState) => (state === "permission" ? "switching is not open here" : state === "offline" || F.CONN.mode !== "live" ? "pu is not reachable; nothing can be switched" : undefined)
 
 const since = () => (F.CONN.lastGood ? `${Math.max(1, Math.round((Date.now() - F.CONN.lastGood) / 60000))} min ago` : "a while ago")
 const NOTE: Partial<Record<ScreenState, string>> = {
@@ -216,27 +218,36 @@ function Attention() {
 
 // ---------- Sessions (key screen, option A) ----------
 const filterValues = () => ({ role: ["all", ...new Set(F.TYPES.map(t => t.role))], grant: ["all", ...new Set(F.TYPES.map(t => t.grant))], model: ["all", ...new Set(F.TYPES.map(t => t.model))] })
-/** A switch on sample data: saving… briefly, then applied, or refused with pu's error (ai-news needs re-approval). */
-function Toggle({ name, initial, block }: { name: string; initial: F.TypeOn; block?: string }) {
-  const v = useViewState(), s = v.switches[name], [error, setError] = useState<string>(), [offNote, setOffNote] = useState(false)
-  const state: F.TypeOn = s ? (s.on ? "on" : initial === "on" ? "off" : initial) : initial
-  const set = (on: boolean) => {
-    setError(undefined); setOffNote(false)
-    setViewState(x => ({ switches: { ...x.switches, [name]: { on: state === "on", pending: true } } }))
-    setTimeout(() => {
-      if (on && initial === "needs re-approval") { setViewState(x => ({ switches: { ...x.switches, [name]: { on: false } } })); setError("pu refused: an agent changed this type's access; review the type, then switch it on"); return }
-      setViewState(x => ({ switches: { ...x.switches, [name]: { on } } })); setOffNote(!on)
-    }, 600)
+/** A switch through pu's declared action: saving… while pu answers, then pu's own state, or pu's refusal in words. */
+function Toggle({ kind, name, initial, block }: { kind: "type" | "trigger"; name: string; initial: F.TypeOn; block?: string }) {
+  const [pending, setPending] = useState<boolean>(), [saved, setSaved] = useState<boolean>(), [error, setError] = useState<string>(), [offNote, setOffNote] = useState(false)
+  const builtIn = kind === "type" && F.TYPES.find(t => t.name === name)?.unit.includes("built-in")
+  // What pu accepted is shown until a poll brings pu's own record round to it; showing the older polled state in
+  // between would make the next click send the same value again.
+  const shown = pending ?? (saved !== undefined && saved !== (initial === "on") ? saved : undefined)
+  const state: F.TypeOn = shown === undefined ? initial : shown ? "on" : "off"
+  useEffect(() => { if (saved !== undefined && saved === (initial === "on")) setSaved(undefined) }, [initial, saved])
+  const set = async (on: boolean) => {
+    setError(undefined); setOffNote(false); setPending(on)
+    try { await F.setEnabled(kind, name, on); setSaved(on); setOffNote(!on) } catch (e) { setError(`pu refused: ${(e as Error).message}`) }
+    setPending(undefined)
   }
-  return <div className="flex flex-col gap-1"><StateSwitch name={name} state={state} pending={!!s?.pending} disabledReason={block} error={error} onChange={set} />{offNote && <span role="status" className="text-xs text-muted-foreground">switched off · running sessions are not stopped</span>}</div>
+  return <div className="flex flex-col gap-1"><StateSwitch name={name} state={state} pending={pending !== undefined} disabledReason={builtIn ? "built-in: always on" : block} error={error} onChange={set} />{offNote && <span role="status" className="text-xs text-muted-foreground">switched off · running sessions are not stopped</span>}</div>
 }
 function PauseAll({ block }: { block?: string }) {
-  const v = useViewState(), [ask, setAsk] = useState(false)
+  const [ask, setAsk] = useState(false), [pending, setPending] = useState<boolean>(), [saved, setSaved] = useState<boolean>(), [error, setError] = useState<string>()
+  const paused = pending ?? (saved !== undefined && saved !== F.STATUS.paused ? saved : F.STATUS.paused)
+  useEffect(() => { if (saved !== undefined && saved === F.STATUS.paused) setSaved(undefined) }, [saved, F.STATUS.paused])
+  const set = async (p: boolean) => {
+    setAsk(false); setError(undefined); setPending(p)
+    try { await F.setPaused(p); setSaved(p) } catch (e) { setError(`pu refused: ${(e as Error).message}`) }
+    setPending(undefined)
+  }
   return (
     <div className="flex items-center gap-3">
       <span className="whitespace-nowrap text-sm text-foreground">Pause all</span>
-      <StateSwitch name="Pause all" state={v.paused ? "on" : "off"} disabledReason={block} onChange={on => (on ? setAsk(true) : setViewState({ paused: false }))} />
-      <ConfirmDialog open={ask} title="Pause every session?" body="pu stops starting new sessions. Sessions already running finish." confirmLabel="Pause all" onConfirm={() => { setViewState({ paused: true }); setAsk(false) }} onCancel={() => setAsk(false)} />
+      <StateSwitch name="Pause all" state={paused ? "on" : "off"} pending={pending !== undefined} disabledReason={block} error={error} onChange={on => (on ? setAsk(true) : set(false))} />
+      <ConfirmDialog open={ask} title="Pause every session?" body="pu stops starting new sessions. Sessions already running finish." confirmLabel="Pause all" onConfirm={() => set(true)} onCancel={() => setAsk(false)} />
     </div>
   )
 }
@@ -254,7 +265,7 @@ const MaxConcurrent = () => (
 )
 
 function SessionsBody({ behind = false }: { behind?: boolean }) {
-  const screen = useScreenState(), state = behind && screen !== "permission" ? "default" : screen, block = writeBlock(state), v = useViewState()
+  const screen = useScreenState(), state = behind && screen !== "permission" ? "default" : screen, block = switchBlock(state), v = useViewState()
   const types = F.TYPES.filter(t => (["role", "grant", "model"] as const).every(k => v.typeFilter[k] === "all" || t[k] === v.typeFilter[k]))
   return (
     <Page id="sessions" title="Sessions" view="sessions">
@@ -283,7 +294,7 @@ function SessionsBody({ behind = false }: { behind?: boolean }) {
             <TableBody>{types.map(t => (
               <TableRow key={t.name} className={ROW}>
                 <TableCell className={NAME}><a href={`#/type?name=${t.name}`} className={link}>{t.name}</a></TableCell>
-                <TableCell><Toggle name={t.name} initial={t.on} block={block} /></TableCell>
+                <TableCell><Toggle kind="type" name={t.name} initial={t.on} block={block} /></TableCell>
                 <TableCell>{t.unit}</TableCell><TableCell>{t.role} · {t.grant} · {t.model}</TableCell>
                 <TableCell>{F.fedBy(t) ? <a href={`#/trigger?name=${F.fedBy(t)}`} className={link}>{F.fedBy(t)}</a> : "—"}</TableCell>
                 <TableCell>{t.lastRun ? <a href={`#/run?id=${F.RUNS.find(r => r.type === t.name)?.id ?? ""}&from=sessions`} className={link}>{t.last}</a> : t.last}</TableCell>
@@ -294,7 +305,7 @@ function SessionsBody({ behind = false }: { behind?: boolean }) {
       <Panel data-block="triggers" title={`Triggers · ${F.TRIGGERS.length}`} aside={<Button variant="outline" size="sm" onClick={() => go("#/trigger?name=new")}>New trigger</Button>}>
         <Table><TableHeader className={HEAD}><TableRow><TableHead>Trigger</TableHead><TableHead>Switch</TableHead><TableHead>Source</TableHead><TableHead>Creates</TableHead><TableHead>Health</TableHead></TableRow></TableHeader>
           <TableBody>{F.TRIGGERS.map(t => (
-            <TableRow key={t.name} className={ROW}><TableCell className={NAME}><a href={`#/trigger?name=${t.name}`} className={link}>{t.name}</a></TableCell><TableCell><Toggle name={t.name} initial={t.on} block={block} /></TableCell><TableCell>{t.src}</TableCell><TableCell>{t.kind} → {t.type || "no type claims it"}</TableCell><TableCell>{t.health}</TableCell></TableRow>))}</TableBody></Table>
+            <TableRow key={t.name} className={ROW}><TableCell className={NAME}><a href={`#/trigger?name=${t.name}`} className={link}>{t.name}</a></TableCell><TableCell><Toggle kind="trigger" name={t.name} initial={t.on} block={block} /></TableCell><TableCell>{t.src}</TableCell><TableCell>{t.kind} → {t.type || "no type claims it"}</TableCell><TableCell>{t.health}</TableCell></TableRow>))}</TableBody></Table>
       </Panel>
     </Page>
   )
@@ -329,7 +340,7 @@ function TypePanel() {
     <>
       <SessionsBody behind />
       <SidePanel open onOpenChange={o => !o && go(back)} backLabel="Back to sessions" backHref={back} title={isNew ? "New session type" : t.name} description={isNew ? "pu writes origin and unit itself" : `${t.unit}${t.unit === "pu" ? " (no parent)" : ""} · ${t.role} · ${t.model}`}>
-        <div data-block="panel-title">{isNew ? <span className="text-sm text-muted-foreground">off until you switch it on after saving</span> : <Toggle name={t.name} initial={t.on} block={writeBlock(state)} />}</div>
+        <div data-block="panel-title">{isNew ? <span className="text-sm text-muted-foreground">off until you switch it on after saving</span> : <Toggle kind="type" name={t.name} initial={t.on} block={switchBlock(state)} />}</div>
         <Panel data-block="definition" title="Definition">
           <Stateful state={state} empty="Fill the name, purpose, prompt and grant; the dry run needs them.">
             <Field id="t-name" label="Name" error={errors.name} hint={isNew ? "fixed once saved" : "fixed"}><Input id="t-name" value={f.name} disabled={!isNew || !!block} aria-invalid={!!errors.name || undefined} aria-describedby="t-name-msg" onChange={e => setF({ ...f, name: e.target.value })} /></Field>
@@ -381,7 +392,7 @@ function TriggerPanel() {
     <>
       <SessionsBody behind />
       <SidePanel open onOpenChange={o => !o && go(back)} backLabel="Back to sessions" backHref={back} title={isNew ? "New trigger" : t.name} description={isNew ? "choose what it watches first" : t.src}>
-        <div data-block="panel-title">{isNew ? <span className="text-sm text-muted-foreground">off until you switch it on after saving</span> : <Toggle name={t.name} initial={t.on} block={block} />}</div>
+        <div data-block="panel-title">{isNew ? <span className="text-sm text-muted-foreground">off until you switch it on after saving</span> : <Toggle kind="trigger" name={t.name} initial={t.on} block={switchBlock(state)} />}</div>
         <Panel data-block="source" title="Source">
           <Stateful state={state} empty="Choose the kind of source; its fields follow.">
             {isNew && <Field id="g-name" label="Name" error={errors.name}><Input id="g-name" value={f.name} disabled={!!block} aria-invalid={!!errors.name || undefined} aria-describedby="g-name-msg" onChange={e => setF({ ...f, name: e.target.value })} /></Field>}

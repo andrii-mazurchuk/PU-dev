@@ -1095,6 +1095,42 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
     return written
 
 
+def set_session_type_enabled(type_store, name: str, enabled: Any) -> dict[str, Any]:
+    """Switch one session type on or off, and nothing else.
+
+    The dashboard's on/off door (`/actions`). It rewrites the current record
+    with only `enabled` changed, through `write_session_type`, so the
+    activation rules, the role check and the owner's notice all run as for
+    any write -- and a press can never carry another edit along with it,
+    which a page re-sending a whole record could.
+
+    A declared type is refused: the write door stamps every record it writes
+    `authored`, and a peer's declaration is not this unit's to rewrite.
+    """
+    if not isinstance(enabled, bool):
+        raise ServiceError("enabled must be true or false")
+    current = type_store.get(name)
+    if current is None:
+        raise ServiceError(f"no session type named {name!r}")
+    if current.get("origin", "authored") != "authored":
+        raise ServiceError(
+            f"{name} is declared by its unit; switch it there, not here")
+    record = {k: v for k, v in current.items() if k != "origin"}
+    return write_session_type(type_store, dict(record, enabled=enabled))
+
+
+def set_trigger_enabled(trigger_store, name: str, enabled: Any) -> dict[str, Any]:
+    """Switch one trigger on or off, and nothing else -- the trigger half of
+    the dashboard's on/off door, through `write_trigger` for the same
+    reasons as `set_session_type_enabled`."""
+    if not isinstance(enabled, bool):
+        raise ServiceError("enabled must be true or false")
+    current = trigger_store.get(name)
+    if current is None:
+        raise ServiceError(f"no trigger named {name!r}")
+    return write_trigger(trigger_store, dict(current, enabled=enabled))
+
+
 def _changes_more_than_enabled(
     record: dict[str, Any], previous: dict[str, Any],
     fields: tuple[str, ...] | None = None,

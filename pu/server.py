@@ -556,6 +556,53 @@ TOOLS = [
 ]
 
 
+# What a person may press on the dashboard (UNIT_STANDARDS.md, "GET
+# /actions"). The node's proxy forwards a POST only to a path declared here,
+# and audits it; the MCP bridge never reads this list, so none of it is
+# offered to an agent. Unadvertised and audited -- not enforced as
+# human-only, since nothing authenticates a caller yet.
+#
+# The fewest paths that work: switching a session type or a trigger on or
+# off, and pausing every start. Stopping cannot spend money, and switching on
+# is the decision these exist for. Edits stay off this list until a person
+# can be told apart from an agent.
+ACTIONS = [
+    {
+        "name": "set_session_type_enabled",
+        "description": "Switch one session type on or off. Nothing else about it changes; running sessions are not stopped.",
+        "method": "POST",
+        "path": "/session-types/{name}/enabled",
+        "input_schema": {
+            "type": "object",
+            "properties": {"enabled": {"type": "boolean"}},
+            "required": ["enabled"],
+        },
+    },
+    {
+        "name": "set_trigger_enabled",
+        "description": "Switch one trigger on or off. Nothing else about it changes.",
+        "method": "POST",
+        "path": "/triggers/{name}/enabled",
+        "input_schema": {
+            "type": "object",
+            "properties": {"enabled": {"type": "boolean"}},
+            "required": ["enabled"],
+        },
+    },
+    {
+        "name": "set_paused",
+        "description": "Pause or resume every new session start. Running sessions finish.",
+        "method": "POST",
+        "path": "/pause",
+        "input_schema": {
+            "type": "object",
+            "properties": {"paused": {"type": "boolean"}, "reason": {"type": "string"}},
+            "required": ["paused"],
+        },
+    },
+]
+
+
 def make_handler(
     store: taskstore.TaskStore,
     body_store: bodies.BodyStore,
@@ -792,6 +839,9 @@ def make_handler(
                 if parts == ["tools"]:
                     return self._json(200, {"unit": UNIT_NAME, "tools": TOOLS})
 
+                if parts == ["actions"]:
+                    return self._json(200, {"unit": UNIT_NAME, "actions": ACTIONS})
+
                 if parts == ["docs"]:
                     return self._json(
                         200, {"unit": UNIT_NAME, "docs": docs.build_index()}
@@ -971,6 +1021,18 @@ def make_handler(
                         gate_reason=gate.get("reason", ""),
                     )
                     return self._json(202, {"id": ask_id})
+
+                if (len(parts) == 3 and parts[2] == "enabled"
+                        and parts[0] in ("triggers", "session-types")):
+                    if parts[0] == "triggers":
+                        if trigger_store is None:
+                            return self._json(503, {"error": "no trigger store wired"})
+                        return self._json(200, service.set_trigger_enabled(
+                            trigger_store, parts[1], payload.get("enabled")))
+                    if type_store is None:
+                        return self._json(503, {"error": "no session-type store wired"})
+                    return self._json(200, service.set_session_type_enabled(
+                        type_store, parts[1], payload.get("enabled")))
 
                 if (len(parts) == 3 and parts[2] == "rename"
                         and parts[0] in ("triggers", "session-types")):

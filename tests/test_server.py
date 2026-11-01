@@ -725,6 +725,54 @@ def test_the_rename_routes_answer_and_the_old_name_leaves_the_listing(base_url):
     assert [t["name"] for t in listed["triggers"]] == ["nightly"]
 
 
+def test_the_actions_manifest_declares_only_the_switches_and_none_are_tools(base_url):
+    """The node forwards a dashboard POST only to a path declared here; the
+    bridge never reads it. So what is declared must be exactly the switches,
+    and none of it may leak into /tools, where an agent would be offered it."""
+    _, doc = get(f"{base_url}/actions")
+    assert doc["unit"] == "pu"
+    assert sorted(a["path"] for a in doc["actions"]) == [
+        "/pause", "/session-types/{name}/enabled", "/triggers/{name}/enabled"]
+    assert all(a["method"] == "POST" for a in doc["actions"])
+    # Pausing is also an agent tool -- the kill switch -- and the standard
+    # allows a path in both lists. Switching on is not: it is the decision
+    # these exist for, so no agent is offered it.
+    _, tools = get(f"{base_url}/tools")
+    offered = {t["name"] for t in tools["tools"]} | {t["path"] for t in tools["tools"]}
+    assert not offered & {"set_session_type_enabled", "set_trigger_enabled",
+                          "/session-types/{name}/enabled", "/triggers/{name}/enabled"}
+
+
+def test_the_switch_changes_enabled_and_nothing_else(base_url):
+    post(f"{base_url}/session-types", {
+        "name": "digest", "purpose": "p", "prompt": "x", "grant": "read"})
+    status, on = post(f"{base_url}/session-types/digest/enabled", {"enabled": True})
+    assert status == 200 and on["enabled"] is True and on["prompt"] == "x"
+    status, off = post(f"{base_url}/session-types/digest/enabled", {"enabled": False})
+    assert status == 200 and off["enabled"] is False
+    assert {k: v for k, v in off.items() if k != "enabled"} == \
+        {k: v for k, v in on.items() if k != "enabled"}
+
+    post(f"{base_url}/triggers", {
+        "name": "posts", "source": {"kind": "schedule", "every_seconds": 60},
+        "emits": {"kind": "execution"}})
+    status, body = post(f"{base_url}/triggers/posts/enabled", {"enabled": True})
+    assert status == 200 and body["enabled"] is True
+    _, listed = get(f"{base_url}/triggers")
+    assert listed["triggers"][0]["enabled"] is True
+
+
+def test_the_switch_refuses_what_it_cannot_mean(base_url):
+    post(f"{base_url}/session-types", {
+        "name": "digest", "purpose": "p", "prompt": "x", "grant": "read"})
+    for url, payload in ((f"{base_url}/session-types/digest/enabled", {"enabled": "yes"}),
+                         (f"{base_url}/session-types/nope/enabled", {"enabled": True}),
+                         (f"{base_url}/triggers/nope/enabled", {"enabled": True})):
+        with pytest.raises(HTTPError) as excinfo:
+            post(url, payload)
+        assert excinfo.value.code == 400, url
+
+
 def test_resolving_a_finished_task_is_refused_and_keeps_the_first_answer(base_url):
     """Live 2026-09-27: a retried resolve appended a new answer to an
     already-completed task, then 502'd -- inviting the next retry. The

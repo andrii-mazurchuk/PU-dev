@@ -334,6 +334,37 @@ for why that is the one thing worth paying for it.
 A missing file answers `404`, which is a valid "no dashboard" rather
 than a broken unit.
 
+## `GET /actions`
+
+The writes a person may press on the dashboard (UNIT_STANDARDS.md, "`GET
+/actions`"). The node's proxy forwards a `POST` only to a path declared
+here and audits it; anything else gets `405` with `{"error": "pu declares
+no action at this path"}` before pu is contacted. The MCP bridge never
+reads this list, so none of it becomes an agent tool -- unadvertised and
+audited, **not** enforced as human-only: nothing authenticates a caller.
+
+```json
+{"unit": "pu", "actions": [
+  {"name": "set_session_type_enabled", "method": "POST", "path": "/session-types/{name}/enabled", ...},
+  {"name": "set_trigger_enabled",      "method": "POST", "path": "/triggers/{name}/enabled", ...},
+  {"name": "set_paused",               "method": "POST", "path": "/pause", ...}]}
+```
+
+Edits are deliberately absent until a person can be told from an agent.
+
+## `POST /session-types/{name}/enabled`, `POST /triggers/{name}/enabled` → `200`
+
+```json
+{"enabled": true}
+```
+→ the record as written.
+
+Switches one record on or off and changes nothing else: the current
+record is rewritten with only `enabled` flipped, through the same write
+path (and the same activation rules and owner notice) as a full write.
+A non-boolean `enabled` or an unknown name is a `400`; so is a type
+declared by a peer, which is switched by its own unit.
+
 ## `GET /gate`
 
 What the two gates would decide right now, without deciding it.
