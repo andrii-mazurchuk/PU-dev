@@ -22,7 +22,6 @@ function StateSwitch({ name, state, pending = false, disabledReason, error, onCh
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
         <Switch
-          data-gallery-target=""
           id={id}
           checked={on}
           disabled={!!disabledReason}
