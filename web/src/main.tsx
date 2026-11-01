@@ -4,12 +4,14 @@ import "./index.css"
 import { Gallery } from "./gallery/Gallery"
 import { pages } from "./pages"
 import { applyPreview } from "./lib/preview"
+import { useLive } from "./lib/live"
 
 applyPreview()
 
 // Hash routes so the built app works from a static folder: #/gallery, #/gallery/<component>[/<variant>[/<state>]]
 // (any element alone, by its address), #/<page-id>.
 function App() {
+  useLive() // one subscription: a poll that changed something re-renders; merged records keep their DOM
   const current = () => location.hash.replace(/^#\/?/, "").split("?")[0]
   const [route, setRoute] = useState(current)
   useEffect(() => {

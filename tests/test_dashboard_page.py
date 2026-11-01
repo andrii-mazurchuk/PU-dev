@@ -21,7 +21,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from pu import ask, sessions, server
+from pu import ask, server, sessions, triggers, typestore
 
 UNIT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = UNIT_ROOT / "prompts"
@@ -61,9 +61,20 @@ def test_no_absolute_urls_are_fetched(html):
 # -- the relative-path rule ----------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "the web/ app still reads its fixtures; it is not wired to pu's API yet"))
-def test_every_fetch_is_relative_and_has_no_leading_slash(html):
+# The bundle passes URLs through a helper, so the minified file holds no
+# fetch("...") literal to read. The rule is checked where the URLs are
+# written: every read the app makes goes through these two files.
+DATA_SOURCES = (WEB_SRC / "lib" / "live.ts", WEB_SRC / "lib" / "pu-data.ts")
+READ = re.compile(r"""(?:\bjson<.*?>|\bget|\bfetcher)\(\s*[`"]([^`"]*)""")
+
+
+@pytest.fixture(scope="module")
+def reads() -> list[str]:
+    return [m for path in DATA_SOURCES
+            for m in READ.findall(path.read_text(encoding="utf-8"))]
+
+
+def test_every_fetch_is_relative_and_has_no_leading_slash(reads):
     """The rule that makes one file work in both places.
 
     This unit serves the page at `/dashboard`, so a relative
@@ -77,24 +88,30 @@ def test_every_fetch_is_relative_and_has_no_leading_slash(html):
     error. That is the failure this test exists for: it does
     not look like a bug, it looks like bad data.
     """
-    calls = FETCH.findall(html)
-    assert calls, "no fetches found -- has the page stopped reading anything?"
-    for call in calls:
+    assert reads, "no reads found -- has the page stopped reading anything?"
+    for call in reads:
         assert not call.startswith("/"), call
         assert not call.startswith("http"), call
 
 
-def test_the_paths_it_fetches_are_ones_this_unit_serves(html):
+def test_the_paths_it_fetches_are_ones_this_unit_serves(reads):
     """A panel pointed at a path that 404s renders as empty, not
     as an error -- so nothing on screen says it is wrong."""
-    served = {"tasks", "gate", "stats", "spend", "projects", "sessions",
+    served = {"tasks", "stats", "spend", "projects", "sessions",
               "session-types", "triggers", "running", "attention", "ticks",
-              "concurrency", "pause", "mcp-servers", "queue", "frontier"}
-    for call in FETCH.findall(html):
+              "mcp-servers"}
+    for call in reads:
         root = call.split("/")[0].split("?")[0].strip()
-        if not root or root.startswith("$"):
-            continue
         assert root in served, f"{call} -> /{root} is not served by this unit"
+
+
+def test_the_bundle_writes_no_absolute_pu_path(html):
+    """The source check above, confirmed on the shipped file: no path of
+    this unit appears with a leading slash."""
+    for root in ("tasks", "stats", "spend", "projects", "sessions",
+                 "session-types", "triggers", "running", "attention"):
+        for quote in ('"', "'", "`"):
+            assert f"{quote}/{root}" not in html, f"{quote}/{root}"
 
 
 # -- degradation and theme ------------------------------------------------
@@ -188,6 +205,10 @@ def base(store, body_store, tmp_path):
         unit_root=UNIT_ROOT,
         session_store=sessions.SessionStore(tmp_path / "sessions"),
         ask_store=ask.AskStore(tmp_path / "asks"),
+        # Wired as main wires them: the page reads every one of these.
+        type_store=typestore.TypeStore(tmp_path),
+        trigger_store=triggers.TriggerStore(tmp_path),
+        state_dir=tmp_path,
     )
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -214,6 +235,8 @@ def test_dashboard_answers_html_which_is_how_the_tier_is_declared(base):
 def test_every_path_the_page_reads_answers_over_the_wire(base, html):
     """The end-to-end version of the path test above: not just
     that the roots are known, but that they actually respond."""
-    for path in ("tasks?status=pending", "gate", "stats", "spend?days=1", "projects"):
+    for path in ("tasks?project=holonic-node&status=pending", "projects", "attention",
+                 "session-types", "triggers", "sessions?limit=500", "stats", "running",
+                 "ticks?limit=50", "mcp-servers", "spend?by=day&from=2026-10-01", "spend?by=week"):
         with urlopen(f"{base}/{path}") as resp:
             assert resp.status == 200, path

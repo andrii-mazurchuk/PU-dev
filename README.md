@@ -144,9 +144,11 @@ the *node*, which answers with plausible JSON of the wrong shape rather
 than an error. With no unit behind it, the page shows its sample data
 and says so.
 
-**The app is not wired to pu's API yet.** It reads its fixtures, and
-`tests/test_dashboard_page.py` marks the fetch rule as an expected
-failure until it does.
+The app reads pu through `web/src/lib/live.ts`: open tasks of the scope
+in focus only (the archive loads on request), everything merged by id so
+unchanged records keep their DOM, a 10 s poll that backs off to 80 s, and
+`/stats` -- the one heavy read -- on its own 60 s cadence. Until the first
+answer it shows its sample data and says pu is not reachable.
 
 ### The layout is the hard part
 

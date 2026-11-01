@@ -37,6 +37,12 @@ jobs:
           bun-version: "1.3.14"
       - run: bun install --frozen-lockfile
         working-directory: web
+      - run: bun run typecheck
+        working-directory: web
+      # The app's own checks: the data layer's merge and scoped reads, and
+      # the charts. The page-tier rules on the shipped file are pytest's.
+      - run: bun test
+        working-directory: web
       - run: bun run build
         working-directory: web
       - name: the committed page matches a fresh build

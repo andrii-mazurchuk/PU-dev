@@ -16,9 +16,9 @@ import { LiveGraph } from "@/components/ui/live-graph"
 import { PieChart, BarChart, AreaChart, YieldBar } from "@/components/ui/charts"
 import { StatusIcon, type StatusKind } from "@/components/ui/status-icon"
 import { ViewTabs, StatusStrip, ScopeBar } from "@/components/ui/shell"
-import * as F from "@/fixtures/pu"
+import * as F from "@/lib/live"
 import { useViewState, setViewState, cycle, scopeQuery } from "@/lib/store"
-import { useScopeTasks, useRuns, allTasks } from "@/lib/pu-data"
+import { useScopeTasks, useRuns, allTasks, useBody, useRunPrompt } from "@/lib/live"
 
 // The final pages (stage 6) of the chosen layouts: Tasks A, Sessions A, the standard right panel, run log in
 // Analytics. Built on sample data; every button acts on it. ?state=… renders each state of the brief: empty and
@@ -30,9 +30,10 @@ const retry = () => { const [path, query = ""] = location.hash.split("?"); const
 /** Inside the node frame (or offline) pu can't take a write: every write shows why it is off. */
 const writeBlock = (state: ScreenState) => (window.self !== window.top || state === "permission" ? "writes are not open inside the node yet" : state === "offline" ? "pu is not reachable; nothing can be saved" : undefined)
 
+const since = () => (F.CONN.lastGood ? `${Math.max(1, Math.round((Date.now() - F.CONN.lastGood) / 60000))} min ago` : "a while ago")
 const NOTE: Partial<Record<ScreenState, string>> = {
-  error: "pu could not be read just now. Showing the last good data, from 07:12.",
-  stale: "Updated 3 min ago · pu has not answered the last two polls; retrying.",
+  get error() { return `pu could not be read just now. Showing the last good data, from ${since()}.` },
+  get stale() { return `Updated ${since()} · pu has not answered the last ${F.CONN.failures === 1 ? "poll" : `${F.CONN.failures} polls`}; retrying.` },
   partial: "Part of this view could not be read; the rest is current.",
   offline: "pu is not reachable · showing sample data.",
 }
@@ -42,7 +43,7 @@ function Stateful({ state, empty, children }: { state: ScreenState; empty?: stri
   if (state === "empty") return <StateBlock state="empty" message={empty ?? "Nothing here yet."} />
   const note = NOTE[state]
   if (!note) return <>{children}</>
-  return <><StateBlock state={state as BlockState} message={note} lastGood={state === "error" ? "10-31 07:12" : undefined} onRetry={retry} />{children}</>
+  return <><StateBlock state={state as BlockState} message={note} lastGood={state === "error" && F.CONN.lastGood ? new Date(F.CONN.lastGood).toLocaleTimeString() : undefined} onRetry={retry} />{children}</>
 }
 
 function Page({ id, title, view, children, status = true, before }: { id: string; title: ReactNode; view: string; children: ReactNode; status?: boolean; before?: ReactNode }) {
@@ -60,12 +61,12 @@ function Page({ id, title, view, children, status = true, before }: { id: string
 
 const Divider = ({ label }: { label: string }) => <div className="flex items-center gap-3 text-xs font-medium uppercase tracking-wider text-muted-foreground"><span>{label}</span><span className="h-px flex-1 bg-border" /></div>
 const typeStatus = (on: F.TypeOn): StatusKind => on === "on" ? "running" : on === "needs re-approval" ? "needs-you" : on === "never activated" ? "ready" : "blocked"
-const SESSION_COLUMNS = [
+const sessionColumns = () => [
   { title: "Triggers", nodes: F.TRIGGERS.map(t => ({ id: `t:${t.name}`, label: t.name, sub: t.health.split(" · ")[0], href: `#/trigger?name=${t.name}`, status: (t.health.startsWith("fetch failing") ? "expired" : typeStatus(t.on)) as StatusKind })) },
   { title: "Session types", nodes: F.TYPES.map(t => ({ id: `s:${t.name}`, label: t.name, sub: `${t.on} · ${t.model}`, href: `#/type?name=${t.name}`, status: typeStatus(t.on) })) },
-  { title: "Latest runs", nodes: F.TYPES.filter(t => t.lastRun).map(t => { const r = F.RUNS.find(x => x.type === t.name); return { id: `r:${t.name}`, label: t.last.split(" · ")[0], sub: t.last.split(" · ").slice(1).join(" · "), href: `#/run?id=${r?.id ?? "r1"}&from=sessions`, status: (t.last.startsWith("failed") ? "expired" : t.last.startsWith("partial") ? "needs-you" : "completed") as StatusKind } }) },
+  { title: "Latest runs", nodes: F.TYPES.filter(t => t.lastRun).map(t => { const r = F.RUNS.find(x => x.type === t.name); return { id: `r:${t.name}`, label: t.last.split(" · ")[0], sub: t.last.split(" · ").slice(1).join(" · "), href: `#/run?id=${r?.id ?? ""}&from=sessions`, status: (t.last.startsWith("failed") ? "expired" : t.last.startsWith("partial") ? "needs-you" : "completed") as StatusKind } }) },
 ]
-const SESSION_EDGES: [string, string][] = [...F.TRIGGERS.filter(t => t.type).map(t => [`t:${t.name}`, `s:${t.type}`] as [string, string]), ...F.TYPES.filter(t => t.lastRun).map(t => [`s:${t.name}`, `r:${t.name}`] as [string, string])]
+const sessionEdges = (): [string, string][] => [...F.TRIGGERS.filter(t => t.type).map(t => [`t:${t.name}`, `s:${t.type}`] as [string, string]), ...F.TYPES.filter(t => t.lastRun).map(t => [`s:${t.name}`, `r:${t.name}`] as [string, string])]
 const status = (t: F.Task): StatusKind => (t.state === "open" ? "ready" : t.state)
 const link = "text-foreground underline underline-offset-4"
 
@@ -96,7 +97,7 @@ function TasksBody({ selected, behind = false }: { selected?: string; behind?: b
   return (
     <Page id="tasks" title="Tasks" view="tasks">
       <div data-block="scope" className="flex flex-col gap-2">
-        <ScopeBar roots={F.ROOTS} subs={v.root === "holonic-node" ? F.SUBS : []} root={v.root} sub={v.sub} onRoot={r => setViewState({ root: r, sub: "all" })} onSub={s => setViewState({ sub: s })} />
+        <ScopeBar roots={F.ROOTS} subs={F.subsOf(v.root)} root={v.root} sub={v.sub} onRoot={r => setViewState({ root: r, sub: "all" })} onSub={s => setViewState({ sub: s })} />
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
           <Button variant={v.archive ? "default" : "ghost"} size="sm" aria-pressed={v.archive} onClick={() => setViewState({ archive: !v.archive })}>Archive</Button>
           <span>{v.archive ? "done and cancelled tasks of this scope shown (loaded on request)" : "open work only; the archive loads only when you ask"}</span>
@@ -129,9 +130,10 @@ const Tasks = () => <TasksBody />
 
 // ---------- the standard right panel over its parent view ----------
 function TaskPanel() {
-  const t = F.byId.get(q("id") ?? "c3") ?? F.byId.get("c3")!, state = useScreenState(), v = useViewState(), sq = scopeQuery(v)
+  const t = F.byId.get(q("id") ?? "c3") ?? F.byId.get("c3") ?? F.TASKS[0], state = useScreenState(), v = useViewState(), sq = scopeQuery(v), body = useBody(t?.id ?? "")
+  if (!t) return <TasksBody behind />
   const map = t.map ? F.byId.get(t.map) : undefined, blocks = F.TASKS.filter(x => x.deps.includes(t.id) && x.state !== "completed"), runs = F.RUNS.filter(r => r.taskId === t.id)
-  const uuid = `3f2a9c1e-${t.id.padStart(4, "0")}-4c1d-9a7e-1b2c3d4e5f60`
+  const uuid = F.CONN.mode === "live" ? t.id : `3f2a9c1e-${t.id.padStart(4, "0")}-4c1d-9a7e-1b2c3d4e5f60`
   return (
     <>
       <TasksBody selected={t.id} behind />
@@ -148,7 +150,7 @@ function TaskPanel() {
           <span className="text-xs text-muted-foreground">not available in pu yet{writeBlock(state) ? ` · ${writeBlock(state)}` : ""}</span>
         </div>
         <Panel data-block="blocking" title="Blocked by" framed={false}>
-          {t.deps.length ? t.deps.map(d => <a key={d} href={`#/task?id=${d}&${sq}`} className={`${link} text-sm`}>{F.byId.get(d)!.title}</a>) : <p className="m-0 text-sm text-muted-foreground">nothing</p>}
+          {t.deps.length ? t.deps.map(d => <a key={d} href={`#/task?id=${d}&${sq}`} className={`${link} text-sm`}>{F.byId.get(d)?.title ?? `${d.slice(0, 8)}… (outside this scope)`}</a>) : <p className="m-0 text-sm text-muted-foreground">nothing</p>}
           <h3 className="m-0 text-sm font-medium">Blocks</h3>
           {blocks.length ? blocks.map(x => <a key={x.id} href={`#/task?id=${x.id}&${sq}`} className={`${link} text-sm`}>{x.title}</a>) : <p className="m-0 text-sm text-muted-foreground">nothing</p>}
         </Panel>
@@ -158,7 +160,7 @@ function TaskPanel() {
         </Panel>
         <Panel data-block="body" title="Body" framed={false}>
           <Stateful state={state} empty="This task has no body.">
-            <pre className="m-0 whitespace-pre-wrap rounded-md bg-muted p-3 font-sans text-sm text-foreground">{F.BODY[t.id] ?? "No body."}</pre>
+            <pre className="m-0 whitespace-pre-wrap rounded-md bg-muted p-3 font-sans text-sm text-foreground">{body ?? "No body."}</pre>
           </Stateful>
         </Panel>
         </>}
@@ -168,7 +170,8 @@ function TaskPanel() {
 }
 
 function MapPanel() {
-  const m = F.byId.get(q("id") ?? "m4") ?? F.byId.get("m4")!, state = useScreenState(), v = useViewState(), sq = scopeQuery(v)
+  const m = F.byId.get(q("id") ?? "m4") ?? F.byId.get("m4") ?? F.MAPS[0], state = useScreenState(), v = useViewState(), sq = scopeQuery(v), body = useBody(m?.id ?? "")
+  if (!m) return <TasksBody behind />
   const all = F.ticketsOf(m.id, true), open = F.ticketsOf(m.id)
   return (
     <>
@@ -181,7 +184,7 @@ function MapPanel() {
             {open.map(t => <a key={t.id} href={`#/task?id=${t.id}&${sq}`} className="flex items-center gap-2 text-sm text-foreground underline-offset-4 hover:underline"><StatusIcon status={status(t)} />{t.title}</a>)}
           </Stateful>
         </Panel>
-        <Panel data-block="map-body" title="Body" framed={false}><pre className="m-0 whitespace-pre-wrap rounded-md bg-muted p-3 font-sans text-sm text-foreground">{F.BODY[m.id] ?? "No body."}</pre></Panel>
+        <Panel data-block="map-body" title="Body" framed={false}><pre className="m-0 whitespace-pre-wrap rounded-md bg-muted p-3 font-sans text-sm text-foreground">{body ?? "No body."}</pre></Panel>
         </>}
       </SidePanel>
     </>
@@ -212,7 +215,7 @@ function Attention() {
 }
 
 // ---------- Sessions (key screen, option A) ----------
-const FILTER_VALUES = { role: ["all", "system", "researcher"], grant: ["all", "read", "web", "repo"], model: ["all", "haiku", "sonnet"] }
+const filterValues = () => ({ role: ["all", ...new Set(F.TYPES.map(t => t.role))], grant: ["all", ...new Set(F.TYPES.map(t => t.grant))], model: ["all", ...new Set(F.TYPES.map(t => t.model))] })
 /** A switch on sample data: saving… briefly, then applied, or refused with pu's error (ai-news needs re-approval). */
 function Toggle({ name, initial, block }: { name: string; initial: F.TypeOn; block?: string }) {
   const v = useViewState(), s = v.switches[name], [error, setError] = useState<string>(), [offNote, setOffNote] = useState(false)
@@ -244,7 +247,7 @@ function PauseAll({ block }: { block?: string }) {
 // open it with target="_top": the page lives in the node frame).
 const NODE_SETTINGS_HREF = "#/sessions"
 const MaxConcurrent = () => (
-  <span className="flex items-center gap-2">1
+  <span className="flex items-center gap-2">{F.MAX_CONCURRENT}
     <a href={NODE_SETTINGS_HREF} aria-label="Where max concurrent is set: the holonic node's settings" title="Set in the holonic node's settings"
       className="flex size-5 items-center justify-center rounded-full border border-muted-foreground text-xs leading-none text-muted-foreground no-underline hover:border-foreground hover:text-foreground">?</a>
   </span>
@@ -256,25 +259,25 @@ function SessionsBody({ behind = false }: { behind?: boolean }) {
   return (
     <Page id="sessions" title="Sessions" view="sessions">
       <div className="flex flex-col gap-4 lg:flex-row">
-        <Panel data-block="live" title="Triggers → session types → runs" framed={false} className="flex-1" aside={<span className="text-xs text-muted-foreground">1 running</span>}>
-          <LiveGraph columns={SESSION_COLUMNS} edges={SESSION_EDGES} orderKey="pu.sessions.order" />
+        <Panel data-block="live" title="Triggers → session types → runs" framed={false} className="flex-1" aside={<span className="text-xs text-muted-foreground">{F.RUNNING.length} running</span>}>
+          <LiveGraph columns={sessionColumns()} edges={sessionEdges()} orderKey="pu.sessions.order" />
         </Panel>
         <div className="flex flex-col gap-4 lg:w-[320px] lg:shrink-0">
           <Panel data-block="controls" title="Controls">
             <PauseAll block={block} />
-            <KeyValue rows={[["Max concurrent", <MaxConcurrent key="m" />], ["Running now", <a key="r" href="#/run?id=r1&from=sessions" className="underline underline-offset-4">morning-brief · 2m 14s</a>]]} />
+            <KeyValue rows={[["Max concurrent", <MaxConcurrent key="m" />], ["Running now", F.RUNNING.length ? <span key="r" className="flex flex-col">{F.RUNNING.map(r => <a key={r.taskId} href={`#/task?id=${r.taskId}`} className="underline underline-offset-4">{r.type} · {r.elapsed}</a>)}</span> : "nothing"]]} />
             <p className="m-0 text-xs text-muted-foreground">Pause stops new starts; running sessions finish.</p>
           </Panel>
-          <Panel data-block="session-attention" title="Needs a look · 5">
+          <Panel data-block="session-attention" title={`Needs a look · ${F.NEEDS_A_LOOK.length}`}>
             <ul className="m-0 flex list-none flex-col gap-2 p-0 text-sm">
-              {([["needs-you", "ai-news", "needs re-approval", "#/type?name=ai-news"], ["expired", "arxiv-cs-ai", "fetch failing · backing off until 14:00", "#/trigger?name=arxiv-cs-ai"], ["blocked", "weekly-review", "wired to no type", "#/trigger?name=weekly-review"], ["ready", "job-watch", "never activated", "#/type?name=job-watch"], ["ready", "remoteok-jobs", "never activated", "#/trigger?name=remoteok-jobs"]] as [StatusKind, string, string, string][]).map(([st, n, why, href]) => (
+              {(F.NEEDS_A_LOOK as [StatusKind, string, string, string][]).map(([st, n, why, href]) => (
                 <li key={n} className="flex items-start gap-2"><StatusIcon status={st} /><span><a href={href} className={link}>{n}</a> <span className="text-muted-foreground">· {why}</span></span></li>))}
             </ul>
           </Panel>
         </div>
       </div>
       <Panel data-block="types" title={`Session types · ${types.length}`} aside={<Button variant="outline" size="sm" onClick={() => go("#/type?name=new")}>New session type</Button>}>
-        <div data-block="filters" className="flex flex-wrap items-center gap-2">{(["role", "grant", "model"] as const).map(k => <Button key={k} variant={v.typeFilter[k] === "all" ? "outline" : "default"} size="sm" onClick={() => setViewState(x => ({ typeFilter: { ...x.typeFilter, [k]: cycle(FILTER_VALUES[k], x.typeFilter[k]) } }))}>{k[0].toUpperCase() + k.slice(1)}: {v.typeFilter[k]}</Button>)}<span className="text-xs text-muted-foreground">{types.length} of {F.TYPES.length} shown · click a filter to cycle</span></div>
+        <div data-block="filters" className="flex flex-wrap items-center gap-2">{(["role", "grant", "model"] as const).map(k => <Button key={k} variant={v.typeFilter[k] === "all" ? "outline" : "default"} size="sm" onClick={() => setViewState(x => ({ typeFilter: { ...x.typeFilter, [k]: cycle(filterValues()[k], x.typeFilter[k]) } }))}>{k[0].toUpperCase() + k.slice(1)}: {v.typeFilter[k]}</Button>)}<span className="text-xs text-muted-foreground">{types.length} of {F.TYPES.length} shown · click a filter to cycle</span></div>
         <Stateful state={state} empty="No session types of your own yet. Built-ins appear once they have run.">
           <Table><TableHeader className={HEAD}><TableRow><TableHead>Type</TableHead><TableHead>Switch</TableHead><TableHead>Unit</TableHead><TableHead>Role · grant · model</TableHead><TableHead>Fed by</TableHead><TableHead>Last run</TableHead></TableRow></TableHeader>
             <TableBody>{types.map(t => (
@@ -283,7 +286,7 @@ function SessionsBody({ behind = false }: { behind?: boolean }) {
                 <TableCell><Toggle name={t.name} initial={t.on} block={block} /></TableCell>
                 <TableCell>{t.unit}</TableCell><TableCell>{t.role} · {t.grant} · {t.model}</TableCell>
                 <TableCell>{F.fedBy(t) ? <a href={`#/trigger?name=${F.fedBy(t)}`} className={link}>{F.fedBy(t)}</a> : "—"}</TableCell>
-                <TableCell>{t.lastRun ? <a href={`#/run?id=${F.RUNS.find(r => r.type === t.name)?.id ?? "r1"}&from=sessions`} className={link}>{t.last}</a> : t.last}</TableCell>
+                <TableCell>{t.lastRun ? <a href={`#/run?id=${F.RUNS.find(r => r.type === t.name)?.id ?? ""}&from=sessions`} className={link}>{t.last}</a> : t.last}</TableCell>
               </TableRow>))}
               {F.RETIRED.map(n => <TableRow key={n} className={ROW}><TableCell className={`${NAME} text-muted-foreground`}>{n}</TableCell><TableCell className="text-muted-foreground" colSpan={5}>retired · no switch</TableCell></TableRow>)}</TableBody></Table>
         </Stateful>
@@ -310,7 +313,8 @@ const SAVED = "Saved to the sample data. pu is not connected here; the save goes
 function TypePanel() {
   const name = q("name") ?? "morning-brief", isNew = name === "new", t = F.TYPES.find(x => x.name === name) ?? F.TYPES[0]
   const builtIn = !isNew && t.unit.includes("built-in"), state = useScreenState(), block = writeBlock(state) ?? (builtIn ? "pu can't edit built-in types yet" : undefined)
-  const [f, setF] = useState(() => isNew ? { name: "", purpose: "", prompt: "", model: "haiku", role: "system", grant: "none", mcp: [] as string[] } : { name: t.name, purpose: "Write the 07:00 brief from yesterday's runs and the queue", prompt: "You write Andrey's morning brief. Read pu's queue, yesterday's runs and their reports…", model: t.model, role: t.role, grant: t.grant, mcp: ["telegram-push"] })
+  const rec = F.TYPE_RECORD[t.name]
+  const [f, setF] = useState(() => isNew ? { name: "", purpose: "", prompt: "", model: "haiku", role: "system", grant: "none", mcp: [] as string[] } : rec ? { name: t.name, purpose: rec.purpose, prompt: rec.prompt, model: t.model, role: t.role, grant: t.grant, mcp: rec.mcp } : { name: t.name, purpose: "Write the 07:00 brief from yesterday's runs and the queue", prompt: "You write Andrey's morning brief. Read pu's queue, yesterday's runs and their reports…", model: t.model, role: t.role, grant: t.grant, mcp: ["telegram-push"] })
   const [errors, setErrors] = useState<Record<string, string>>({}), [said, setSaid] = useState(""), [confirm, setConfirm] = useState<{ body: string; apply: () => void } | null>(null)
   const widen = (body: string, apply: () => void) => setConfirm({ body, apply })
   const save = () => {
@@ -345,7 +349,7 @@ function TypePanel() {
           <Field id="t-mcp" label="MCP servers">
             <span id="t-mcp" className="flex flex-wrap items-center gap-2 text-sm">{f.mcp.join(", ") || "none"}{REGISTRY.filter(s => !f.mcp.includes(s)).map(s => <Button key={s} variant="outline" size="sm" disabled={!!block} onClick={() => widen(`Add MCP server "${s}"? The session can then call its tools.`, () => setF(x => ({ ...x, mcp: [...x.mcp, s] })))}>Add {s}</Button>)}</span>
           </Field>
-          <KeyValue rows={[["Plugins", "none"], ["Claims", isNew ? "none yet" : "task · tags brief"], ["Also reaches", "every peer tool via mcp-bridge (every grant does today)"]]} />
+          <KeyValue rows={[["Plugins", "none"], ["Claims", isNew ? "none yet" : rec ? rec.claims : "task · tags brief"], ["Also reaches", "every peer tool via mcp-bridge (every grant does today)"]]} />
         </Panel>
         <Panel data-block="dry-run" title="Dry run"><Answer label="Run dry run" disabled={!!block || (isNew && !f.name)} answer={`Would launch ${f.name || "this type"} on ${f.model} with grant ${f.grant}; allowed: ${f.mcp.map(s => `mcp__${s}__*`).concat("mcp__mcp-bridge__*").join(", ")}; nothing spent (sample data).`} /></Panel>
         {!isNew && <Panel data-block="type-runs" title={`Recent runs · 7 days: ${t.runs} · ${F.usd(t.cost)}`} framed={false}>{F.RUNS.filter(r => r.type === t.name).map(r => <a key={r.id} href={`#/run?id=${r.id}&from=sessions`} className={`${link} text-sm`}>{r.at} · {r.outcome} · {r.cost}</a>)}</Panel>}
@@ -409,7 +413,8 @@ function Answer({ label, answer, disabled }: { label: string; answer: string; di
 // ---------- Run ----------
 const FROM: Record<string, [string, string]> = { attention: ["Needs attention", "#/attention"], task: ["Tasks", "#/tasks"], sessions: ["Sessions", "#/sessions"], analytics: ["Analytics", "#/analytics"], glance: ["pu", "#/glance"] }
 function Run() {
-  const state = useScreenState(), runs = useRuns(), r = runs.find(x => x.id === (q("id") ?? "r3")) ?? runs.find(x => x.id === "r3")!
+  const state = useScreenState(), runs = useRuns(), r = runs.find(x => x.id === (q("id") ?? "r3")) ?? runs.find(x => x.id === "r3") ?? runs[0], prompt = useRunPrompt(r?.id ?? "")
+  if (!r) return <Page id="run" title="Run" view="analytics" status={false}><StateBlock state="empty" message="No runs recorded yet." /></Page>
   const d = state === "partial" ? F.RUN_DETAIL.r7 : F.RUN_DETAIL[r.id!] ?? { attempt: "1 of 1", detail: `${r.outcome}: no detail recorded` }, [fromLabel, fromHref] = FROM[q("from") ?? "attention"] ?? FROM.attention
   const tok = d.tokens
   return (
@@ -426,10 +431,10 @@ function Run() {
               </> : <><p className="m-0 text-sm text-muted-foreground">No structured report (this run is from before the report contract).</p><pre className="m-0 whitespace-pre-wrap rounded-md bg-muted p-3 font-sans text-sm text-foreground">{d.detail}</pre></>}
             </Stateful>
           </Panel>
-          <details data-block="behind" className="text-sm text-foreground"><summary>Tool calls · 2 · refused permissions · 0 · models · haiku</summary><p>WebFetch rss.arxiv.org → 503 (twice)</p></details>
-          <details data-block="prompt" className="text-sm text-foreground"><summary>Prompt · 4,212 chars</summary><pre className="whitespace-pre-wrap font-sans">You read the arXiv cs.AI feed…</pre></details>
+          <details data-block="behind" className="text-sm text-foreground"><summary>Tool calls · {d.tools?.length ?? 2} · refused permissions · {d.denials ?? 0} · models · {d.models?.join(", ") || "haiku"}</summary><p className="whitespace-pre-wrap">{d.tools ? d.tools.join(" · ") || "none" : "WebFetch rss.arxiv.org → 503 (twice)"}</p></details>
+          <details data-block="prompt" className="text-sm text-foreground"><summary>Prompt · {d.run ? (prompt === undefined ? "loading…" : `${prompt.length.toLocaleString()} chars`) : "4,212 chars"}</summary><pre className="whitespace-pre-wrap font-sans">{d.run ? prompt ?? "" : "You read the arXiv cs.AI feed…"}</pre></details>
         </div>
-        <Panel data-block="cost" title="Cost" className="lg:w-[300px] lg:self-start"><KeyValue rows={[["Cost", r.cost], ["Duration", r.duration], ["Turns", "3"], ["Queued", "12 s"], ...(tok ? ["input", "output", "cache creation", "cache read", "thinking"].map((k, i) => [k, tok[i].toLocaleString()] as [string, string]) : [["tokens", "not recorded"] as [string, string]])]} /></Panel>
+        <Panel data-block="cost" title="Cost" className="lg:w-[300px] lg:self-start"><KeyValue rows={[["Cost", r.cost], ["Duration", r.duration], ["Turns", String(d.turns ?? 3)], ["Queued", d.queued == null ? (d.run ? "—" : "12 s") : `${Math.round(d.queued)} s`], ...(tok ? ["input", "output", "cache creation", "cache read", "thinking"].map((k, i) => [k, tok[i].toLocaleString()] as [string, string]) : [["tokens", "not recorded"] as [string, string]])]} /></Panel>
       </div>
     </Page>
   )
@@ -456,20 +461,20 @@ function Analytics() {
   const yieldRows = [...F.TRIGGERS, ...F.EXTRA_YIELD]
   const breakdown: [string, number, number, number, number, number, string][] = by === "type" ? F.TYPES.filter(t => t.runs).map(t => [t.name, t.runs, t.cost, t.costs[1], t.costs[2], t.costs[3], F.PER_SUCCESS[t.name] ?? "—"]) : by === "role" ? F.BY_ROLE : F.BY_TRIGGER
   const spend = F.SPEND[v.window] ?? F.DAYS, spendTotal = spend.reduce((n, [, x]) => n + x, 0)
-  const maxTotal = Math.max(...breakdown.map(b => b[2])), maxCost = Math.max(...shown.map(r => money(r.cost)))
+  const maxTotal = Math.max(0, ...breakdown.map(b => b[2])), maxCost = Math.max(0, ...shown.map(r => money(r.cost)))
   return (
     <Page id="analytics" title="Analytics" view="analytics">
-      <div data-block="window" className="flex flex-wrap items-center gap-2">{["Today", "7 days", "30 days", "All"].map(w => <Button key={w} variant={w === v.window ? "default" : "ghost"} size="sm" aria-pressed={w === v.window} onClick={() => setViewState({ window: w })}>{w}</Button>)}<span className="text-xs text-muted-foreground">sample data: spend follows the window; the other figures show 7 days</span></div>
+      <div data-block="window" className="flex flex-wrap items-center gap-2">{["Today", "7 days", "30 days", "All"].map(w => <Button key={w} variant={w === v.window ? "default" : "ghost"} size="sm" aria-pressed={w === v.window} onClick={() => setViewState({ window: w })}>{w}</Button>)}<span className="text-xs text-muted-foreground">{F.CONN.mode === "live" ? "spend follows the window; the other figures show 7 days" : "sample data: spend follows the window; the other figures show 7 days"}</span></div>
       <Divider label="Overview" />
       <Stateful state={state} empty="Nothing has run yet: spend is $0.00 for every day of this window.">
         <div className="flex flex-col gap-4 lg:flex-row">
-          <Panel data-block="outcomes" title="Outcomes · 7 days" className="lg:w-[440px]"><PieChart slices={F.OUTCOMES} total={F.WEEK_RUNS} /><p className="m-0 text-xs text-muted-foreground">failed 2 · both ai-news, handed to you</p></Panel>
+          <Panel data-block="outcomes" title="Outcomes · 7 days" className="lg:w-[440px]"><PieChart slices={F.OUTCOMES} total={F.WEEK_RUNS} /><p className="m-0 text-xs text-muted-foreground">{F.OUTCOME_NOTE}</p></Panel>
           <Panel data-block="spend" title={`Spend · ${v.window} · ${F.usd(spendTotal)}`} className="flex-1"><AreaChart label={`Spend per ${v.window === "Today" ? "2 hours" : v.window === "All" ? "week" : "day"}`} points={spend} format={F.usd} /></Panel>
         </div>
       </Stateful>
       <div className="flex flex-col gap-4 lg:flex-row">
-        <Panel data-block="performance" title="Performance · 7 days" className="flex-1"><BarChart label="Run duration" bars={F.DURATIONS} max={6} format={v => `${v}`} /><p className="m-0 text-sm">Duration p50 1m 10s · p95 3m 02s · turns p50 4 · queue wait p95 40 s · 2.4 runs/day</p></Panel>
-        <Panel data-block="trigger-yield" title={`Trigger yield · 7 days · ${yieldRows.length} triggers`} className="lg:w-[440px]"><div className="max-h-[240px] overflow-y-auto">{yieldRows.map(t => <YieldBar key={t.name} name={t.name} href={`#/trigger?name=${t.name}`} fires={t.fires} expired={t.expired} max={Math.max(...yieldRows.map(r => r.fires))} />)}</div></Panel>
+        <Panel data-block="performance" title="Performance · 7 days" className="flex-1"><BarChart label="Run duration" bars={F.DURATIONS} max={6} format={v => `${v}`} /><p className="m-0 text-sm">{F.PERFORMANCE}</p></Panel>
+        <Panel data-block="trigger-yield" title={`Trigger yield · 7 days · ${yieldRows.length} triggers`} className="lg:w-[440px]"><div className="max-h-[240px] overflow-y-auto">{yieldRows.map(t => <YieldBar key={t.name} name={t.name} href={`#/trigger?name=${t.name}`} fires={t.fires} expired={t.expired} max={Math.max(1, ...yieldRows.map(r => r.fires))} />)}</div></Panel>
       </div>
       <Divider label="Breakdown" />
       <Panel data-block="breakdown" title={`Cost by session ${by} · 7 days`} aside={<span role="group" aria-label="Break down by" className="flex gap-1">{(["type", "role", "trigger"] as const).map(b => <Button key={b} size="sm" variant={by === b ? "default" : "outline"} aria-pressed={by === b} onClick={() => setBy(b)}>By {b}</Button>)}</span>}>
@@ -504,20 +509,21 @@ function Analytics() {
 
 // ---------- Health (pending a grilling) ----------
 function Health() {
-  const state = useScreenState()
+  const state = useScreenState(), H = F.HEALTH
   return (
     <Page id="health" title="Unit health" view="health">
       <div className="flex flex-col gap-4">
-        <Panel data-block="gate" title={`Gate · ${state === "error" ? "unknown" : "clear"}`}><Stateful state={state} empty="pu has not ticked yet; last known tick 06:58."><p className="m-0 text-sm">Nothing is holding work back. Paused: no. Blocked 0 s today.</p><a href="#/sessions" className={`${link} text-sm`}>Pause and concurrency live in Sessions</a></Stateful></Panel>
+        <Panel data-block="gate" title={`Gate · ${state === "error" ? "unknown" : H.gate}`}><Stateful state={state} empty="pu has not ticked yet."><p className="m-0 text-sm">{H.reason} Paused: {H.paused ? "yes" : "no"}. Blocked {Math.round(H.blockedToday)} s today.</p><a href="#/sessions" className={`${link} text-sm`}>Pause and concurrency live in Sessions</a></Stateful></Panel>
         <Panel data-block="usage" title="Account usage">
-          {[["5-hour", 0.41, 0.7, "12:40"], ["7-day", 0.12, 0.8, "Mon 08:00"]].map(([n, u, c, r]) => (
-            <div key={n as string} className="flex flex-col gap-1 text-sm"><span>{n} · {u} of ceiling {(c as number).toFixed(2)} · resets {r}</span><span className="h-2.5 rounded-sm bg-muted"><span className="block h-full rounded-sm bg-muted-foreground" style={{ width: `${((u as number) / (c as number)) * 100}%` }} /></span></div>))}
-          <p className="m-0 text-xs text-muted-foreground">15% runway held back on cost and usage</p>
+          {H.windows.length ? H.windows.map(([n, u, c]) => (
+            <div key={n} className="flex flex-col gap-1 text-sm"><span>{n} · {u.toFixed(2)} of ceiling {c.toFixed(2)}</span><span className="h-2.5 rounded-sm bg-muted"><span className="block h-full rounded-sm bg-muted-foreground" style={{ width: `${Math.min(100, (u / (c || 1)) * 100)}%` }} /></span></div>))
+            : <p className="m-0 text-sm text-muted-foreground">No reading yet: the figures come from a session that has run.</p>}
+          <p className="m-0 text-xs text-muted-foreground">{Math.round(H.runway * 100)}% runway held back on cost and usage</p>
         </Panel>
       </div>
       <div className="flex flex-col gap-4">
-        <Panel data-block="liveness" title="Liveness"><p className="m-0 text-sm">2,880 ticks/day · last silence: none in 7 days</p><KeyValue rows={[["07:10", "nothing runnable ×38"], ["07:00", "launched morning-brief"], ["06:10", "launched hn-watch"]]} /></Panel>
-        <Panel data-block="registry" title="Registry"><KeyValue rows={[["MCP servers", "telegram-push, github"], ["Agent roles", "system, researcher, cu"]]} /></Panel>
+        <Panel data-block="liveness" title="Liveness"><p className="m-0 text-sm">{H.ticksPerDay} ticks/day · silences: {H.silences}</p><KeyValue rows={H.ticks} /></Panel>
+        <Panel data-block="registry" title="Registry"><KeyValue rows={[["MCP servers", H.mcp]]} /></Panel>
       </div>
     </Page>
   )
@@ -529,10 +535,10 @@ function Glance() {
   return (
     <main data-screen="glance" className="mx-auto flex w-full max-w-[520px] flex-col gap-4 p-4">
       <h1 data-block="title" className="m-0 text-xl font-semibold text-foreground">pu</h1>
-      <Panel data-block="system" title="System"><KeyValue rows={[["Need you", <a key="n" href="#/attention" className="font-semibold underline">{F.STATUS.needYou}</a>], ["Gate", state === "error" ? "gate unknown" : F.STATUS.gate], ["Running", <a key="r" href="#/run?id=r1&from=glance" className="underline">1 · morning-brief</a>], ["Paused", "no"]]} /><p className="m-0 text-xs text-muted-foreground">updated {F.STATUS.updated}</p></Panel>
+      <Panel data-block="system" title="System"><KeyValue rows={[["Need you", <a key="n" href="#/attention" className="font-semibold underline">{F.STATUS.needYou}</a>], ["Gate", state === "error" ? "gate unknown" : F.STATUS.gate], ["Running", F.RUNNING.length ? <a key="r" href={`#/task?id=${F.RUNNING[0].taskId}`} className="underline">{F.RUNNING.length} · {F.RUNNING.map(r => r.type).join(", ")}</a> : "0"], ["Paused", F.STATUS.paused ? "yes" : "no"]]} /><p className="m-0 text-xs text-muted-foreground">updated {F.STATUS.updated}</p></Panel>
       <Panel data-block="sessions" title={`Sessions · ${F.TYPES.length}`} framed={false}>
         <Stateful state={state} empty="No session types yet.">
-          <ul className="m-0 flex list-none flex-col p-0">{F.TYPES.map(t => <li key={t.name} className="border-b border-border py-2 text-sm"><b>{t.name}</b> · {t.on}<br />{t.lastRun ? <a href={`#/run?id=${F.RUNS.find(r => r.type === t.name)?.id ?? "r1"}&from=glance`} className={link}>{t.last}</a> : <span className="text-muted-foreground">{t.last}</span>}</li>)}</ul>
+          <ul className="m-0 flex list-none flex-col p-0">{F.TYPES.map(t => <li key={t.name} className="border-b border-border py-2 text-sm"><b>{t.name}</b> · {t.on}<br />{t.lastRun ? <a href={`#/run?id=${F.RUNS.find(r => r.type === t.name)?.id ?? ""}&from=glance`} className={link}>{t.last}</a> : <span className="text-muted-foreground">{t.last}</span>}</li>)}</ul>
         </Stateful>
       </Panel>
       <nav data-block="panels" aria-label="Panels" className="flex gap-2 border-t border-border bg-background py-2">{[["Attention", "attention"], ["Analytics", "analytics"], ["Health", "health"]].map(([l, h]) => <a key={h} href={`#/${h}`} className="rounded-md border border-border px-3 py-2 text-sm text-foreground no-underline">{l}</a>)}</nav>

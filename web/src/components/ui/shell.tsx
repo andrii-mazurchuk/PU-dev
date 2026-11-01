@@ -35,7 +35,7 @@ function StatusStrip({ status, state = "default" }: { status: Status; state?: "d
       <a href="#/run" className={cn(item, "underline-offset-4 hover:underline")}>Running <b className="tabular-nums">{status.running}</b></a>
       <span className={item}>Paused <b>{status.paused ? "yes" : "no"}</b></span>
       <span className={item}>Today <b className="tabular-nums">${status.today.toFixed(2)}</b></span>
-      <span className="text-xs text-muted-foreground">{state === "stale" ? "updated 3 min ago · retrying" : state === "error" ? "status could not be read" : `updated ${status.updated}`}</span>
+      <span className="text-xs text-muted-foreground">{state === "stale" ? `updated ${status.updated} · retrying` : state === "error" ? "status could not be read" : `updated ${status.updated}`}</span>
     </section>
   )
 }

@@ -12,8 +12,8 @@ test("a refresh keeps unchanged records as the same objects and adds new ones", 
 
 test("only the scope in focus is requested, relative and with one status", async () => {
   const urls: string[] = []
-  await fetchScope(async u => { urls.push(u); return new Response("[]") }, "holonic-node.pu")
-  await fetchScope(async u => { urls.push(u); return new Response("[]") }, "holonic-node", "completed")
+  await fetchScope(async u => { urls.push(u); return new Response(JSON.stringify({ tasks: [] })) }, "holonic-node.pu")
+  await fetchScope(async u => { urls.push(u); return new Response(JSON.stringify({ tasks: [] })) }, "holonic-node", "completed")
   expect(urls).toEqual(["tasks?project=holonic-node.pu&status=pending", "tasks?project=holonic-node&status=completed"])
   expect(urls.every(u => !u.startsWith("/"))).toBe(true)
 })
