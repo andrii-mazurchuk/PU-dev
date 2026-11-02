@@ -130,3 +130,24 @@ export const OUTCOMES: [string, number][] = [["done", 9], ["nothing-to-do", 5], 
 export const DURATIONS: [string, number][] = [["<30s", 3], ["1m", 5], ["2m", 4], ["3m", 2], ["4m", 1], ["5m", 1], ["6m+", 1]]
 export const usd = (n: number) => `$${n.toFixed(2)}`
 export const FIXTURE_NOTE = "Run figures are a fixture: what pu shows once the 5 recurring sessions run (today all 9 recorded runs predate the report)."
+
+// The records as pu holds them (GET session-types / triggers), which the edit forms start from. Shapes match pu's
+// API (pu web/src/lib/live.ts ApiType / ApiTrigger), so the forms port with only their save and dry-run calls swapped.
+export type ApiType = { name: string; purpose?: string; prompt?: string; mcp_servers?: string[]; agent_role?: string; grant: string; model?: string; claims?: { kind?: string; tags?: string[] }; plugins?: string[] }
+export type ApiTrigger = { name: string; purpose?: string; source: { kind: string; url?: string; every_seconds?: number; cron?: string; tz?: string; items_path?: string; id_path?: string }; emits?: { kind?: string; tags?: string[]; priority?: string; title?: string; afk?: boolean; stale_after_seconds?: number }; predicate?: [string, string, unknown][] }
+const CLAIMS: Record<string, [string, string[]]> = { "morning-brief": ["task", ["brief"]], "hn-watch": ["research", ["hn"]], "job-watch": ["research", ["jobs"]], "pu-self-review": ["task", ["review"]], "ai-news": ["research", ["news"]], "mu-spec.verify-layer": ["execution", ["verify"]], execution: ["execution", []], research: ["research", []], intake: ["task", ["intake"]] }
+export const TYPE_RECORDS: Record<string, ApiType> = Object.fromEntries(TYPES.map(t => [t.name, {
+  name: t.name, grant: t.grant, model: t.model, agent_role: t.role, mcp_servers: t.name === "morning-brief" ? ["telegram-push"] : [], plugins: [],
+  purpose: t.name === "morning-brief" ? "Write the 07:00 brief from yesterday's runs and the queue" : `Handle ${t.name} tasks`,
+  prompt: t.name === "morning-brief" ? "You write Andrey's morning brief. Read pu's queue, yesterday's runs and their reports…" : `You handle ${t.name} tasks.`,
+  claims: { kind: CLAIMS[t.name]?.[0], tags: CLAIMS[t.name]?.[1] ?? [] },
+}]))
+export const TRIGGER_RECORDS: Record<string, ApiTrigger> = {
+  "morning-0700": { name: "morning-0700", source: { kind: "schedule", cron: "0 7 * * *", tz: "Europe/Warsaw" }, emits: { kind: "task", tags: ["brief"], priority: "medium", title: "Morning brief {date}", afk: true } },
+  "hn-front-page": { name: "hn-front-page", source: { kind: "http-json", url: "https://hn.algolia.com/api/v1/search?tags=front_page", every_seconds: 86400, items_path: "hits", id_path: "objectID" }, predicate: [["count_since_fire", ">=", 1]], emits: { kind: "research", tags: ["hn"], priority: "medium", title: "HN: {count} new items", afk: true } },
+  "arxiv-cs-ai": { name: "arxiv-cs-ai", source: { kind: "rss", url: "https://rss.arxiv.org/rss/cs.AI", every_seconds: 86400 }, predicate: [["title", "matches", "(agent|LLM|model)"], ["count_since_fire", ">=", 1]], emits: { kind: "research", tags: ["news"], priority: "high", title: "arXiv cs.AI digest: {count} new", afk: true } },
+  "remoteok-jobs": { name: "remoteok-jobs", source: { kind: "http-json", url: "https://remoteok.com/api", every_seconds: 86400 }, predicate: [["item.tags", "contains", "python"]], emits: { kind: "research", tags: ["jobs"], priority: "low", title: "Jobs: {count} new", afk: false } },
+  "weekly-review": { name: "weekly-review", source: { kind: "schedule", cron: "0 9 * * mon", tz: "Europe/Warsaw" }, emits: { kind: "task", tags: ["weekly"], priority: "medium", title: "Weekly review", afk: false } },
+}
+export const ROLES = ["system", "researcher", "cu"]
+export const MCP_REGISTRY = ["telegram-push", "github"]

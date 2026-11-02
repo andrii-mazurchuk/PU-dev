@@ -11,6 +11,7 @@ import { StateBlock, type BlockState } from "@/components/ui/state-block"
 import { StateSwitch } from "@/components/ui/state-switch"
 import { SidePanel } from "@/components/ui/side-panel"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { TypeForm, TriggerForm, type Wrap } from "./forms"
 import { TaskGraph, type GraphMap } from "@/components/ui/task-graph"
 import { LiveGraph } from "@/components/ui/live-graph"
 import { PieChart, BarChart, AreaChart, YieldBar } from "@/components/ui/charts"
@@ -312,156 +313,56 @@ function SessionsBody({ behind = false }: { behind?: boolean }) {
 }
 const Sessions = () => <SessionsBody />
 
-/** A labelled field with its message (aria-describedby; aria-invalid when the message is an error). */
-function Field({ id, label, error, hint, children }: { id: string; label: string; error?: string; hint?: string; children: ReactNode }) {
-  return <div className="flex flex-col gap-1"><Label htmlFor={id} className="text-sm text-foreground">{label}</Label>{children}{(error || hint) && <span id={`${id}-msg`} role={error ? "alert" : undefined} className="text-xs text-muted-foreground">{error ?? hint}</span>}</div>
-}
-const GRANTS = ["none", "read", "web", "repo"]
 /** Edits go through pu's owner door (GET /actions), so they work inside the node frame: only sample data blocks them. */
 const editBlock = (state: ScreenState) => switchBlock(state)
 const refused = (e: unknown) => `pu refused: ${(e as Error).message}`
 /** The --allowedTools value of a dry run's argv: what the session may actually call. */
 const allowedOf = (argv: string[] = []) => { const i = argv.indexOf("--allowedTools"); return i >= 0 ? argv[i + 1] : "nothing" }
+const claimList = () => Object.values(F.TYPE_RECORDS).map(t => ({ type: t.name, kind: t.claims?.kind, tags: t.claims?.tags }))
+/** A save or dry run answers in one sentence beside its button: pu's own words when it refuses. */
+const said = (p: Promise<string>) => p.catch(refused)
 
-/** A panel opened before pu's first answer starts on sample data; when pu's record arrives the form is rebuilt from
- *  it once, so it never edits a sample. */
 function TypePanel() {
-  const name = q("name") ?? "morning-brief"
-  return <TypeForm key={`${name}:${F.TYPE_RECORD[name] ? "pu" : "sample"}`} />
-}
-
-function TypeForm() {
   const name = q("name") ?? "morning-brief", isNew = name === "new", t = F.TYPES.find(x => x.name === name) ?? F.TYPES[0]
   const builtIn = !isNew && t.unit.includes("built-in"), state = useScreenState(), block = editBlock(state) ?? (builtIn ? "pu can't edit built-in types yet" : undefined)
-  const rec = F.TYPE_RECORD[t.name]
-  const [f, setF] = useState(() => isNew ? { name: "", purpose: "", prompt: "", model: "haiku", role: "system", grant: "none", mcp: [] as string[] } : rec ? { name: t.name, purpose: rec.purpose, prompt: rec.prompt, model: t.model, role: t.role, grant: t.grant, mcp: rec.mcp } : { name: t.name, purpose: "Write the 07:00 brief from yesterday's runs and the queue", prompt: "You write Andrey's morning brief. Read pu's queue, yesterday's runs and their reports…", model: t.model, role: t.role, grant: t.grant, mcp: ["telegram-push"] })
-  const [errors, setErrors] = useState<Record<string, string>>({}), [said, setSaid] = useState(""), [confirm, setConfirm] = useState<{ body: string; apply: () => void } | null>(null)
-  const widen = (body: string, apply: () => void) => setConfirm({ body, apply })
-  const fields = () => ({ purpose: f.purpose, prompt: f.prompt, model: f.model === "default" ? undefined : f.model, agent_role: f.role, grant: f.grant, mcp_servers: f.mcp })
-  const save = async () => {
-    const e: Record<string, string> = {}
-    if (isNew && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(f.name)) e.name = "Use lowercase letters, digits, . _ - (up to 64), starting with a letter or digit."
-    if (!f.purpose.trim()) e.purpose = "Say in one line what this type is for."
-    if (!f.prompt.trim()) e.prompt = "A type needs its instructions."
-    setErrors(e); setSaid("")
-    if (Object.keys(e).length) return
-    setSaid("saving…")
-    try { await F.editType(f.name, fields()); setSaid(isNew ? "Saved to pu, switched off: switch it on when it is ready." : "Saved to pu.") } catch (err) { setSaid(refused(err)) }
-  }
-  const dryRun = async () => {
-    const r = await F.dryRunType({ name: f.name, ...fields() })
-    return `Would run on ${r.model ?? "the CLI default"} as ${r.agent_role}, grant ${r.grant}, in ${r.cwd}; allowed: ${allowedOf(r.argv)}. Nothing written, nothing launched.`
-  }
+  const record: F.ApiType = isNew ? { name: "", grant: "none", model: "haiku", agent_role: "system", purpose: "", prompt: "", mcp_servers: [], claims: {}, plugins: [] }
+    : F.TYPE_RECORDS[t.name] ?? { name: t.name, grant: t.grant, model: t.model, agent_role: t.role, claims: {}, mcp_servers: [], plugins: [] }
   const back = "#/sessions"
+  const Wrap: Wrap = ({ empty, children }) => <Stateful state={state} empty={empty}>{children}</Stateful>
   return (
     <>
       <SessionsBody behind />
       <SidePanel open onOpenChange={o => !o && go(back)} backLabel="Back to sessions" backHref={back} title={isNew ? "New session type" : t.name} description={isNew ? "pu writes origin and unit itself" : `${t.unit}${t.unit === "pu" ? " (no parent)" : ""} · ${t.role} · ${t.model}`}>
         <div data-block="panel-title">{isNew ? <span className="text-sm text-muted-foreground">off until you switch it on after saving</span> : <Toggle kind="type" name={t.name} initial={t.on} block={switchBlock(state)} />}</div>
-        <Panel data-block="definition" title="Definition">
-          <Stateful state={state} empty="Fill the name, purpose, prompt and grant; the dry run needs them.">
-            <Field id="t-name" label="Name" error={errors.name} hint={isNew ? "fixed once saved" : "fixed"}><Input id="t-name" value={f.name} disabled={!isNew || !!block} aria-invalid={!!errors.name || undefined} aria-describedby="t-name-msg" onChange={e => setF({ ...f, name: e.target.value })} /></Field>
-            <Field id="t-unit" label="Unit" hint="not available in pu yet: reset to the source's definition"><span className="flex items-center gap-2 text-sm">{isNew ? "pu" : t.unit}<Button id="t-unit" variant="outline" size="sm" disabled>Reset to source</Button></span></Field>
-            <Field id="t-purpose" label="Purpose" error={errors.purpose}><Input id="t-purpose" value={f.purpose} disabled={!!block} aria-invalid={!!errors.purpose || undefined} aria-describedby="t-purpose-msg" onChange={e => setF({ ...f, purpose: e.target.value })} /></Field>
-            <Field id="t-model" label="Model"><Input id="t-model" value={f.model} disabled={!!block} onChange={e => setF({ ...f, model: e.target.value })} /></Field>
-            <Field id="t-prompt" label={`Prompt · ${f.prompt.length.toLocaleString()} chars`} error={errors.prompt}><Textarea id="t-prompt" rows={5} value={f.prompt} disabled={!!block} aria-invalid={!!errors.prompt || undefined} aria-describedby="t-prompt-msg" onChange={e => setF({ ...f, prompt: e.target.value })} /></Field>
-          </Stateful>
-        </Panel>
-        <Panel data-block="access" title="Effective access">
-          <Field id="t-grant" label="Grant" hint="widening asks first">
-            <div id="t-grant" role="group" aria-label="Grant" className="flex gap-1">{GRANTS.map(g => <Button key={g} size="sm" variant={f.grant === g ? "default" : "outline"} aria-pressed={f.grant === g} disabled={!!block} onClick={() => GRANTS.indexOf(g) > GRANTS.indexOf(f.grant) ? widen(`Change grant from ${f.grant} to ${g}? The session can then reach more.`, () => setF(x => ({ ...x, grant: g }))) : setF({ ...f, grant: g })}>{g}</Button>)}</div>
-          </Field>
-          <Field id="t-role" label="Agent role" hint="changing it asks first">
-            <div id="t-role" role="group" aria-label="Agent role" className="flex gap-1">{[...new Set([...F.ROLES, f.role])].map(r => <Button key={r} size="sm" variant={f.role === r ? "default" : "outline"} aria-pressed={f.role === r} disabled={!!block} onClick={() => r !== f.role && widen(`Change agent role from ${f.role} to ${r}?`, () => setF(x => ({ ...x, role: r })))}>{r}</Button>)}</div>
-          </Field>
-          <Field id="t-mcp" label="MCP servers">
-            <span id="t-mcp" className="flex flex-wrap items-center gap-2 text-sm">{f.mcp.join(", ") || "none"}{F.MCP_REGISTRY.filter(s => !f.mcp.includes(s)).map(s => <Button key={s} variant="outline" size="sm" disabled={!!block} onClick={() => widen(`Add MCP server "${s}"? The session can then call its tools.`, () => setF(x => ({ ...x, mcp: [...x.mcp, s] })))}>Add {s}</Button>)}</span>
-          </Field>
-          <KeyValue rows={[["Plugins", "none"], ["Claims", isNew ? "none yet" : rec ? rec.claims : "task · tags brief"], ["Also reaches", "every peer tool via mcp-bridge (every grant does today)"]]} />
-        </Panel>
-        <Panel data-block="dry-run" title="Dry run"><Answer label="Run dry run" disabled={!!block || (isNew && !f.name)} run={dryRun} /></Panel>
-        {!isNew && <Panel data-block="type-runs" title={`Recent runs · 7 days: ${t.runs} · ${F.usd(t.cost)}`} framed={false}>{F.RUNS.filter(r => r.type === t.name).map(r => <a key={r.id} href={`#/run?id=${r.id}&from=sessions`} className={`${link} text-sm`}>{r.at} · {r.outcome} · {r.cost}</a>)}</Panel>}
-        <div data-block="save" className="flex flex-wrap items-center gap-2"><Button size="sm" disabled={!!block} onClick={save}>Save the type</Button><Button variant="ghost" size="sm" onClick={() => go(back)}>Cancel</Button><span role="status" className="text-xs text-muted-foreground">{block ?? said}</span></div>
-        <ConfirmDialog open={!!confirm} title="Widen this type's access?" body={confirm?.body} confirmLabel="Yes, change it" onConfirm={() => { confirm?.apply(); setConfirm(null) }} onCancel={() => setConfirm(null)} />
+        {/* Rebuilt once pu answers, so a panel opened by link never edits sample data. */}
+        <TypeForm key={`${name}:${F.CONN.mode}`} record={record} isNew={isNew} block={block} claims={claimList()} roles={F.ROLES} registry={F.MCP_REGISTRY} Wrap={Wrap} unit={isNew ? "pu" : t.unit}
+          onSave={patch => said(F.editType(isNew ? String((patch as { name?: string }).name ?? "") : t.name, patch).then(() => isNew ? "Saved to pu, switched off: switch it on when it is ready." : "Saved to pu."))}
+          onDryRun={d => said(F.dryRunType(d).then(r => `Would run on ${r.model ?? "the CLI default"} as ${r.agent_role}, grant ${r.grant}, in ${r.cwd}; allowed: ${allowedOf(r.argv)}. Nothing written, nothing launched.`))}
+          onCancel={() => go(back)}
+          between={!isNew && <Panel data-block="type-runs" title={`Recent runs · 7 days: ${t.runs} · ${F.usd(t.cost)}`} framed={false}>{F.RUNS.filter(r => r.type === t.name).map(r => <a key={r.id} href={`#/run?id=${r.id}&from=sessions`} className={`${link} text-sm`}>{r.at} · {r.outcome} · {r.cost}</a>)}</Panel>} />
       </SidePanel>
     </>
   )
 }
 
 function TriggerPanel() {
-  const name = q("name") ?? "arxiv-cs-ai"
-  return <TriggerForm key={`${name}:${F.TRIGGER_RECORD[name] ? "pu" : "sample"}`} />
-}
-
-function TriggerForm() {
   const name = q("name") ?? "arxiv-cs-ai", isNew = name === "new", t = F.TRIGGERS.find(x => x.name === name) ?? F.TRIGGERS[2]
-  const state = useScreenState(), block = editBlock(state), rec = isNew ? undefined : F.TRIGGER_RECORD[t.name]
-  const [f, setF] = useState(() => isNew ? { name: "", kind: "", url: "", every: "86400", cron: "", tz: "UTC", title: "" }
-    : rec ? { name: t.name, kind: rec.source.kind, url: rec.source.url ?? "", every: rec.source.every_seconds == null ? "" : String(rec.source.every_seconds), cron: rec.source.cron ?? "", tz: rec.source.tz ?? "UTC", title: rec.emits?.title ?? "" }
-    : { name: t.name, kind: t.src.split(" · ")[0], url: t.src.startsWith("schedule") ? "" : `https://example.org/${t.name}.feed`, every: t.src.startsWith("schedule") ? "" : "86400", cron: t.src.startsWith("schedule") ? t.src.split(" · ")[1].split(" ").slice(0, 5).join(" ") : "", tz: "Europe/Warsaw", title: `${t.name}: {count} new items` })
-  const [errors, setErrors] = useState<Record<string, string>>({}), [said, setSaid] = useState("")
-  const schedule = f.kind === "schedule"
-  // The form edits the source and the title; everything else on the record (predicate, what it creates) is kept.
-  const draft = () => {
-    const source: Record<string, unknown> = { ...(rec?.source ?? {}), kind: f.kind }
-    if (schedule) { delete source.url; delete source.items_path; delete source.id_path; if (f.cron) { source.cron = f.cron.trim(); source.tz = f.tz; delete source.every_seconds } else { source.every_seconds = +f.every; delete source.cron; delete source.tz } }
-    else { source.url = f.url; delete source.cron; delete source.tz; if (f.every) source.every_seconds = +f.every; else delete source.every_seconds }
-    return { source, emits: { ...(rec?.emits ?? {}), title: f.title || undefined } }
-  }
-  const save = async () => {
-    const e: Record<string, string> = {}
-    if (isNew && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(f.name)) e.name = "Use lowercase letters, digits, . _ - (up to 64)."
-    if (!f.kind) e.kind = "Choose what it watches first."
-    if (!schedule && f.kind && !/^https?:\/\//.test(f.url)) e.url = "A feed URL starting with http:// or https://."
-    if (f.every && (!/^\d+$/.test(f.every) || +f.every < 30)) e.every = "Every is in seconds, minimum 30 (the tick)."
-    if (schedule && f.cron && (f.cron.startsWith("@") || f.cron.trim().split(/\s+/).length !== 5)) e.cron = "Five fields: minute hour day month weekday (no @weekly, L or #)."
-    if (schedule && !f.cron && !f.every) e.cron = "A schedule needs a cron or an interval."
-    setErrors(e); setSaid("")
-    if (Object.keys(e).length) return
-    if (isNew) { setSaid("This form cannot set what a new trigger creates yet (its task kind), so pu would refuse it; create it through pu's tools for now."); return }
-    setSaid("saving…")
-    try { await F.editTrigger(f.name, draft()); setSaid("Saved to pu.") } catch (err) { setSaid(refused(err)) }
-  }
-  const dryRun = async () => {
-    const r = await F.dryRunTrigger({ name: f.name, ...draft(), predicate: rec?.predicate })
-    if (!r.ok) return `The source did not answer: ${r.reason}. Nothing written.`
-    return `Fetched ${r.fetched} item(s), ${r.fresh} new, ${r.matched_total} matching; it ${r.fired ? `would create 1 task: "${r.would_create?.title ?? f.title}"` : "would not fire"}. Nothing written.`
-  }
-  const predicate = rec ? (rec.predicate?.length ? rec.predicate.map(([k, op, v]) => [k, `${op} ${String(v)}`] as [string, string]) : [["—", "every new item"] as [string, string]]) : isNew ? [["—", "every new item"] as [string, string]] : [["new items", t.name === "arxiv-cs-ai" ? "title matches (agent|LLM|model)" : "any"] as [string, string], ["count_since_fire", ">= 1"] as [string, string]]
-  const priority = rec ? `${rec.emits?.priority ?? "medium"}${rec.emits?.stale_after_seconds ? ` · stale after ${Math.round(rec.emits.stale_after_seconds / 3600)} h` : rec.emits?.priority === "high" ? " · stale after 1 h" : ""}` : "medium · stale after 24 h"
-  const back = "#/sessions"
+  const state = useScreenState(), block = editBlock(state), back = "#/sessions"
+  const Wrap: Wrap = ({ empty, children }) => <Stateful state={state} empty={empty}>{children}</Stateful>
   return (
     <>
       <SessionsBody behind />
       <SidePanel open onOpenChange={o => !o && go(back)} backLabel="Back to sessions" backHref={back} title={isNew ? "New trigger" : t.name} description={isNew ? "choose what it watches first" : t.src}>
         <div data-block="panel-title">{isNew ? <span className="text-sm text-muted-foreground">off until you switch it on after saving</span> : <Toggle kind="trigger" name={t.name} initial={t.on} block={switchBlock(state)} />}</div>
-        <Panel data-block="source" title="Source">
-          <Stateful state={state} empty="Choose the kind of source; its fields follow.">
-            {isNew && <Field id="g-name" label="Name" error={errors.name}><Input id="g-name" value={f.name} disabled={!!block} aria-invalid={!!errors.name || undefined} aria-describedby="g-name-msg" onChange={e => setF({ ...f, name: e.target.value })} /></Field>}
-            <Field id="g-kind" label="Kind" error={errors.kind}><div id="g-kind" role="group" aria-label="Kind" className="flex gap-1">{["rss", "http-json", "schedule"].map(k => <Button key={k} size="sm" variant={f.kind === k ? "default" : "outline"} aria-pressed={f.kind === k} disabled={!!block} onClick={() => setF({ ...f, kind: k })}>{k}</Button>)}</div></Field>
-            {f.kind && !schedule && <Field id="g-url" label="URL" error={errors.url}><Input id="g-url" value={f.url} disabled={!!block} aria-invalid={!!errors.url || undefined} aria-describedby="g-url-msg" onChange={e => setF({ ...f, url: e.target.value })} /></Field>}
-            {f.kind && <Field id="g-every" label="Every (seconds)" error={errors.every} hint="minimum 30"><Input id="g-every" inputMode="numeric" value={f.every} disabled={!!block} aria-invalid={!!errors.every || undefined} aria-describedby="g-every-msg" onChange={e => setF({ ...f, every: e.target.value })} /></Field>}
-            {schedule && <Field id="g-cron" label="Cron (5 fields)" error={errors.cron} hint={`time zone ${f.tz}`}><Input id="g-cron" value={f.cron} placeholder="0 7 * * mon" disabled={!!block} aria-invalid={!!errors.cron || undefined} aria-describedby="g-cron-msg" onChange={e => setF({ ...f, cron: e.target.value })} /></Field>}
-          </Stateful>
-        </Panel>
-        {!schedule && <Panel data-block="predicate" title="Fires when (all of)"><KeyValue rows={predicate} /></Panel>}
-        <Panel data-block="creates" title="Creates">
-          <Field id="g-title" label="Task title" hint={f.title.length > 140 ? `pu cuts this at 140 characters (now ${f.title.length})` : "pu cuts titles at 140 characters"}><Input id="g-title" value={f.title} disabled={!!block} aria-describedby="g-title-msg" onChange={e => setF({ ...f, title: e.target.value })} /></Field>
-          <KeyValue rows={[["Kind", isNew ? "choose after saving the source" : `${t.kind} → ${t.type || "no type claims it"}`], ["Priority", priority]]} />
-        </Panel>
-        {!isNew && <Panel data-block="health" title="Health"><KeyValue rows={[["Now", t.health], ["Fires 7 days", String(t.fires)], ["Expired 30 days", String(t.expired)]]} /></Panel>}
-        <Panel data-block="dry-run" title="Dry run"><Answer label="Run dry run" disabled={!!block || schedule || !f.kind} run={dryRun} />{schedule && <span className="text-xs text-muted-foreground">schedules can't be previewed</span>}</Panel>
-        <div data-block="save" className="flex flex-wrap items-center gap-2"><Button size="sm" disabled={!!block} onClick={save}>Save the trigger</Button><Button variant="ghost" size="sm" onClick={() => go(back)}>Cancel</Button><span role="status" className="text-xs text-muted-foreground">{block ?? said}</span></div>
+        <TriggerForm key={`${name}:${F.CONN.mode}`} record={isNew ? undefined : F.TRIGGER_RECORDS[t.name]} name={t.name} block={block} claims={claimList()} Wrap={Wrap}
+          onSave={patch => said(F.editTrigger(isNew ? String((patch as { name?: string }).name ?? "") : t.name, patch).then(() => isNew ? "Saved to pu, switched off: switch it on when it is ready." : "Saved to pu."))}
+          onDryRun={d => said(F.dryRunTrigger(d).then(r => !r.ok ? `The source did not answer: ${r.reason}. Nothing written.`
+            : `Fetched ${r.fetched} item(s), ${r.fresh} new, ${r.matched_total} matching; it ${r.fired ? `would create 1 task: "${r.would_create?.title ?? ""}"` : "would not fire"}. Nothing written.`))}
+          onCancel={() => go(back)}
+          health={!isNew && <Panel data-block="health" title="Health"><KeyValue rows={[["Now", t.health], ["Fires 7 days", String(t.fires)], ["Expired 30 days", String(t.expired)]]} /></Panel>} />
       </SidePanel>
     </>
   )
-}
-
-/** A button that answers in place (aria-live), for actions that need pu (dry run). */
-function Answer({ label, run, disabled }: { label: string; run: () => Promise<string>; disabled?: boolean }) {
-  const [said, setSaid] = useState("")
-  const go = async () => { setSaid("asking pu…"); try { setSaid(await run()) } catch (e) { setSaid(refused(e)) } }
-  return <span className="flex flex-col gap-1"><Button variant="outline" size="sm" className="self-start" disabled={disabled} onClick={go}>{label}</Button><span role="status" className="text-xs text-muted-foreground">{said}</span></span>
 }
 
 // ---------- Run ----------

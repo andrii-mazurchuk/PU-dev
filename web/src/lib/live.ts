@@ -7,7 +7,7 @@ import { fetchScope, inScope, mergeById, type Fetch } from "./pu-data"
 // id or name, so unchanged records keep their object identity and React keeps their DOM (stage-6 rulings: only
 // the scope in focus, archive on request, incremental updates, no refit).
 export { usd } from "@/fixtures/pu"
-export type { Task, Run, RunDetail, SessionType, Trigger, TypeOn } from "@/fixtures/pu"
+export type { Task, Run, RunDetail, SessionType, Trigger, TypeOn, ApiType, ApiTrigger } from "@/fixtures/pu"
 
 type Pair = [string, number]
 export type Conn = { mode: "sample" | "live"; failures: number; lastGood?: number; error?: string }
@@ -33,12 +33,12 @@ export let RUNS: S.Run[] = S.RUNS
 export let RUN_DETAIL: Record<string, RunMore> = S.RUN_DETAIL
 export let RETIRED = S.RETIRED
 /** The editable fields of each user-written type, for its panel (sample data has none, so the panel keeps its sample). */
-export let TYPE_RECORD: Record<string, { purpose: string; prompt: string; mcp: string[]; claims: string }> = {}
+export let TYPE_RECORDS: Record<string, S.ApiType> = S.TYPE_RECORDS
 /** Each trigger's record as pu holds it, so its panel starts from the real source and what it creates. */
-export let TRIGGER_RECORD: Record<string, ApiTrigger> = {}
+export let TRIGGER_RECORDS: Record<string, S.ApiTrigger> = S.TRIGGER_RECORDS
 /** What the type form may choose from: the roles in use (system always), and pu's MCP server registry. */
-export let ROLES: string[] = ["system", "researcher", "cu"]
-export let MCP_REGISTRY: string[] = ["telegram-push", "github"]
+export let ROLES: string[] = S.ROLES
+export let MCP_REGISTRY: string[] = S.MCP_REGISTRY
 export let BY_ROLE = S.BY_ROLE
 export let BY_TRIGGER = S.BY_TRIGGER
 export let PER_SUCCESS = S.PER_SUCCESS
@@ -199,8 +199,8 @@ type ApiProject = { project: string; open_tasks: number }
 export type ApiTask = { uuid: string; description: string; status: string; kind: string | null; project: string | null; parent: string | null; tags: string[]; depends: string[]; afk: boolean; active: boolean }
 type ApiRow = { uuid: string; title: string; kind: string; project: string }
 type ApiAttention = { waiting_on_you: { decisions: ApiRow[]; handed_to_you: ApiRow[]; never_activated: { kind: string; name: string; purpose: string }[] }; faults: { stale_run_claims: unknown[] } }
-type ApiType = { name: string; purpose?: string; prompt?: string; mcp_servers?: string[]; agent_role?: string; grant: string; model?: string; claims?: { kind?: string; tags?: string[] }; enabled?: boolean; retired?: boolean; origin?: string }
-export type ApiTrigger = { name: string; purpose?: string; source: { kind: string; url?: string; every_seconds?: number; cron?: string; tz?: string; items_path?: string; id_path?: string }; emits?: { kind?: string; tags?: string[]; priority?: string; title?: string; afk?: boolean; stale_after_seconds?: number }; predicate?: [string, string, unknown][]; enabled?: boolean; retired?: boolean }
+type ApiType = { name: string; purpose?: string; prompt?: string; mcp_servers?: string[]; plugins?: string[]; agent_role?: string; grant: string; model?: string; claims?: { kind?: string; tags?: string[] }; enabled?: boolean; retired?: boolean; origin?: string }
+type ApiTrigger = { name: string; purpose?: string; source: { kind: string; url?: string; every_seconds?: number; cron?: string; tz?: string; items_path?: string; id_path?: string }; emits?: { kind?: string; tags?: string[]; priority?: string; title?: string; afk?: boolean; stale_after_seconds?: number }; predicate?: [string, string, unknown][]; enabled?: boolean; retired?: boolean }
 type ApiRun = { run_id: string; task_uuid: string; session_type: string; recorded_at: string; outcome: string; detail?: string; cost_usd?: number; duration_ms?: number; num_turns?: number; tool_calls?: string[]; models_used?: string[]; permission_denials?: string[]; tokens?: Record<string, number>; report?: string; report_outcome?: string | null; report_structured?: boolean; needs_human?: string | null; failure_class?: string | null; queued_seconds?: number | null; trigger?: string | null; agent_role?: string }
 type Window = { runs?: number; outcomes?: Record<string, number> }
 type ApiMetrics = { gate?: { blocked?: boolean; paused?: boolean; reason?: string; cost?: { spent_today_usd?: number }; windows?: { name: string; utilization: number; ceiling: number }[]; concurrency?: { max?: number; runway_fraction?: number } }; triggers?: Record<string, { fires?: { d30?: number }; expired_d30?: { count?: number }; fetches?: { failing_now?: boolean }; backoff?: { until?: string | null }; freshness?: { last_fired_at?: string | null } }>; unit?: { blocked_seconds?: { today?: number }; liveness?: { ticks_per_day?: number; silences?: number } }; placement_faults?: Record<string, number>; sessions?: { d7?: Window } }
@@ -307,7 +307,7 @@ function apply(d: Input) {
     ...BUILTINS.filter(n => !live.some(t => t.name === n)).map(n => typeOf(n, "pu (built-in)", "on", "system", n === "execution" ? "repo" : n === "research" ? "web" : "none", "default")),
   ], t => t.name)
   RETIRED = d.types.filter(t => t.retired).map(t => t.name)
-  TYPE_RECORD = Object.fromEntries(live.map(t => [t.name, { purpose: t.purpose ?? "", prompt: t.prompt ?? "", mcp: t.mcp_servers ?? [], claims: t.claims?.kind ? `${t.claims.kind}${(t.claims.tags ?? []).length ? ` · tags ${t.claims.tags!.join(", ")}` : ""}` : "none" }]))
+  TYPE_RECORDS = Object.fromEntries(live.map(t => [t.name, t]))
 
   // triggers: wired to the type whose claim matches what they emit, most specific first
   const claimant = (g: ApiTrigger) => {
@@ -317,7 +317,7 @@ function apply(d: Input) {
     return fits[0]?.name ?? DEFAULT_FOR_KIND[kind] ?? ""
   }
   const liveTriggers = d.triggers.filter(g => !g.retired)
-  TRIGGER_RECORD = Object.fromEntries(liveTriggers.map(g => [g.name, g]))
+  TRIGGER_RECORDS = Object.fromEntries(liveTriggers.map(g => [g.name, g]))
   ROLES = [...new Set(["system", ...live.map(t => t.agent_role ?? "system")])]
   MCP_REGISTRY = d.mcp.map(x => x.name)
   TRIGGERS = merge(TRIGGERS === S.TRIGGERS ? [] : TRIGGERS, liveTriggers.map(g => {
