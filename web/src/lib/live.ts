@@ -34,6 +34,11 @@ export let RUN_DETAIL: Record<string, RunMore> = S.RUN_DETAIL
 export let RETIRED = S.RETIRED
 /** The editable fields of each user-written type, for its panel (sample data has none, so the panel keeps its sample). */
 export let TYPE_RECORD: Record<string, { purpose: string; prompt: string; mcp: string[]; claims: string }> = {}
+/** Each trigger's record as pu holds it, so its panel starts from the real source and what it creates. */
+export let TRIGGER_RECORD: Record<string, ApiTrigger> = {}
+/** What the type form may choose from: the roles in use (system always), and pu's MCP server registry. */
+export let ROLES: string[] = ["system", "researcher", "cu"]
+export let MCP_REGISTRY: string[] = ["telegram-push", "github"]
 export let BY_ROLE = S.BY_ROLE
 export let BY_TRIGGER = S.BY_TRIGGER
 export let PER_SUCCESS = S.PER_SUCCESS
@@ -136,7 +141,7 @@ async function loadTasks(scope: string): Promise<ApiTask[]> {
 // The node's proxy forwards a POST only to a declared path and audits it. A refusal is JSON with an `error` key,
 // from the node (an undeclared path, 405) or from pu (400/409): that sentence is what the page shows, then the raw
 // body, then the status only when there is nothing else (UNIT_STANDARDS "GET /actions").
-async function act(path: string, body: object): Promise<unknown> {
+async function act(path: string, body: object, refresh = true): Promise<any> {
   const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
   const text = await r.text()
   if (!r.ok) {
@@ -144,9 +149,15 @@ async function act(path: string, body: object): Promise<unknown> {
     try { msg = (JSON.parse(text) as { error?: string }).error ?? text } catch { /* not JSON: the raw body */ }
     throw new Error(msg || `HTTP ${r.status}`)
   }
-  poll()
+  if (refresh) poll()
   return text ? JSON.parse(text) : {}
 }
+/** The owner's edit door: the fields the form shows are changed, everything else is kept, and a live record stays on. */
+export const editType = (name: string, patch: object) => act(`session-types/${encodeURIComponent(name)}/edit`, patch)
+export const editTrigger = (name: string, patch: object) => act(`triggers/${encodeURIComponent(name)}/edit`, patch)
+/** Previews: pu writes nothing, so nothing is re-read. */
+export const dryRunType = (draft: object) => act("session-types/dry-run", draft, false)
+export const dryRunTrigger = (draft: object) => act("triggers/dry-run", draft, false)
 export const setEnabled = (kind: "type" | "trigger", name: string, enabled: boolean) => kind === "type"
   ? act(`session-types/${encodeURIComponent(name)}/enabled`, { enabled })
   : act(`triggers/${encodeURIComponent(name)}/enabled`, { enabled })
@@ -189,7 +200,7 @@ export type ApiTask = { uuid: string; description: string; status: string; kind:
 type ApiRow = { uuid: string; title: string; kind: string; project: string }
 type ApiAttention = { waiting_on_you: { decisions: ApiRow[]; handed_to_you: ApiRow[]; never_activated: { kind: string; name: string; purpose: string }[] }; faults: { stale_run_claims: unknown[] } }
 type ApiType = { name: string; purpose?: string; prompt?: string; mcp_servers?: string[]; agent_role?: string; grant: string; model?: string; claims?: { kind?: string; tags?: string[] }; enabled?: boolean; retired?: boolean; origin?: string }
-type ApiTrigger = { name: string; purpose?: string; source: { kind: string; url?: string; every_seconds?: number; cron?: string; tz?: string }; emits?: { kind?: string; tags?: string[]; priority?: string }; enabled?: boolean; retired?: boolean }
+export type ApiTrigger = { name: string; purpose?: string; source: { kind: string; url?: string; every_seconds?: number; cron?: string; tz?: string; items_path?: string; id_path?: string }; emits?: { kind?: string; tags?: string[]; priority?: string; title?: string; afk?: boolean; stale_after_seconds?: number }; predicate?: [string, string, unknown][]; enabled?: boolean; retired?: boolean }
 type ApiRun = { run_id: string; task_uuid: string; session_type: string; recorded_at: string; outcome: string; detail?: string; cost_usd?: number; duration_ms?: number; num_turns?: number; tool_calls?: string[]; models_used?: string[]; permission_denials?: string[]; tokens?: Record<string, number>; report?: string; report_outcome?: string | null; report_structured?: boolean; needs_human?: string | null; failure_class?: string | null; queued_seconds?: number | null; trigger?: string | null; agent_role?: string }
 type Window = { runs?: number; outcomes?: Record<string, number> }
 type ApiMetrics = { gate?: { blocked?: boolean; paused?: boolean; reason?: string; cost?: { spent_today_usd?: number }; windows?: { name: string; utilization: number; ceiling: number }[]; concurrency?: { max?: number; runway_fraction?: number } }; triggers?: Record<string, { fires?: { d30?: number }; expired_d30?: { count?: number }; fetches?: { failing_now?: boolean }; backoff?: { until?: string | null }; freshness?: { last_fired_at?: string | null } }>; unit?: { blocked_seconds?: { today?: number }; liveness?: { ticks_per_day?: number; silences?: number } }; placement_faults?: Record<string, number>; sessions?: { d7?: Window } }
@@ -306,6 +317,9 @@ function apply(d: Input) {
     return fits[0]?.name ?? DEFAULT_FOR_KIND[kind] ?? ""
   }
   const liveTriggers = d.triggers.filter(g => !g.retired)
+  TRIGGER_RECORD = Object.fromEntries(liveTriggers.map(g => [g.name, g]))
+  ROLES = [...new Set(["system", ...live.map(t => t.agent_role ?? "system")])]
+  MCP_REGISTRY = d.mcp.map(x => x.name)
   TRIGGERS = merge(TRIGGERS === S.TRIGGERS ? [] : TRIGGERS, liveTriggers.map(g => {
     const st = d.m.triggers?.[g.name] ?? {}, src = g.source, type = claimant(g)
     const fired = st.freshness?.last_fired_at

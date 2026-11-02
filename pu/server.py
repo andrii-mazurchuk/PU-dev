@@ -563,10 +563,41 @@ TOOLS = [
 # human-only, since nothing authenticates a caller yet.
 #
 # The fewest paths that work: switching a session type or a trigger on or
-# off, and pausing every start. Stopping cannot spend money, and switching on
-# is the decision these exist for. Edits stay off this list until a person
-# can be told apart from an agent.
+# off, pausing every start, and editing one from its panel. An edit through
+# here counts as the owner's (Andrey, 2026-11-01, option a), so it has its own
+# path rather than reusing POST /session-types -- that one is an agent tool,
+# and an agent's edit to a live record must still switch it off. The two dry
+# runs write nothing; they are here because the framed page can only POST to
+# a declared path.
 ACTIONS = [
+    {
+        "name": "edit_session_type",
+        "description": "Create or edit one session type as its owner: the fields sent are changed, everything else is kept, and a live type stays on.",
+        "method": "POST",
+        "path": "/session-types/{name}/edit",
+        "input_schema": {"type": "object"},
+    },
+    {
+        "name": "edit_trigger",
+        "description": "Create or edit one trigger as its owner: the fields sent are changed, everything else is kept, and a live trigger stays on.",
+        "method": "POST",
+        "path": "/triggers/{name}/edit",
+        "input_schema": {"type": "object"},
+    },
+    {
+        "name": "dry_run_session_type",
+        "description": "Show what a draft session type would run as. Writes nothing.",
+        "method": "POST",
+        "path": "/session-types/dry-run",
+        "input_schema": {"type": "object"},
+    },
+    {
+        "name": "dry_run_trigger",
+        "description": "Evaluate a draft trigger now. Writes nothing.",
+        "method": "POST",
+        "path": "/triggers/dry-run",
+        "input_schema": {"type": "object"},
+    },
     {
         "name": "set_session_type_enabled",
         "description": "Switch one session type on or off. Nothing else about it changes; running sessions are not stopped.",
@@ -1021,6 +1052,18 @@ def make_handler(
                         gate_reason=gate.get("reason", ""),
                     )
                     return self._json(202, {"id": ask_id})
+
+                if (len(parts) == 3 and parts[2] == "edit"
+                        and parts[0] in ("triggers", "session-types")):
+                    if parts[0] == "triggers":
+                        if trigger_store is None:
+                            return self._json(503, {"error": "no trigger store wired"})
+                        return self._json(200, service.edit_trigger(
+                            trigger_store, parts[1], payload))
+                    if type_store is None:
+                        return self._json(503, {"error": "no session-type store wired"})
+                    return self._json(200, service.edit_session_type(
+                        type_store, parts[1], payload))
 
                 if (len(parts) == 3 and parts[2] == "enabled"
                         and parts[0] in ("triggers", "session-types")):

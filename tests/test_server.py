@@ -732,7 +732,9 @@ def test_the_actions_manifest_declares_only_the_switches_and_none_are_tools(base
     _, doc = get(f"{base_url}/actions")
     assert doc["unit"] == "pu"
     assert sorted(a["path"] for a in doc["actions"]) == [
-        "/pause", "/session-types/{name}/enabled", "/triggers/{name}/enabled"]
+        "/pause", "/session-types/dry-run", "/session-types/{name}/edit",
+        "/session-types/{name}/enabled", "/triggers/dry-run",
+        "/triggers/{name}/edit", "/triggers/{name}/enabled"]
     assert all(a["method"] == "POST" for a in doc["actions"])
     # Pausing is also an agent tool -- the kill switch -- and the standard
     # allows a path in both lists. Switching on is not: it is the decision
@@ -740,7 +742,45 @@ def test_the_actions_manifest_declares_only_the_switches_and_none_are_tools(base
     _, tools = get(f"{base_url}/tools")
     offered = {t["name"] for t in tools["tools"]} | {t["path"] for t in tools["tools"]}
     assert not offered & {"set_session_type_enabled", "set_trigger_enabled",
-                          "/session-types/{name}/enabled", "/triggers/{name}/enabled"}
+                          "/session-types/{name}/enabled", "/triggers/{name}/enabled",
+                          "edit_session_type", "edit_trigger",
+                          "/session-types/{name}/edit", "/triggers/{name}/edit"}
+
+
+def test_an_owner_edit_keeps_a_live_type_on_and_keeps_what_it_did_not_send(base_url):
+    """Option (a), 2026-11-01: an edit from the dashboard is the owner's, so a
+    permission change does not switch a live type off -- while the same change
+    through the agent door still does. And the form sends only what it shows,
+    so every field it leaves out survives."""
+    post(f"{base_url}/session-types", {
+        "name": "digest", "purpose": "p", "prompt": "x", "grant": "read",
+        "claims": {"kind": "research", "tags": ["digest"]}})
+    post(f"{base_url}/session-types/digest/enabled", {"enabled": True})
+
+    status, body = post(f"{base_url}/session-types/digest/edit",
+                        {"grant": "web", "prompt": "y"})
+    assert status == 200
+    assert body["enabled"] is True and body["grant"] == "web" and body["prompt"] == "y"
+    assert body["claims"] == {"kind": "research", "tags": ["digest"]}
+
+    resent = {k: v for k, v in body.items() if k != "origin"}
+    _, agent = post(f"{base_url}/session-types", dict(resent, grant="repo"))
+    assert agent["enabled"] is False
+
+
+def test_an_owner_edit_can_create_and_edits_a_trigger_in_place(base_url):
+    status, made = post(f"{base_url}/session-types/fresh/edit",
+                        {"purpose": "p", "prompt": "x", "grant": "none"})
+    assert status == 200 and made["name"] == "fresh" and made["enabled"] is False
+
+    post(f"{base_url}/triggers", {
+        "name": "posts", "source": {"kind": "schedule", "every_seconds": 60},
+        "emits": {"kind": "execution", "tags": ["t"]}})
+    post(f"{base_url}/triggers/posts/enabled", {"enabled": True})
+    status, body = post(f"{base_url}/triggers/posts/edit",
+                        {"source": {"kind": "schedule", "every_seconds": 120}})
+    assert status == 200 and body["enabled"] is True
+    assert body["source"]["every_seconds"] == 120 and body["emits"]["tags"] == ["t"]
 
 
 def test_the_switch_changes_enabled_and_nothing_else(base_url):

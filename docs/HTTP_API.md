@@ -350,7 +350,22 @@ audited, **not** enforced as human-only: nothing authenticates a caller.
   {"name": "set_paused",               "method": "POST", "path": "/pause", ...}]}
 ```
 
-Edits are deliberately absent until a person can be told from an agent.
+It also declares the owner's edit doors and the two dry runs (which write
+nothing, but the framed page can only `POST` to a declared path).
+
+## `POST /session-types/{name}/edit`, `POST /triggers/{name}/edit` → `200`
+
+The dashboard's edit door: create or edit one record **as its owner**
+(Andrey, 2026-11-01, option a). A patch, not a replacement -- the fields
+sent are changed and everything else (claims, plugins, predicate, what a
+trigger creates, the switch) is kept. Unlike `POST /session-types` and
+`POST /triggers`, an edit here never switches a live record off: it is
+written with `by_human`, because the owner is the approver. A new record
+is still created switched off.
+
+This is a trust decision, not an enforced one: nothing authenticates the
+caller, so anything that can reach this path is treated as the owner.
+It is not an agent tool, and the node's proxy audits every press.
 
 ## `POST /session-types/{name}/enabled`, `POST /triggers/{name}/enabled` → `200`
 

@@ -112,7 +112,7 @@ def test_every_write_is_a_declared_action(reads):
     works standalone and silently fails in the node."""
     declared = [re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", a["path"].lstrip("/")) + "$")
                 for a in server.ACTIONS]
-    writes = [c for c in reads if c.endswith("/enabled") or c == "pause"]
+    writes = [c for c in reads if c.endswith(("/enabled", "/edit", "dry-run")) or c == "pause"]
     assert writes, "no writes found -- have the switches stopped writing?"
     for call in writes:
         path = re.sub(r"\$\{[^}]*\}", "x", call)

@@ -589,7 +589,8 @@ def get_trigger_cursor(trigger_store, name: str) -> dict[str, Any] | None:
     return trigger_store.cursor(name)
 
 
-def write_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
+def write_trigger(trigger_store, payload: dict[str, Any],
+                  by_human: bool = False) -> dict[str, Any]:
     """Append one trigger record, under the same two activation rules.
 
     **A trigger inherits both rules, and the reasoning is stronger than for
@@ -606,7 +607,8 @@ def write_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
         raise ServiceError("a trigger is a JSON object")
 
     previous = trigger_store.get(payload.get("name") or "")
-    record, transition = apply_activation_rules(previous, dict(payload))
+    record, transition = apply_activation_rules(previous, dict(payload),
+                                                by_human=by_human)
     written = trigger_store.append(record)
 
     emits = written.get("emits") or {}
@@ -980,7 +982,8 @@ def get_session_type(type_store, name: str) -> dict[str, Any] | None:
     return type_store.get(_require(name, "name"))
 
 
-def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
+def write_session_type(type_store, payload: dict[str, Any],
+                       by_human: bool = False) -> dict[str, Any]:
     """Append one session-type record, as the `authored` origin.
 
     Two refusals live here rather than in the store, because both are
@@ -1047,7 +1050,7 @@ def write_session_type(type_store, payload: dict[str, Any]) -> dict[str, Any]:
         previous = with_role(previous)
     record, transition = apply_activation_rules(
         previous, with_role(dict(payload, origin="authored")),
-        fields=PERMISSION_FIELDS)
+        fields=PERMISSION_FIELDS, by_human=by_human)
     # Only an existing role can be named. Checked against the gateway's
     # registry, strictly: an unreachable registry refuses a non-system role
     # rather than letting a typo through.
@@ -1129,6 +1132,42 @@ def set_trigger_enabled(trigger_store, name: str, enabled: Any) -> dict[str, Any
     if current is None:
         raise ServiceError(f"no trigger named {name!r}")
     return write_trigger(trigger_store, dict(current, enabled=enabled))
+
+
+# -- the dashboard's edit door ---------------------------------------------
+#
+# Andrey, 2026-11-01, option (a): an edit made from the dashboard is his, so
+# it never switches a live record off -- he is the approver. Nothing proves a
+# press came from a person (the /actions door is unadvertised and audited,
+# not authenticated), and that trade was made knowingly while the node is
+# loopback-only. Widening access asks first, in the page.
+#
+# A patch, not a replacement: the page sends the fields its form edits, and
+# everything else -- claims, plugins, the switch itself -- is kept from the
+# current record. A replacement from a form that does not show a field
+# would silently delete it.
+
+
+def edit_session_type(type_store, name: str, patch: Any) -> dict[str, Any]:
+    """Create or edit one session type from the dashboard, as a person."""
+    if not isinstance(patch, dict):
+        raise ServiceError("an edit is a JSON object")
+    current = type_store.get(name) or {}
+    if current and current.get("origin", "authored") != "authored":
+        raise ServiceError(
+            f"{name} is declared by its unit; edit it there, not here")
+    record = {k: v for k, v in current.items() if k != "origin"}
+    record.update({k: v for k, v in patch.items() if k not in ("name", "origin")})
+    return write_session_type(type_store, dict(record, name=name), by_human=True)
+
+
+def edit_trigger(trigger_store, name: str, patch: Any) -> dict[str, Any]:
+    """Create or edit one trigger from the dashboard, as a person."""
+    if not isinstance(patch, dict):
+        raise ServiceError("an edit is a JSON object")
+    record = dict(trigger_store.get(name) or {})
+    record.update({k: v for k, v in patch.items() if k != "name"})
+    return write_trigger(trigger_store, dict(record, name=name), by_human=True)
 
 
 def _changes_more_than_enabled(
