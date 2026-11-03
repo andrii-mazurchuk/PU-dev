@@ -490,6 +490,10 @@ def test_needs_human_keeps_the_answer_and_hands_the_task_over(
     assert task.status == "pending" and task.afk is False
     assert any("approve the spend" in a for a in task.annotations)
     assert "approve the spend" in sent[0]
+    # Handed over means no session holds it any more. Live 2026-11-03: the
+    # claim was kept, so a day later each handed-over run was reported a
+    # second time, as a stale run claim.
+    assert not task.active
 
 
 def test_a_clean_report_resolves_without_telling_anyone(

@@ -512,6 +512,10 @@ def _settle(
         # open, and it is a person's now. No retry -- a second agent run
         # would not supply what a person has to.
         need = report.needs_human or "the agent finished only part of it"
+        # Released first, as a failure is: no session holds it now, and a kept
+        # claim was reported a day later as a stale run claim on top of the
+        # handover itself (live, 2026-11-03).
+        store.release(task.uuid)
         guards.block(store, task.uuid, f"needs a person: {need}")
         notify.notify_owner(
             mcp_bridge_url,
