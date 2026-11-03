@@ -1245,6 +1245,9 @@ def apply_activation_rules(
     if (previous.get("enabled") and not by_human
             and _changes_more_than_enabled(record, previous, fields)):
         return dict(record, enabled=False), "deactivated_by_edit"
-    if record.get("enabled") and not previous.get("enabled", False):
+    # `enabled` is always stated on a revision: absent used to read as off,
+    # undocumented.
+    record = dict(record, enabled=bool(record.get("enabled")))
+    if record["enabled"] and not previous.get("enabled", False):
         return record, "activated"
     return record, None

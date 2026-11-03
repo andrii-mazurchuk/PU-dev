@@ -953,3 +953,14 @@ def test_a_fetch_names_itself_rather_than_sending_pythons_default_agent(monkeypa
     monkeypatch.setattr(triggers.urllib.request, "urlopen", fake_urlopen)
     assert triggers.http_fetch("https://example.test/feed")[0] == 200
     assert seen["agent"] and "Python-urllib" not in seen["agent"]
+
+
+def test_a_revision_is_stored_with_enabled_stated(tmp_path):
+    """Absent read as off, undocumented; every stored revision says so."""
+    from pu import service
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    draft = {k: v for k, v in emitting().items() if k != "enabled"}
+    service.write_trigger(trigger_store, draft)
+    service.write_trigger(trigger_store, dict(draft, purpose="revised"))
+    assert trigger_store.current()["posts"]["enabled"] is False
