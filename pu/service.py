@@ -28,6 +28,7 @@ answer and closes the ticket; the caller rewrites the map body through
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Sequence
 
@@ -950,6 +951,10 @@ def stats(
         "blocked": blocked,
         "bodies": body_store.count(),
         "body_bytes": body_store.total_bytes(),
+        # Which build is running (UNIT_STANDARDS.md, "Which build you are"):
+        # the gateway injects the pinned commit into an image. Null outside
+        # one -- a checkout knows its own build from .git.
+        "git_sha": os.environ.get("HOLONIC_GIT_SHA") or None,
     }
 
 

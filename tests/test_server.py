@@ -70,6 +70,17 @@ def test_stats_envelope(base_url):
     assert "computed_at" in payload
     assert isinstance(payload["metrics"], dict)
     assert payload["metrics"]["pending_tasks"] == 0
+    # The running build, for the node to compare against the pin: null here,
+    # because no gateway injected HOLONIC_GIT_SHA.
+    assert "git_sha" in payload["metrics"]
+
+
+def test_stats_reports_the_build_the_gateway_injected(store, body_store, monkeypatch):
+    from pu import service
+    monkeypatch.setenv("HOLONIC_GIT_SHA", "1eab002c0ffee")
+    assert service.stats(store, body_store)["git_sha"] == "1eab002c0ffee"
+    monkeypatch.delenv("HOLONIC_GIT_SHA")
+    assert service.stats(store, body_store)["git_sha"] is None
 
 
 def test_prompts_default_is_plain_text(base_url):
