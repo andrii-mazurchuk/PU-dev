@@ -422,6 +422,66 @@ Daily cost, oldest first. `days` (default 14, max 90). Quiet days are
 present as zero rather than omitted: a series that skips them renders as
 continuous work.
 
+## Session types, triggers and the MCP registry
+
+Each is an append-only record store: writing an existing name adds a
+revision, and every revision states `enabled`. Full input schemas are in
+`GET /tools` (`write_session_type`, `write_trigger`, `write_mcp_server`),
+which is authoritative; this section only maps the routes.
+
+| route | tool | answers |
+|---|---|---|
+| `GET /session-types` | `list_session_types` | `{"session_types": [...]}`, current records |
+| `GET /session-types/{name}` | `get_session_type` | one record, or `404` |
+| `POST /session-types` | `write_session_type` | the record as written. Created inactive; an agent's edit of a live type switches it off |
+| `POST /session-types/{name}/rename` | `rename_session_type` | `{"to": "..."}`; the old name is retired |
+| `POST /session-types/dry-run` | `dry_run_session_type` | generated `claude_md`, `allowed_tools` (as the argv allows them, bridge included), `cwd`, `model`, `argv`; with `task`, the full `prompt`. Writes nothing |
+| `GET /triggers` | `list_triggers` | `{"triggers": [...]}`, current records |
+| `GET /triggers/{name}` | `get_trigger` | one record, or `404` |
+| `GET /triggers/{name}/cursor` | `get_trigger_cursor` | seen ids, `last_new_at`, `pending`, `fired_at`, fetch and backoff counters |
+| `POST /triggers` | `write_trigger` | the record as written, under the same activation rules |
+| `POST /triggers/{name}/rename` | `rename_trigger` | the cursor moves with it |
+| `POST /triggers/dry-run` | `dry_run_trigger` | `ok`, `fetched`, `fresh`, `matched`, `fired`, `would_create` (title, kind, tags, project, priority, body; always shown for a schedule). Writes nothing |
+| `GET /mcp-servers` | `list_mcp_servers` | `{"mcp_servers": [...]}`; holonic is not listed, it is on every session |
+| `POST /mcp-servers` | `write_mcp_server` | http only; header values must be `${ENV_VAR}` placeholders |
+
+## `GET /running`
+
+`{"running": [{"task_uuid", "session_type", "agent_role", "started_at",
+"elapsed_seconds"}]}` -- the sessions in flight now.
+
+## `GET /attention`
+
+What waits on a person: `waiting_on_you` (`decisions`, `handed_to_you`,
+`never_activated`) and `faults` (`stale_run_claims` and any non-empty
+placement fault). Every task row is `{uuid, title, kind, project,
+entered_at, age_seconds}`.
+
+## `GET /audit`
+
+Placement faults by kind (`mapless`, `misplaced`, `orphaned`, ...), each a
+list of task rows. Read-only.
+
+## `GET /ticks`
+
+`{"ticks": [...]}`, most recent first; `limit` (default 50, max 500). Each
+tick's decision, deduplicated: a gate blocked for hours is one entry.
+
+## `POST /concurrency` → `200`
+
+`{"max": 2}` -- how many sessions may run at once, kept across restarts.
+Anything but a whole number of at least 1 is a `400`.
+
+## `POST /pause` → `200`
+
+`{"paused": true, "reason": "..."}` -- the kill switch. Triggers still
+fire; no session starts. A non-boolean `paused` is a `400`.
+
+## `POST /tasks/{uuid}/move` → `200`
+
+Move a task to another map, project or title (`move_task`); body,
+annotations and blocking are kept.
+
 ## `POST /trigger` → `200`
 
 One tick: gate, select, claim, run, record. Declared as the `run_tick`

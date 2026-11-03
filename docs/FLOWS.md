@@ -62,8 +62,11 @@ selected differently.
 
 ### Step 3 — discover session types (`:294`)
 
-A filesystem walk of `session_types/` (`pu/session_types.py:102`). A
-missing directory ends the tick with a reason rather than raising.
+`session_types.discover`: the committed directories under
+`session_types/`, plus every **enabled** runtime-authored record from the
+type store (`state/session_types.jsonl`). A directory wins over a record of
+the same name. A missing directory ends the tick with a reason rather than
+raising.
 
 ### Step 4 — select (`:298`)
 
