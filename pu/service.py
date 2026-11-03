@@ -785,23 +785,27 @@ def dry_run_session_type(
     draft = {k: v for k, v in payload.items() if k not in ("task", "enabled")}
     record = typestore.validate(dict(draft, origin="authored"))
     grant = session_types.GRANTS[record["grant"]]
+    argv = runner.build_argv(
+        allowed_tools=grant.tools or None, model=record.get("model"),
+        mcp_bridge_url="<bridge>",
+        mcp_servers=record.get("mcp_servers") or (),
+        mcp_config_path=("<type dir>/.mcp-session.json"
+                         if record.get("mcp_servers") else None))
 
     out: dict[str, Any] = {
         "name": record["name"],
         "agent_role": record["agent_role"],
         "grant": record["grant"],
-        "allowed_tools": grant.tools or None,
+        # What the argv actually allows, bridge included -- grant `none`
+        # still reaches every peer tool, so the bare grant would mislead.
+        "allowed_tools": (argv[argv.index("--allowedTools") + 1]
+                          if "--allowedTools" in argv else None),
         "mcp_servers": ["mcp-bridge", *(record.get("mcp_servers") or [])],
         "cwd": ("the task's target repository" if grant.runs_in_target_repo
                 else str(type_store.dirs / record["name"])),
         "model": record.get("model"),
         "claude_md": typestore.render(record),
-        "argv": runner.build_argv(
-            allowed_tools=grant.tools or None, model=record.get("model"),
-            mcp_bridge_url="<bridge>",
-            mcp_servers=record.get("mcp_servers") or (),
-            mcp_config_path=("<type dir>/.mcp-session.json"
-                             if record.get("mcp_servers") else None)),
+        "argv": argv,
         "note": "Nothing was written and nothing was launched.",
     }
     task_uuid = payload.get("task")
