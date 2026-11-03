@@ -26,9 +26,9 @@ class FakeTask:
 
 @pytest.fixture
 def types(tmp_path):
-    """The three committed directories, plus whatever a test writes."""
+    """The two committed directories, plus whatever a test writes."""
     committed = tmp_path / "committed"
-    for name in ("ask", "execution", "research"):
+    for name in ("execution", "research"):
         (committed / name).mkdir(parents=True)
         (committed / name / "CLAUDE.md").write_text("x\n", encoding="utf-8")
     store = typestore.TypeStore(tmp_path / "state")

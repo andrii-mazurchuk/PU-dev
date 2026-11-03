@@ -178,15 +178,6 @@ reader who sees "3 crossings" knows to trust their eyes less. Dependency
 *cycles* are broken, drawn differently, and counted -- a cycle is real
 information: work that can never start.
 
-### Asking it a question
-
-`POST /ask` and `GET /ask/<id>` exist, are gated, capped and tested (see
-below). **The panel in the page is not wired to them.** The node's
-dashboard proxy forwards GET and refuses everything else, so a page-tier
-chat cannot submit from inside the frame without reaching for a node
-route this unit is not supposed to know about. The panel is the layout;
-wiring it is a decision about that write path, not a missing function.
-
 ## Verifying it
 
 ```bash
@@ -218,7 +209,6 @@ operations, and the register of load-bearing decisions. Start at
 | `runner` | the `claude -p` invocation and its stream |
 | `sessions` | local run artifacts, and the `/stats` aggregates |
 | `dashboard.html` | the page the node frames at `/dashboard` |
-| `ask` | one question, one session, polled for an answer |
 | `logs_client` | best-effort `session_run` entries to whoever stores logs |
 | `notify` | best-effort word to the `owner` role when a person is needed |
 | `repo_setup` | preparing a target repo, non-destructively |

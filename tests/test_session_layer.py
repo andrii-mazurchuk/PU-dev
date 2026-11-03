@@ -74,7 +74,7 @@ def test_a_sop_without_a_description_is_broken(tmp_path):
 
 def test_the_session_types_are_discovered():
     found = session_types.discover(UNIT_ROOT / "session_types")
-    assert set(found) == {"research", "execution", "ask"}
+    assert set(found) == {"research", "execution"}
 
 
 def test_every_selectable_type_has_a_tool_grant():
@@ -82,24 +82,11 @@ def test_every_selectable_type_has_a_tool_grant():
     permission prompt nobody is there to answer.
 
     Scoped to the types the pipeline can select, which is what the rule
-    was always about. `ask` is deliberately outside it -- it is granted
-    nothing, needs nothing, and cannot stall the queue because nothing can
-    put it on the queue. It is protected instead by a runner that gives
-    up, since the thing it *can* stall is its own lock."""
+    was always about."""
     for name, stype in session_types.discover(UNIT_ROOT / "session_types").items():
         if name not in records.SESSION_TYPE_FOR_KIND.values():
             continue
         assert stype.allowed_tools, name
-
-
-def test_ask_is_granted_nothing_and_cannot_be_selected():
-    """Both halves of what keeps this type narrow. A kind mapped to it
-    would make it reachable by writing a task; a grant would hand a
-    session driven by untrusted text a filesystem."""
-    found = session_types.discover(UNIT_ROOT / "session_types")
-    assert found["ask"].allowed_tools is None
-    assert not found["ask"].reaches_peers
-    assert "ask" not in records.SESSION_TYPE_FOR_KIND.values()
 
 
 def test_research_may_not_write_files():

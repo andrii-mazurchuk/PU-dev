@@ -209,7 +209,7 @@ type ApiTick = { at: string; ran: boolean; reason?: string; session_type?: strin
 type ApiSpend = { periods: { period: string; cost_usd: number }[]; total_usd: number }
 
 // ---- adapting them to what the pages read -----------------------------------------------------------------
-const BUILTINS = ["ask", "execution", "intake", "research"]
+const BUILTINS = ["execution", "research"]
 const DEFAULT_FOR_KIND: Record<string, string> = { execution: "execution", research: "research" }
 const isoDay = (back: number) => new Date(Date.now() - back * 864e5).toISOString().slice(0, 10)
 const pad = (n: number) => String(n).padStart(2, "0")

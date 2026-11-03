@@ -112,29 +112,12 @@ GRANTS: dict[str, Grant] = {
 # directory maps express it as *absence from the map* -- and those are not
 # the same thing downstream. An absent entry means `runner.build_argv`
 # emits no `--allowedTools` at all, which is not "zero tools"; an empty
-# string would emit `--allowedTools ""`. `ask` is the only type on that
-# path today. Settle which of the two actually denies everything before
-# making these maps derive from GRANTS, or the migration quietly changes
-# what the one untrusted-input session is allowed to do.
+# string would emit `--allowedTools ""`. Settle which of the two actually
+# denies everything before making these maps derive from GRANTS.
 GRANT_FOR_DIRECTORY_TYPE: dict[str, str] = {
-    "ask": "none",
     "research": "web",
     "execution": "repo",
 }
-
-# `ask` is absent from all three maps below, and from
-# records.SESSION_TYPE_FOR_KIND, and every one of those absences is
-# deliberate rather than pending.
-#
-# It answers a question typed into the dashboard from an unauthenticated
-# origin, using state assembled into its prompt. It gets **no tools**:
-# sessions this unit spawns have no way back into it, and this one needs
-# nothing the prompt does not already carry. Granting it `Read` would buy
-# nothing and would hand a session driven by untrusted text a filesystem.
-#
-# Having no kind mapped to it is what keeps it off the queue entirely --
-# there is no record anyone can write that causes an ask session to run.
-# The only path to one is `POST /ask`.
 
 # Absent means "whatever the CLI defaults to". Only set a model where the
 # work genuinely differs in reasoning load.
@@ -148,15 +131,13 @@ MODELS: dict[str, str] = {}
 RUNS_IN_TARGET_REPO = frozenset({"execution"})
 
 # Every session the queue runs reaches holonic MCP, whatever its grant;
-# grants are local tools only (pu vision, 2026-10-24). The one exception is
-# `ask`, which answers untrusted text typed into the dashboard and gets
-# nothing at all -- it never comes through the queue, so it is excluded by
-# name here as a second guard.
+# grants are local tools only (pu vision, 2026-10-24). A type named here
+# would be refused the bridge; none is, since `ask` was removed.
 #
 # ponytail: holonic is hard-coded onto every session. Remove the hard-coding
 # once the bridge scopes tools per agent role and holonic can be one entry
 # in the MCP registry like any other server.
-NO_PEER_REACH = frozenset({"ask"})
+NO_PEER_REACH: frozenset[str] = frozenset()
 
 
 # The role every session runs under unless its type names another. An
@@ -280,9 +261,7 @@ def discover(session_types_dir: Path, store=None) -> dict[str, SessionType]:
     **The four committed directories stay the source for themselves** and
     the store adds runtime-authored types beside them. That is the
     migration decision rather than a halfway state: turning the four into
-    records would mean first deciding what "no tools" actually denies, and
-    `ask` -- the one session driven by untrusted text from an
-    unauthenticated origin -- is the only type on that path.
+    records would mean first deciding what "no tools" actually denies.
 
     A directory wins over a record of the same name. Such a record is
     refused at the store, so this is defence in depth rather than the real
