@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from pu import (
@@ -440,9 +441,14 @@ def needs_attention(store: taskstore.TaskStore, type_store=None,
     """Everything waiting on a person, kept in two groups on purpose: work
     that is theirs by design, and faults that were escalated as they
     happened and are collected here so there is one place to look."""
+    now = datetime.now(timezone.utc)
+
     def row(t):
+        entered = guards.parse_started_at(t.entry)
         return {"uuid": t.uuid, "title": t.description[:80],
-                "kind": t.kind, "project": t.project}
+                "kind": t.kind, "project": t.project,
+                "entered_at": entered.isoformat() if entered else None,
+                "age_seconds": int((now - entered).total_seconds()) if entered else None}
 
     human_kinds = {"grilling", "prototype"}
     frontier_hitl = [row(t) for t in store.ready(*_hide_runs(None))

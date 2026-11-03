@@ -431,7 +431,7 @@ TOOLS = [
     },
     {
         "name": "needs_attention",
-        "description": "Everything waiting on a person, in two groups. waiting_on_you: open grilling and prototype tickets on the frontier, tasks pu handed to a person (tagged needs_human), and session types or triggers written but never activated. faults: stale run claims and placement faults -- each was also notified when it appeared.",
+        "description": "Everything waiting on a person, in two groups. waiting_on_you: open grilling and prototype tickets on the frontier, tasks pu handed to a person (tagged needs_human), and session types or triggers written but never activated. faults: stale run claims and placement faults -- each was also notified when it appeared. Every task row carries entered_at (ISO, UTC) and age_seconds.",
         "method": "GET",
         "path": "/attention",
         "input_schema": {"type": "object", "properties": {}},
