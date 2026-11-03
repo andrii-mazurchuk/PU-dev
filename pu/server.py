@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pu import (
-    ask, bodies, control, docs, logs_client, mcpstore, pipeline,
+    bodies, control, docs, logs_client, mcpstore, pipeline,
     stats as stats_mod, records, service, session_types, sops,
     taskstore, triggers, typestore,
 )
@@ -196,26 +196,6 @@ TOOLS = [
                 "body": {"type": "string"},
             },
             "required": ["uuid", "body"],
-        },
-    },
-    {
-        # Declared, and therefore callable by every peer and every MCP
-        # client that can reach the bridge -- not only by the dashboard
-        # panel that wanted it. That widening was decided on its own
-        # merits; see DECISIONS.md.
-        "name": "ask_unit",
-        "description": "Ask this unit a question about its own queue, gates and recent sessions. Starts a session and returns at once with an id; poll GET /ask/{id} for the answer. Single-turn: each question carries its own context and knows nothing of the last. Spends money, and is refused rather than queued when the cost or account-usage gates are blocking.",
-        "method": "POST",
-        "path": "/ask",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "a question about this unit's current state",
-                },
-            },
-            "required": ["question"],
         },
     },
     {
@@ -641,7 +621,6 @@ def make_handler(
     unit_root: Path,
     session_store=None,
     tick=None,
-    ask_store=None,
     type_store=None,
     trigger_store=None,
     state_dir=None,
@@ -858,15 +837,6 @@ def make_handler(
                     found = session_store.run(parts[1], parts[2])
                     return self._json(200, found) if found else self._not_found()
 
-                if len(parts) == 2 and parts[0] == "ask":
-                    # The poll half of the ask panel. A GET, so it comes
-                    # through the node's read proxy like every other
-                    # source; the submit half is a tool call.
-                    if ask_store is None:
-                        return self._not_found()
-                    found = ask_store.read(parts[1])
-                    return self._json(200, found) if found else self._not_found()
-
                 if parts == ["tools"]:
                     return self._json(200, {"unit": UNIT_NAME, "tools": TOOLS})
 
@@ -1028,31 +998,6 @@ def make_handler(
                                                 "reason": "no pipeline wired"})
                     return self._json(200, tick())
 
-                if parts == ["ask"]:
-                    if ask_store is None or session_store is None:
-                        return self._json(503, {"error": "no session layer wired"})
-                    gate = self._gate()
-                    ask_id = ask.submit(
-                        ask_store,
-                        question=payload.get("question") or "",
-                        context=ask.build_context(
-                            gate=gate,
-                            stats=service.stats(store, body_store),
-                            queue=service.queue(store),
-                            frontier=service.frontier(store),
-                            projects=service.list_projects(store),
-                            runs=session_store.runs(limit=10),
-                        ),
-                        instructions=(unit_root / "session_types" / "ask"
-                                      / "CLAUDE.md").read_text(encoding="utf-8"),
-                        cwd=unit_root / "session_types" / "ask",
-                        # Blocked does not queue and does not raise: the
-                        # record is written already in error, and the poll
-                        # reports it. One submit shape, whatever happened.
-                        gate_reason=gate.get("reason", ""),
-                    )
-                    return self._json(202, {"id": ask_id})
-
                 if (len(parts) == 3 and parts[2] == "edit"
                         and parts[0] in ("triggers", "session-types")):
                     if parts[0] == "triggers":
@@ -1169,7 +1114,6 @@ def build_server(
     unit_root: Path | None = None,
     session_store=None,
     tick=None,
-    ask_store=None,
     type_store=None,
     trigger_store=None,
     state_dir=None,
@@ -1179,7 +1123,7 @@ def build_server(
         make_handler(
             store, body_store, prompts_dir,
             Path(unit_root) if unit_root else Path("."),
-            session_store, tick, ask_store, type_store, trigger_store,
+            session_store, tick, type_store, trigger_store,
             Path(state_dir) if state_dir else None,
         ),
     )

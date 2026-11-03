@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Sequence
 
 from pu import (
-    ask, bodies, notify, pipeline, server, sessions, taskstore, triggers,
+    bodies, notify, pipeline, server, sessions, taskstore, triggers,
     typestore,
 )
 
@@ -159,7 +159,6 @@ def main() -> None:
     store = taskstore.TaskStore(data_location=taskdata, base_cmd=base_cmd)
     body_store = bodies.BodyStore(state / "bodies")
     session_store = sessions.SessionStore(state / "sessions")
-    ask_store = ask.AskStore(state / "asks")
     # Runtime-authored session types live in private storage, not in
     # this repo -- the four committed directories are still read from
     # `unit_root/session_types` until the migration unifies them.
@@ -212,7 +211,7 @@ def main() -> None:
     httpd = server.build_server(
         args.host, args.port, store, body_store, Path(args.prompts_dir),
         unit_root=unit_root, session_store=session_store, tick=tick,
-        ask_store=ask_store, type_store=type_store,
+        type_store=type_store,
         trigger_store=trigger_store, state_dir=state,
     )
     # flush: stdout is a pipe whenever the gateway or a shell redirects it,

@@ -422,34 +422,6 @@ Daily cost, oldest first. `days` (default 14, max 90). Quiet days are
 present as zero rather than omitted: a series that skips them renders as
 continuous work.
 
-## `POST /ask` → `202`
-
-Ask this unit a question. Returns at once, before the session runs.
-
-```json
-{ "question": "why has nothing run today?" }
-```
-
-The response is **exactly** `{"id": "..."}` whatever happened -- a fixed
-shape, so a caller has one path to render rather than two. A blocked
-gate, an empty question and an over-long one all produce an id whose
-record is already `error`.
-
-Spends money. Refused rather than queued when either gate is blocking.
-One question runs at a time for the whole unit.
-
-## `GET /ask/{id}`
-
-```json
-{ "status": "running" | "done" | "error",
-  "question": "...", "answer": "...", "error": "", "cost_usd": 0.031,
-  "at": "2026-09-10T14:22:01+00:00" }
-```
-
-`running` continues; `done` and `error` are terminal. `answer` is model
-output derived from task descriptions and bodies that other agents and
-`POST /tickets` wrote -- **render it as escaped text, never as markup.**
-
 ## `POST /trigger` → `200`
 
 One tick: gate, select, claim, run, record. Declared as the `run_tick`

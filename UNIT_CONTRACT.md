@@ -75,13 +75,7 @@ file and that one disagree, that one is right and this one is the bug.
   unit's data, and assumes nothing about its own port being reachable.
 - **Its dashboard is read-only, and the proxy enforces that rather than
   the page promising it.** The node forwards GET and refuses everything
-  else with 405. The `ask` panel is present as layout and submits
-  nothing; wiring it needs a write path through the bridge, never a
-  private endpoint the dashboard alone knows about.
-- **An ask session is granted no tools.** Sessions this unit spawns have
-  no way back into it, and this one answers from context assembled going
-  in. It has no kind mapped to it, so nothing anyone can write to the
-  store causes one to run.
+  else with 405.
 - **It declares `run_tick`.** `POST /trigger` is a tool, so any peer or
   MCP client that reaches the bridge can spend a session by name. That
   widening was decided on its own merits, not as a side effect of a

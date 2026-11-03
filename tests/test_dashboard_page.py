@@ -21,7 +21,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from pu import ask, server, sessions, triggers, typestore
+from pu import server, sessions, triggers, typestore
 
 UNIT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = UNIT_ROOT / "prompts"
@@ -218,7 +218,6 @@ def base(store, body_store, tmp_path):
         "127.0.0.1", 0, store, body_store, PROMPTS_DIR,
         unit_root=UNIT_ROOT,
         session_store=sessions.SessionStore(tmp_path / "sessions"),
-        ask_store=ask.AskStore(tmp_path / "asks"),
         # Wired as main wires them: the page reads every one of these.
         type_store=typestore.TypeStore(tmp_path),
         trigger_store=triggers.TriggerStore(tmp_path),
