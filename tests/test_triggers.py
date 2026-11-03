@@ -660,6 +660,23 @@ def test_a_dry_run_that_does_not_fire_previews_no_task(tmp_path, monkeypatch):
     assert result["fetched"] == 1 and result["matched_total"] == 0
 
 
+def test_a_dry_run_previews_a_schedule_and_its_priority(tmp_path):
+    """A schedule carries no payload, so what it will create does not
+    depend on whether it is due this minute -- preview it anyway."""
+    from pu import service
+
+    draft = a_trigger(
+        name="morning",
+        source={"kind": "schedule", "cron": "0 7 * * *", "tz": "Europe/Warsaw"},
+        emits={"kind": "research", "title": "Morning brief", "priority": "high"})
+    result = service.dry_run_trigger(triggers.TriggerStore(tmp_path), draft)
+
+    created = result["would_create"]
+    assert created["title"] == "Morning brief"
+    assert created["priority"] == "high"
+    assert "None. This is a schedule" in created["body"]
+
+
 def test_a_dry_run_states_a_failed_fetch_rather_than_an_empty_source(
         tmp_path, monkeypatch):
     """`ok` false, and the reason says so. An empty source and an

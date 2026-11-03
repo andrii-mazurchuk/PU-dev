@@ -869,7 +869,9 @@ def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
 
     emits = record.get("emits") or {}
     would_create = None
-    if evaluation.fired and emits:
+    # A schedule carries no payload, so what it creates does not depend on
+    # whether it is due this minute: previewed either way.
+    if emits and (evaluation.fired or source["kind"] == "schedule"):
         tags = list(emits.get("tags") or ())
         if emits.get("afk"):
             tags.append(records.AFK_TAG)
@@ -880,6 +882,7 @@ def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
             "kind": emits["kind"],
             "tags": tags,
             "project": emits.get("project") or records.RUNS_PROJECT,
+            "priority": emits.get("priority"),
             "body": pipeline.payload_body(record, evaluation),
         }
 
