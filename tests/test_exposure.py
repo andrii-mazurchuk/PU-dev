@@ -75,3 +75,13 @@ def test_spend_totals_by_week_with_empty_weeks_as_zero(tmp_path):
     assert got["total_usd"] == 2.5
     assert len(store.cost_by_period("month", None, today)["periods"]) == 6
     assert len(store.cost_by_period("day", "2026-10-01", "2026-10-07")["periods"]) == 7
+
+
+def test_write_trigger_schema_documents_cron_priority_and_staleness():
+    [tool] = [t for t in server.TOOLS if t["name"] == "write_trigger"]
+    props = tool["input_schema"]["properties"]
+    assert {"cron", "tz"} <= set(props["source"]["properties"])
+    emits = props["emits"]["properties"]
+    assert {"priority", "stale_after_seconds"} <= set(emits)
+    assert "3600" in emits["stale_after_seconds"]["description"]
+    assert "{" in emits["title"]["description"]
