@@ -917,3 +917,22 @@ def test_a_retired_name_can_be_taken_again(tmp_path):
     assert [t["name"] for t in service.list_triggers(store)["triggers"]] \
         == ["posts"]
     assert store.cursor("posts")["seen"] == ["a"]
+
+
+def test_a_fetch_names_itself_rather_than_sending_pythons_default_agent(monkeypatch):
+    """RemoteOK, Remotive and justjoin.it answer Python-urllib with 403."""
+    seen = {}
+
+    class Response:
+        status = 200
+        def read(self): return b"[]"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(request, timeout):
+        seen["agent"] = request.get_header("User-agent")
+        return Response()
+
+    monkeypatch.setattr(triggers.urllib.request, "urlopen", fake_urlopen)
+    assert triggers.http_fetch("https://example.test/feed")[0] == 200
+    assert seen["agent"] and "Python-urllib" not in seen["agent"]

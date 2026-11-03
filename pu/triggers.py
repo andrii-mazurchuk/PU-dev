@@ -362,11 +362,17 @@ def cron_due(source: dict[str, Any], cursor: dict[str, Any],
 # -- reading a source -----------------------------------------------------
 
 
+# Python's default `Python-urllib/x.y` is refused with 403 by several job
+# boards (RemoteOK, Remotive, justjoin.it).
+USER_AGENT = "Mozilla/5.0 (compatible; pu/0.1; holonic-node)"
+
+
 def http_fetch(url: str, timeout: float = 10.0) -> tuple:
     """`(status, body)`, plus a third element -- the `Retry-After` header --
     when the source refused. A fetch callable may return just the pair."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as exc:
         return exc.code, b"", (exc.headers or {}).get("Retry-After")
