@@ -964,3 +964,48 @@ def test_a_revision_is_stored_with_enabled_stated(tmp_path):
     service.write_trigger(trigger_store, draft)
     service.write_trigger(trigger_store, dict(draft, purpose="revised"))
     assert trigger_store.current()["posts"]["enabled"] is False
+
+
+# -- the event log --------------------------------------------------------
+
+
+def test_every_fetch_is_one_event_line_quiet_fires_and_errors(
+        store, body_store, tmp_path):
+    """The tick log collapses repeats and knows only fires and errors; the
+    event log is one line per fetch, so a quiet fetch is visible too."""
+    from pu import pipeline
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    trigger_store.append(emitting(predicate=[["level", "==", "error"]]))
+    pipeline.emit_due_work(trigger_store, store, body_store, now=at(),
+                           fetch=json_source([{"id": "a", "level": "info"}]))
+    pipeline.emit_due_work(trigger_store, store, body_store, now=at(400),
+                           fetch=json_source([{"id": "a", "level": "info"},
+                                              {"id": "b", "level": "error"}]))
+    pipeline.emit_due_work(trigger_store, store, body_store, now=at(800),
+                           fetch=lambda url: (503, b"", "600"))
+
+    error, fire, quiet = trigger_store.events("posts")
+    assert (quiet["status"], quiet["items"], quiet["fresh"], quiet["matched"],
+            quiet["fired"], quiet["task_uuid"], quiet["error"]) \
+        == (200, 1, 1, 0, False, None, None)
+    assert (fire["items"], fire["fresh"], fire["matched"], fire["fired"]) \
+        == (2, 1, 1, True)
+    assert store.get(fire["task_uuid"]) is not None
+    assert error["status"] == 503 and error["error"] and error["backoff_until"]
+    assert set(quiet) == {"at", "trigger", "status", "items", "fresh", "matched",
+                          "fired", "task_uuid", "error", "backoff_until"}
+
+    assert [e["at"] for e in trigger_store.events("posts", limit=1)] == [error["at"]]
+    assert trigger_store.events("posts", since=fire["at"]) == [error]
+    assert trigger_store.events("other") == []
+
+
+def test_the_event_log_is_trimmed_by_line_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(triggers, "MAX_EVENT_LINES", 5)
+    monkeypatch.setattr(triggers, "KEEP_EVENT_LINES", 3)
+    trigger_store = triggers.TriggerStore(tmp_path)
+    for n in range(6):
+        trigger_store.note_event({"at": f"2026-11-04T00:00:0{n}+00:00",
+                                  "trigger": "posts"})
+    assert len(trigger_store.events("posts")) == 4

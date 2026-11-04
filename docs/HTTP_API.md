@@ -442,6 +442,7 @@ which is authoritative; this section only maps the routes.
 | `POST /triggers` | `write_trigger` | the record as written, under the same activation rules |
 | `POST /triggers/{name}/rename` | `rename_trigger` | the cursor moves with it |
 | `POST /triggers/dry-run` | `dry_run_trigger` | `ok`, `fetched`, `fresh`, `matched`, `fired`, `would_create` (title, kind, tags, project, priority, body; always shown for a schedule). Writes nothing |
+| `GET /triggers/{name}/events` | `list_trigger_events` | `{"events": [...]}`, newest first; `since` (ISO, exclusive), `limit` (default 50, max 500). One line per fetch attempt and per schedule fire: `at`, `trigger`, `status`, `items`, `fresh`, `matched`, `fired`, `task_uuid`, `error`, `backoff_until`. Kept in `state/trigger_events.jsonl`, trimmed by line count (20,000 → 16,000) like `ticks.jsonl`. `404` for an unknown trigger |
 | `GET /mcp-servers` | `list_mcp_servers` | `{"mcp_servers": [...]}`; holonic is not listed, it is on every session |
 | `POST /mcp-servers` | `write_mcp_server` | http only; header values must be `${ENV_VAR}` placeholders |
 

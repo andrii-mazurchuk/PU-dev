@@ -112,6 +112,7 @@ export const TOKEN_RUNS = { withTokens: 6, total: 8 }
 export const TRIGGER_LOG: [string, string, string, string, string][] = [
   ["10-31 07:00", "morning-0700", "fired", "1 task · Morning brief 2026-10-31", ""],
   ["10-31 06:00", "hn-front-page", "fetched · 3 new · fired", "1 task · HN: 3 new items", ""],
+  ["10-31 05:45", "hn-front-page", "fetched · 30 items · 0 new", "—", ""],
   ["10-31 05:30", "arxiv-cs-ai", "fetch failed", "—", "HTTP 503 · backing off until 14:00"],
   ["10-31 05:19", "arxiv-cs-ai", "fetched · 4 new · fired", "1 task · arXiv cs.AI digest", ""],
 ]

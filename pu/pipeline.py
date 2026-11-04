@@ -1210,7 +1210,7 @@ def emit_due_work(
         if not due:
             continue
         attempt: dict[str, Any] = {}
-        fired_items = None
+        fired_items = task_uuid = None
 
         def recording(url, _fetch=fetch or triggers.http_fetch,
                       _attempt=attempt):
@@ -1228,6 +1228,9 @@ def emit_due_work(
             # tick. Notify on the transition into broken -- the usage gate's
             # pattern -- once anything depends on a watch staying up.
             emitted.append({"trigger": name, "error": str(exc)})
+            trigger_store.note_event(triggers.fetch_event(
+                name, moment, attempt.get("status"), cursor, None,
+                error=str(exc)))
             continue
 
         if evaluation.fired and trigger.get("emits"):
@@ -1273,7 +1276,7 @@ def emit_due_work(
             body_store.set(uuid, body)
             emitted.append({"trigger": name, "task_uuid": uuid,
                             "items": len(evaluation.items)})
-            fired_items = len(evaluation.items)
+            fired_items, task_uuid = len(evaluation.items), uuid
         elif evaluation.fired:
             # Fired with nothing to emit. Recorded rather than silent: a
             # trigger with no `emits` is almost certainly half-written, and
@@ -1309,6 +1312,10 @@ def emit_due_work(
                     f"fetching {trigger['source'].get('url')} did not succeed "
                     f"(status {attempt['status']})",
                     detail={"status": attempt["status"]})
+        if "status" in attempt or evaluation.fired:
+            trigger_store.note_event(triggers.fetch_event(
+                name, moment, attempt.get("status"), cursor, evaluation,
+                updated, task_uuid))
         if updated != cursor:
             trigger_store.save_cursor(name, updated)
     return tuple(emitted)

@@ -702,6 +702,25 @@ def test_activating_a_trigger_tells_the_owner_that_it_will_spend(
     assert "will spend" in sent[0]
 
 
+def test_a_triggers_events_are_served_newest_first(base_url, tmp_path):
+    post(f"{base_url}/triggers", {
+        "name": "feed", "source": {"kind": "http-json", "url": "http://x/"}})
+    store = triggers.TriggerStore(tmp_path)
+    for n in range(3):
+        store.note_event({"at": f"2026-11-04T00:00:0{n}+00:00", "trigger": "feed"})
+    store.note_event({"at": "2026-11-04T00:00:09+00:00", "trigger": "other"})
+
+    _, got = get(f"{base_url}/triggers/feed/events", limit=2)
+    assert [e["at"][-10:-6] for e in got["events"]] == ["0:02", "0:01"]
+    _, got = get(f"{base_url}/triggers/feed/events",
+                 since="2026-11-04T00:00:00+00:00")
+    assert len(got["events"]) == 2
+    with pytest.raises(HTTPError) as excinfo:
+        get(f"{base_url}/triggers/nope/events")
+    assert excinfo.value.code == 404
+    assert "list_trigger_events" in {t["name"] for t in server.TOOLS}
+
+
 def test_the_dry_run_route_previews_without_writing(base_url):
     """A read dressed as a POST. It has to answer, and the store has to be
     untouched afterwards -- otherwise pressing Test is a write."""

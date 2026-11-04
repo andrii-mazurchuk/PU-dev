@@ -116,7 +116,10 @@ export async function poll() {
       json<ApiSpend>("spend?by=day&from=" + isoDay(6)), json<ApiSpend>("spend?by=day&from=" + isoDay(29)), json<ApiSpend>("spend?by=week"),
       loadTasks(scope),
     ])
-    last = { projects: projects.projects, attention, types: types.session_types, triggers: triggers.triggers, runs: runs.sessions, running: running.running, ticks: ticks.ticks, mcp: mcp.mcp_servers, day, month30, week, tasks, scope }
+    // One read per live trigger: pu serves the event log per trigger.
+    const events = (await Promise.all(triggers.triggers.filter(g => !g.retired).map(g =>
+      json<{ events: ApiEvent[] }>(`triggers/${encodeURIComponent(g.name)}/events?limit=20`)))).flatMap(r => r.events)
+    last = { projects: projects.projects, attention, types: types.session_types, triggers: triggers.triggers, runs: runs.sessions, running: running.running, ticks: ticks.ticks, events, mcp: mcp.mcp_servers, day, month30, week, tasks, scope }
     apply({ ...last, m: metrics })
     CONN = { mode: "live", failures: 0, lastGood: Date.now() }
     delay = POLL_MS
@@ -207,6 +210,7 @@ type ApiMetrics = { gate?: { blocked?: boolean; paused?: boolean; reason?: strin
 type ApiRunning = { task_uuid: string; session_type?: string; elapsed_seconds?: number | null }
 type ApiTick = { at: string; ran: boolean; reason?: string; session_type?: string | null; emitted?: { trigger: string; task_uuid?: string; items?: number; error?: string; fired?: boolean }[] }
 type ApiSpend = { periods: { period: string; cost_usd: number }[]; total_usd: number }
+export type ApiEvent = { at: string; trigger: string; status: number | null; items: number; fresh: number; matched: number; fired: boolean; task_uuid: string | null; error: string | null; backoff_until: string | null }
 
 // ---- adapting them to what the pages read -----------------------------------------------------------------
 const BUILTINS = ["execution", "research"]
@@ -215,6 +219,14 @@ const isoDay = (back: number) => new Date(Date.now() - back * 864e5).toISOString
 const pad = (n: number) => String(n).padStart(2, "0")
 const at = (iso?: string | null) => { if (!iso) return ""; const d = new Date(iso); return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}` }
 const hm = (iso?: string | null) => (iso ? at(iso).slice(6) : "")
+
+/** pu's trigger event log as the Analytics table's rows, newest first: quiet fetches, fires and errors. */
+export const triggerLog = (events: ApiEvent[]) => [...events].sort((a, b) => b.at.localeCompare(a.at)).map(e => [
+  at(e.at), e.trigger,
+  e.error ? "fetch failed" : e.status == null ? "fired" : `fetched · ${e.fired ? `${e.fresh} new · fired` : `${e.items} items · ${e.fresh} new`}`,
+  e.task_uuid ? `1 task · ${e.matched} items` : "—",
+  e.error ? (e.backoff_until ? `${e.error} · backing off until ${hm(e.backoff_until)}` : e.error) : "",
+] as [string, string, string, string, string])
 const dur = (ms?: number | null) => { if (ms == null) return "—"; const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}m ${pad(s % 60)}s` }
 const kilo = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
 const q = (xs: number[], p: number) => { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))] }
@@ -237,7 +249,7 @@ function parseReport(text?: string) {
   return { outcome: field("OUTCOME"), needsHuman: field("NEEDS HUMAN"), goal: field("GOAL"), actions: field("ACTIONS"), reasoning: field("REASONING"), evidence: field("EVIDENCE"), text }
 }
 
-type Input = { projects: ApiProject[]; attention: ApiAttention; types: ApiType[]; triggers: ApiTrigger[]; runs: ApiRun[]; m: ApiMetrics; running: ApiRunning[]; ticks: ApiTick[]; mcp: { name: string }[]; day: ApiSpend; month30: ApiSpend; week: ApiSpend; tasks: ApiTask[]; scope: string }
+type Input = { projects: ApiProject[]; attention: ApiAttention; types: ApiType[]; triggers: ApiTrigger[]; runs: ApiRun[]; m: ApiMetrics; running: ApiRunning[]; ticks: ApiTick[]; events: ApiEvent[]; mcp: { name: string }[]; day: ApiSpend; month30: ApiSpend; week: ApiSpend; tasks: ApiTask[]; scope: string }
 function apply(d: Input) {
   const now = Date.now(), week = d.runs.filter(r => now - Date.parse(r.recorded_at) < 7 * 864e5)
 
@@ -367,7 +379,7 @@ function apply(d: Input) {
   const series = (s: ApiSpend, cut = 5) => s.periods.map(p => [p.period.slice(cut), +p.cost_usd.toFixed(2)] as Pair)
   DAYS = series(d.day)
   SPEND = { Today: hours.map(([h, v]) => [h, +v.toFixed(2)]), "7 days": DAYS, "30 days": series(d.month30), All: series(d.week, 0) }
-  TRIGGER_LOG = d.ticks.flatMap(t => (t.emitted ?? []).map(e => [at(t.at), e.trigger, e.error ? "error" : "fired", e.task_uuid ? `1 task · ${e.items ?? 0} items` : "—", e.error ?? ""] as [string, string, string, string, string]))
+  TRIGGER_LOG = triggerLog(d.events)
 
   // status, controls and health
   const g = d.m.gate ?? {}
