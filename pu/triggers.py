@@ -616,6 +616,7 @@ class TriggerStore:
         self.root = Path(root)
         self.log = self.root / "triggers.jsonl"
         self.cursors_path = self.root / "cursors.json"
+        self.events_path = self.root / "trigger_events.jsonl"
 
     # -- config ----------------------------------------------------------
 
@@ -664,6 +665,74 @@ class TriggerStore:
             json.dumps(state, indent=1, sort_keys=True),
             encoding="utf-8", newline="\n")
         temporary.replace(self.cursors_path)
+
+    # -- the event log ---------------------------------------------------
+
+    def note_event(self, event: dict[str, Any]) -> None:
+        """One line per fetch attempt. Best-effort: losing a line must
+        never fail a tick."""
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            try:
+                lines = self.events_path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                lines = []
+            if len(lines) >= MAX_EVENT_LINES:
+                self.events_path.write_text(
+                    "\n".join(lines[-KEEP_EVENT_LINES:]) + "\n",
+                    encoding="utf-8", newline="\n")
+            jsonl.append(self.events_path, event)
+        except OSError:
+            pass
+
+    def events(self, name: str, since: str | None = None,
+               limit: int = 50) -> list[dict[str, Any]]:
+        """This trigger's events, newest first; `since` is exclusive."""
+        out: list[dict[str, Any]] = []
+        try:
+            lines = self.events_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return out
+        for line in reversed(lines):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("trigger") != name:
+                continue
+            if since and str(event.get("at") or "") <= since:
+                break
+            out.append(event)
+            if len(out) >= limit:
+                break
+        return out
+
+
+# ponytail: trimmed by line count on write, like ticks.jsonl -- not by age.
+# Move to dated files if a busy node outgrows it.
+MAX_EVENT_LINES = 20000
+KEEP_EVENT_LINES = 16000
+
+
+def fetch_event(name: str, moment: datetime, status: int | None,
+                cursor: dict[str, Any], evaluation: Evaluation | None,
+                updated: dict[str, Any] | None = None,
+                task_uuid: str | None = None,
+                error: str | None = None) -> dict[str, Any]:
+    """The event-log line for one attempt. A failed fetch does not advance,
+    so its reason is the error."""
+    seen = set(cursor.get("seen") or ())
+    if evaluation is not None and not evaluation.advance:
+        error = error or evaluation.reason
+    return {
+        "at": moment.isoformat(), "trigger": name, "status": status,
+        "items": len(evaluation.seen_ids) if evaluation else 0,
+        "fresh": (len(set(evaluation.seen_ids) - seen) if evaluation else 0),
+        "matched": len(evaluation.items) if evaluation else 0,
+        "fired": bool(evaluation and evaluation.fired),
+        "task_uuid": task_uuid, "error": error,
+        "backoff_until": (updated or cursor).get("backoff_until"),
+    }
 
 
 def evaluate(trigger: dict[str, Any], cursor: dict[str, Any],

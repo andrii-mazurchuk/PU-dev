@@ -452,11 +452,11 @@ function Analytics() {
       </Panel>
       <Panel data-block="trigger-log" title="Trigger log">
         <Table><TableHeader className={HEAD}><TableRow>{["When", "Trigger", "Event", "Created", "Error · backoff"].map(h => <TableHead key={h}>{h}</TableHead>)}</TableRow></TableHeader>
-          <TableBody>{F.TRIGGER_LOG.map(([w, n, e, c, x]) => <TableRow key={w + n} className={tinted(x ? "failed" : e)}>
+          <TableBody>{F.TRIGGER_LOG.map(([w, n, e, c, x], i) => <TableRow key={w + n + i} className={tinted(x ? "failed" : e)}>
             <TableCell className="tabular-nums text-muted-foreground">{w}</TableCell><TableCell className={NAME}><a href={`#/trigger?name=${n}`} className={link}>{n}</a></TableCell>
             <TableCell><span className="flex items-center gap-2"><Dot tone={x ? "down" : TONE(e)} />{e}</span></TableCell><TableCell>{c}</TableCell>
             <TableCell className={x ? "font-medium text-foreground" : "text-muted-foreground"}>{x || "—"}</TableCell></TableRow>)}</TableBody></Table>
-        <p className="m-0 text-xs text-muted-foreground">Today pu records only fires and errors; quiet fetches need pu's trigger event log (pu work).</p>
+        <p className="m-0 text-xs text-muted-foreground">One line per fetch, quiet ones included, from pu's trigger event log (last 20 per trigger).</p>
       </Panel>
     </Page>
   )

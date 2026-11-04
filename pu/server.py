@@ -269,6 +269,21 @@ TOOLS = [
         },
     },
     {
+        "name": "list_trigger_events",
+        "description": "A trigger's event log, newest first: one line per fetch attempt (and per schedule fire) with at, status, items, fresh, matched, fired, task_uuid, error and backoff_until. Unlike the tick log it records quiet fetches too, so a watch that is reading its source but never matching is visible.",
+        "method": "GET",
+        "path": "/triggers/{name}/events",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "since": {"type": "string", "description": "ISO time; only events after it"},
+                "limit": {"type": "integer", "description": "default 50, max 500"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "write_trigger",
         "description": "Write a trigger. One call for create and update: `name` is the identity and the store is append-only, so writing an existing name adds a revision. A trigger is **created inactive** whatever `enabled` says, and **editing a live one switches it off** -- an edit can change what it watches or what it creates. A write touching only `enabled` is the activation path. `source.kind` is http-json, rss, or schedule; a schedule fetches nothing and takes no predicate, its interval is the whole condition. The predicate is a flat ANDed list of [field, operator, value]; fields are count_since_fire, age_since_last_seen, or a dotted path into one fetched item. `emits` is the task a firing creates, and `emits.afk` true means an agent may run it alone -- which is what makes a trigger spend money unattended. `emits.priority` (high, medium, low; default medium) orders pu's queue -- high for runs meant for a specific time, like a morning brief; low for work that may run any time in a window. `emits.stale_after_seconds` closes the task as expired, and tells the owner, if no session has started it by then; a started run is never cut off. Every firing creates its own task, even while an earlier one from the same trigger is still open.",
         "method": "POST",
@@ -730,6 +745,11 @@ def make_handler(
                     elif parts[2] == "cursor":
                         record = service.get_trigger_cursor(
                             trigger_store, name)
+                    elif parts[2] == "events":
+                        record = service.get_trigger(trigger_store, name) and {
+                            "events": trigger_store.events(
+                                name, one("since") or None,
+                                min(max(int(one("limit") or 50), 1), 500))}
                     else:
                         return self._not_found()
                     if record is None:
