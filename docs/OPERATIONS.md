@@ -233,8 +233,9 @@ Stated so nobody has to rediscover them:
 - **No GitHub mirror.** Nothing populates `url`, so a task is always its
   own authority and no external issue is tracked. `repo` is set by hand
   (`task add ... repo:<path>`); that is the designed path, not a gap.
-- **`MODELS` is empty** (`pu/session_types.py:59`). Every session type
-  uses whatever the CLI defaults to.
+- **`MODELS` is empty** (`pu/session_types.py`), so the committed
+  directory types use whatever the CLI defaults to. A runtime-authored
+  type sets its own `model` on its record.
 - **`delivery_policy.json` is still never read here** — and now does not
   need to be. Role resolution happens at the bridge, so pu addresses
   `owner` and the bridge reads the policy. The file remains inert in this

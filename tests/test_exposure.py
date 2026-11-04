@@ -54,6 +54,16 @@ def test_needs_attention_keeps_human_work_and_faults_apart(store, tmp_path):
     assert [r["title"] for r in got["faults"]["mapless"]] == ["loose"]
 
 
+def test_needs_attention_rows_carry_entry_time_and_age(store):
+    """A morning brief ranking what waits on a person needs each item's age;
+    without it both live runs ended needs_human."""
+    m = store.add("a map", kind="map", project="hub")
+    store.add("decide it", kind="grilling", project="hub", parent_uuid=m)
+    [row] = service.needs_attention(store)["waiting_on_you"]["decisions"]
+    assert row["entered_at"].endswith("+00:00")
+    assert 0 <= row["age_seconds"] < 600
+
+
 def test_spend_totals_by_week_with_empty_weeks_as_zero(tmp_path):
     store = sessions.SessionStore(tmp_path)
     store.record("t", "research", "", runner.SessionResult(0, cost_usd=2.5), "resolved")
@@ -65,3 +75,13 @@ def test_spend_totals_by_week_with_empty_weeks_as_zero(tmp_path):
     assert got["total_usd"] == 2.5
     assert len(store.cost_by_period("month", None, today)["periods"]) == 6
     assert len(store.cost_by_period("day", "2026-10-01", "2026-10-07")["periods"]) == 7
+
+
+def test_write_trigger_schema_documents_cron_priority_and_staleness():
+    [tool] = [t for t in server.TOOLS if t["name"] == "write_trigger"]
+    props = tool["input_schema"]["properties"]
+    assert {"cron", "tz"} <= set(props["source"]["properties"])
+    emits = props["emits"]["properties"]
+    assert {"priority", "stale_after_seconds"} <= set(emits)
+    assert "3600" in emits["stale_after_seconds"]["description"]
+    assert "{" in emits["title"]["description"]

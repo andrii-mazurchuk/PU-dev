@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from pu import (
@@ -440,9 +441,14 @@ def needs_attention(store: taskstore.TaskStore, type_store=None,
     """Everything waiting on a person, kept in two groups on purpose: work
     that is theirs by design, and faults that were escalated as they
     happened and are collected here so there is one place to look."""
+    now = datetime.now(timezone.utc)
+
     def row(t):
+        entered = guards.parse_started_at(t.entry)
         return {"uuid": t.uuid, "title": t.description[:80],
-                "kind": t.kind, "project": t.project}
+                "kind": t.kind, "project": t.project,
+                "entered_at": entered.isoformat() if entered else None,
+                "age_seconds": int((now - entered).total_seconds()) if entered else None}
 
     human_kinds = {"grilling", "prototype"}
     frontier_hitl = [row(t) for t in store.ready(*_hide_runs(None))
@@ -779,23 +785,27 @@ def dry_run_session_type(
     draft = {k: v for k, v in payload.items() if k not in ("task", "enabled")}
     record = typestore.validate(dict(draft, origin="authored"))
     grant = session_types.GRANTS[record["grant"]]
+    argv = runner.build_argv(
+        allowed_tools=grant.tools or None, model=record.get("model"),
+        mcp_bridge_url="<bridge>",
+        mcp_servers=record.get("mcp_servers") or (),
+        mcp_config_path=("<type dir>/.mcp-session.json"
+                         if record.get("mcp_servers") else None))
 
     out: dict[str, Any] = {
         "name": record["name"],
         "agent_role": record["agent_role"],
         "grant": record["grant"],
-        "allowed_tools": grant.tools or None,
+        # What the argv actually allows, bridge included -- grant `none`
+        # still reaches every peer tool, so the bare grant would mislead.
+        "allowed_tools": (argv[argv.index("--allowedTools") + 1]
+                          if "--allowedTools" in argv else None),
         "mcp_servers": ["mcp-bridge", *(record.get("mcp_servers") or [])],
         "cwd": ("the task's target repository" if grant.runs_in_target_repo
                 else str(type_store.dirs / record["name"])),
         "model": record.get("model"),
         "claude_md": typestore.render(record),
-        "argv": runner.build_argv(
-            allowed_tools=grant.tools or None, model=record.get("model"),
-            mcp_bridge_url="<bridge>",
-            mcp_servers=record.get("mcp_servers") or (),
-            mcp_config_path=("<type dir>/.mcp-session.json"
-                             if record.get("mcp_servers") else None)),
+        "argv": argv,
         "note": "Nothing was written and nothing was launched.",
     }
     task_uuid = payload.get("task")
@@ -863,7 +873,9 @@ def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
 
     emits = record.get("emits") or {}
     would_create = None
-    if evaluation.fired and emits:
+    # A schedule carries no payload, so what it creates does not depend on
+    # whether it is due this minute: previewed either way.
+    if emits and (evaluation.fired or source["kind"] == "schedule"):
         tags = list(emits.get("tags") or ())
         if emits.get("afk"):
             tags.append(records.AFK_TAG)
@@ -874,6 +886,7 @@ def dry_run_trigger(trigger_store, payload: dict[str, Any]) -> dict[str, Any]:
             "kind": emits["kind"],
             "tags": tags,
             "project": emits.get("project") or records.RUNS_PROJECT,
+            "priority": emits.get("priority"),
             "body": pipeline.payload_body(record, evaluation),
         }
 
@@ -1232,6 +1245,9 @@ def apply_activation_rules(
     if (previous.get("enabled") and not by_human
             and _changes_more_than_enabled(record, previous, fields)):
         return dict(record, enabled=False), "deactivated_by_edit"
-    if record.get("enabled") and not previous.get("enabled", False):
+    # `enabled` is always stated on a revision: absent used to read as off,
+    # undocumented.
+    record = dict(record, enabled=bool(record.get("enabled")))
+    if record["enabled"] and not previous.get("enabled", False):
         return record, "activated"
     return record, None

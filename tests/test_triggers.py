@@ -660,6 +660,23 @@ def test_a_dry_run_that_does_not_fire_previews_no_task(tmp_path, monkeypatch):
     assert result["fetched"] == 1 and result["matched_total"] == 0
 
 
+def test_a_dry_run_previews_a_schedule_and_its_priority(tmp_path):
+    """A schedule carries no payload, so what it will create does not
+    depend on whether it is due this minute -- preview it anyway."""
+    from pu import service
+
+    draft = a_trigger(
+        name="morning",
+        source={"kind": "schedule", "cron": "0 7 * * *", "tz": "Europe/Warsaw"},
+        emits={"kind": "research", "title": "Morning brief", "priority": "high"})
+    result = service.dry_run_trigger(triggers.TriggerStore(tmp_path), draft)
+
+    created = result["would_create"]
+    assert created["title"] == "Morning brief"
+    assert created["priority"] == "high"
+    assert "None. This is a schedule" in created["body"]
+
+
 def test_a_dry_run_states_a_failed_fetch_rather_than_an_empty_source(
         tmp_path, monkeypatch):
     """`ok` false, and the reason says so. An empty source and an
@@ -917,3 +934,33 @@ def test_a_retired_name_can_be_taken_again(tmp_path):
     assert [t["name"] for t in service.list_triggers(store)["triggers"]] \
         == ["posts"]
     assert store.cursor("posts")["seen"] == ["a"]
+
+
+def test_a_fetch_names_itself_rather_than_sending_pythons_default_agent(monkeypatch):
+    """RemoteOK, Remotive and justjoin.it answer Python-urllib with 403."""
+    seen = {}
+
+    class Response:
+        status = 200
+        def read(self): return b"[]"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(request, timeout):
+        seen["agent"] = request.get_header("User-agent")
+        return Response()
+
+    monkeypatch.setattr(triggers.urllib.request, "urlopen", fake_urlopen)
+    assert triggers.http_fetch("https://example.test/feed")[0] == 200
+    assert seen["agent"] and "Python-urllib" not in seen["agent"]
+
+
+def test_a_revision_is_stored_with_enabled_stated(tmp_path):
+    """Absent read as off, undocumented; every stored revision says so."""
+    from pu import service
+
+    trigger_store = triggers.TriggerStore(tmp_path)
+    draft = {k: v for k, v in emitting().items() if k != "enabled"}
+    service.write_trigger(trigger_store, draft)
+    service.write_trigger(trigger_store, dict(draft, purpose="revised"))
+    assert trigger_store.current()["posts"]["enabled"] is False

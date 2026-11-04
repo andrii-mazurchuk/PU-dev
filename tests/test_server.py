@@ -929,6 +929,14 @@ def test_a_session_type_dry_run_shows_everything_and_writes_nothing(
     assert not (tmp_path / "session_types" / "digest").exists()
 
 
+def test_a_dry_run_states_the_tools_the_argv_actually_allows(base_url):
+    """Grant `none` still reaches the bridge; the preview must not say null."""
+    _, preview = post(f"{base_url}/session-types/dry-run", a_type(grant="none"))
+    argv = preview["argv"]
+    assert preview["allowed_tools"] == argv[argv.index("--allowedTools") + 1]
+    assert "mcp__mcp-bridge__*" in preview["allowed_tools"]
+
+
 def test_a_dry_run_refuses_what_a_write_would_refuse(base_url):
     with pytest.raises(HTTPError) as excinfo:
         post(f"{base_url}/session-types/dry-run", a_type(grant="root"))
