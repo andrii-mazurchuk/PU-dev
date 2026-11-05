@@ -6,8 +6,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Panel, KeyValue } from "@/components/ui/panel"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
+import { SchedulePicker } from "@/components/ui/schedule-picker"
 import type { ApiTrigger, ApiType } from "@/fixtures/pu"
 import { claimant, sameKind, type Claim } from "@/lib/claims"
+import { NEW_SCHEDULE } from "@/lib/schedule"
 
 // The session-type and trigger edit forms. They start from pu's record (ApiType / ApiTrigger), validate in place,
 // and hand pu a patch of only the fields that changed (pu's edit door keeps every other field). Save and dry run are
@@ -19,7 +21,6 @@ const KINDS = ["execution", "research", "task", "prototype", "grilling", "map"]
 const OPS = [">=", ">", "==", "!=", "contains", "matches"]
 const GRANTS = ["none", "read", "web", "repo"]
 const FIELDS = ["count_since_fire", "age_since_last_seen", "title", "link", "summary"]
-const ZONES = ["UTC", "Europe/Warsaw", "Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Asia/Tokyo"]
 const UNITS = [["minutes", 60], ["hours", 3600], ["days", 86400]] as const
 
 /** A labelled field with its message (aria-describedby; aria-invalid when the message is an error). */
@@ -116,7 +117,6 @@ type Clause = { field: string; op: string; value: string }
 const toClauses = (p?: ApiTrigger["predicate"]): Clause[] => (p ?? []).map(([field, op, value]) => ({ field, op, value: String(value) }))
 const fromClauses = (cs: Clause[]): [string, string, unknown][] => cs.map(c => [c.field.trim(), c.op, (c.op === ">=" || c.op === ">") && c.value.trim() !== "" && !isNaN(+c.value) ? +c.value : c.value])
 const staleOf = (s?: number) => { if (!s) return { n: "", unit: 3600 }; const u = [...UNITS].reverse().find(([, k]) => s % k === 0)?.[1] ?? 60; return { n: String(s / u), unit: u } }
-const validZone = (tz: string) => { try { new Intl.DateTimeFormat("en", { timeZone: tz }); return true } catch { return false } }
 
 export type TriggerFormProps = {
   record?: ApiTrigger; name: string; block?: string; claims: Claim[]; Wrap: Wrap
@@ -129,11 +129,12 @@ export function TriggerForm({ record, name, block, claims, Wrap, onSave, onDryRu
   const [clauses, setClauses] = useState<Clause[]>(() => toClauses(record?.predicate))
   const [emits, setEmits] = useState<NonNullable<ApiTrigger["emits"]>>(() => structuredClone(record?.emits ?? { priority: "medium", tags: [], afk: false, title: "" }))
   const [newName, setNewName] = useState(""), [stale, setStale] = useState(() => staleOf(record?.emits?.stale_after_seconds))
-  const [errors, setErrors] = useState<Record<string, string>>({}), [said, setSaid] = useState(""), [askAfk, setAskAfk] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({}), [said, setSaid] = useState(""), [askAfk, setAskAfk] = useState(false), [whenError, setWhenError] = useState<string>()
   const schedule = src.kind === "schedule", title = emits.title ?? "", who = emits.kind ? claimant(claims, emits.kind, emits.tags ?? []) : undefined
   const draft = (): ApiTrigger => ({
     name: isNew ? newName : name, source: Object.fromEntries(Object.entries(src).filter(([, v]) => v !== "" && v !== undefined)) as ApiTrigger["source"],
-    ...(schedule ? {} : { predicate: fromClauses(clauses) }),
+    // pu refuses a schedule that keeps a predicate, and keeps any field it isn't sent: clearing one must be said out loud.
+    ...(clauses.length && !schedule || record?.predicate?.length ? { predicate: schedule ? [] : fromClauses(clauses) } : {}),
     emits: { ...emits, ...(stale.n ? { stale_after_seconds: Math.round(+stale.n * stale.unit) } : { stale_after_seconds: undefined }) },
   })
   const save = async () => {
@@ -141,10 +142,8 @@ export function TriggerForm({ record, name, block, claims, Wrap, onSave, onDryRu
     if (isNew && !NAME.test(newName)) e.name = "Use lowercase letters, digits, . _ - (up to 64)."
     if (!src.kind) e.kind = "Choose what it watches first."
     if (!schedule && src.kind && !/^https?:\/\//.test(src.url ?? "")) e.url = "A feed URL starting with http:// or https://."
-    if (src.every_seconds !== undefined && (!Number.isInteger(src.every_seconds) || src.every_seconds < 30)) e.every = "Every is in seconds, minimum 30 (the tick)."
-    if (schedule && src.cron && (src.cron.startsWith("@") || src.cron.trim().split(/\s+/).length !== 5)) e.cron = "Five fields: minute hour day month weekday (no @weekly, L or #)."
-    if (schedule && !src.cron && !src.every_seconds) e.cron = "A schedule needs a cron or an interval."
-    if (schedule && src.tz && !validZone(src.tz)) e.tz = `"${src.tz}" is not a time zone pu knows; use an IANA name such as Europe/Warsaw.`
+    if (!schedule && src.every_seconds !== undefined && (!Number.isInteger(src.every_seconds) || src.every_seconds < 30)) e.every = "Every is in seconds, minimum 30 (the tick)."
+    if (schedule && whenError) e.when = whenError // the picker shows it in place
     if (!schedule) clauses.forEach((c, i) => {
       if (!c.field.trim() || c.value.trim() === "") e[`c${i}`] = "A condition needs a field and a value."
       // pu matches with Python's re, whose leading inline flags ((?i) etc.) JS RegExp rejects: check the rest.
@@ -158,23 +157,26 @@ export function TriggerForm({ record, name, block, claims, Wrap, onSave, onDryRu
     const d = draft(), patch = isNew ? d : patchOf(record!, d)
     setSaid(Object.keys(patch).length ? await onSave(patch) : "Nothing changed.")
   }
+  // pu takes every_seconds or cron + tz on a schedule and never a feed's fields, so changing kind drops the other's.
+  const pickKind = (k: string) => {
+    setWhenError(undefined)
+    if (k === "schedule") setSrc({ kind: k, ...(record?.source.kind === "schedule" ? { every_seconds: record.source.every_seconds, cron: record.source.cron, tz: record.source.tz } : NEW_SCHEDULE) })
+    else setSrc({ ...src, kind: k, cron: undefined, tz: undefined })
+  }
   const setClause = (i: number, c: Partial<Clause>) => setClauses(cs => cs.map((x, j) => (j === i ? { ...x, ...c } : x)))
   return (
     <>
       <Panel data-block="source" title="Source">
         <Wrap empty="Choose the kind of source; its fields follow.">
           {isNew && <Field id="g-name" label="Name" error={errors.name}><Input id="g-name" value={newName} disabled={!!block} aria-invalid={!!errors.name || undefined} aria-describedby="g-name-msg" onChange={e => setNewName(e.target.value)} /></Field>}
-          <Field id="g-kind" label="Kind" error={errors.kind}><Choice id="g-kind" label="Kind" options={["rss", "http-json", "schedule"]} value={src.kind} disabled={!!block} onPick={k => setSrc({ ...src, kind: k })} /></Field>
+          <Field id="g-kind" label="Kind" error={errors.kind}><Choice id="g-kind" label="Kind" options={["rss", "http-json", "schedule"]} value={src.kind} disabled={!!block} onPick={pickKind} /></Field>
           {src.kind && !schedule && <Field id="g-url" label="URL" error={errors.url}><Input id="g-url" value={src.url ?? ""} disabled={!!block} aria-invalid={!!errors.url || undefined} aria-describedby="g-url-msg" onChange={e => setSrc({ ...src, url: e.target.value })} /></Field>}
           {src.kind === "http-json" && <div className="grid gap-3 sm:grid-cols-2">
             <Field id="g-items" label="Items path" hint="dotted path to the list, e.g. data.items; empty: the top level"><Input id="g-items" value={src.items_path ?? ""} disabled={!!block} aria-describedby="g-items-msg" onChange={e => setSrc({ ...src, items_path: e.target.value })} /></Field>
             <Field id="g-id" label="Id path" hint="empty: guid, id, link or url is used"><Input id="g-id" value={src.id_path ?? ""} disabled={!!block} aria-describedby="g-id-msg" onChange={e => setSrc({ ...src, id_path: e.target.value })} /></Field>
           </div>}
-          {src.kind && <Field id="g-every" label="Every (seconds)" error={errors.every} hint="minimum 30"><Input id="g-every" inputMode="numeric" value={src.every_seconds ?? ""} disabled={!!block} aria-invalid={!!errors.every || undefined} aria-describedby="g-every-msg" onChange={e => setSrc({ ...src, every_seconds: e.target.value === "" ? undefined : Number(e.target.value) })} /></Field>}
-          {schedule && <div className="grid gap-3 sm:grid-cols-2">
-            <Field id="g-cron" label="Cron (5 fields)" error={errors.cron}><Input id="g-cron" value={src.cron ?? ""} placeholder="0 7 * * mon" disabled={!!block} aria-invalid={!!errors.cron || undefined} aria-describedby="g-cron-msg" onChange={e => setSrc({ ...src, cron: e.target.value })} /></Field>
-            <Field id="g-tz" label="Time zone" error={errors.tz} hint="IANA name; empty: UTC"><Input id="g-tz" value={src.tz ?? ""} placeholder="UTC" suggestions={ZONES} disabled={!!block} aria-invalid={!!errors.tz || undefined} aria-describedby="g-tz-msg" onChange={e => setSrc({ ...src, tz: e.target.value })} /></Field>
-          </div>}
+          {src.kind && !schedule && <Field id="g-every" label="Every (seconds)" error={errors.every} hint="minimum 30"><Input id="g-every" inputMode="numeric" value={src.every_seconds ?? ""} disabled={!!block} aria-invalid={!!errors.every || undefined} aria-describedby="g-every-msg" onChange={e => setSrc({ ...src, every_seconds: e.target.value === "" ? undefined : Number(e.target.value) })} /></Field>}
+          {schedule && <SchedulePicker value={src} disabled={!!block} onChange={({ source, error }) => { setWhenError(error); if (!error) setSrc({ kind: "schedule", ...source }) }} />}
         </Wrap>
       </Panel>
       {!schedule && <Panel data-block="predicate" title="Fires when (all of)">

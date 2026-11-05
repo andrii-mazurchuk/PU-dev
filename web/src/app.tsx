@@ -3,16 +3,16 @@ import { screens } from "./pages/screens"
 
 // The product: hash routes to the pages and nothing else (HANDOFF.md "What ships"). No gallery, no page index,
 // no review entry is part of this app.
-export const currentRoute = () => location.hash.replace(/^#\/?/, "").split("?")[0]
 
 export function useRoute() {
-  const [route, setRoute] = useState(currentRoute)
+  // The whole hash, not just the route: #/task?id=a → #/task?id=b is the same route and must still re-render.
+  const [hash, setHash] = useState(() => location.hash)
   useEffect(() => {
-    const on = () => setRoute(currentRoute())
+    const on = () => setHash(location.hash)
     addEventListener("hashchange", on)
     return () => removeEventListener("hashchange", on)
   }, [])
-  return route
+  return hash.replace(/^#\/?/, "").split("?")[0]
 }
 
 /** #/<page-id>; an empty or unknown route opens Tasks, the opening view. The panels (task, map, type, trigger) open
