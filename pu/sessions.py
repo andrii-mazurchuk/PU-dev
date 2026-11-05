@@ -169,7 +169,8 @@ class SessionStore:
         return out
 
     def runs(self, limit: int = 50, task: str | None = None,
-             agent_role: str | None = None) -> list[dict[str, Any]]:
+             agent_role: str | None = None,
+             session_type: str | None = None) -> list[dict[str, Any]]:
         """Every recorded run, most recent first.
 
         Ordered on `recorded_at` rather than on the directory name: the
@@ -185,6 +186,7 @@ class SessionStore:
             if (task is None or r.get("task_uuid") == task)
             and (agent_role is None
                  or (r.get("agent_role") or "system") == agent_role)
+            and (session_type is None or r.get("session_type") == session_type)
         ]
         ordered = sorted(
             results,
@@ -272,10 +274,15 @@ class SessionStore:
                 return f"{year}-W{week:02d}"
             return f"{day.year}-{day.month:02d}"
 
+        # Counted here so that no session counts by hand: a brief reading
+        # rows miscounted a day on 2026-11-05. `outcomes` holds what the run
+        # record says, one key per distinct outcome.
         totals: dict[str, float] = {}
+        outcomes: dict[str, dict[str, int]] = {}
         day = first
         while day <= last:
             totals.setdefault(key(day), 0.0)
+            outcomes.setdefault(key(day), {})
             day += timedelta(days=1)
         for record in self._results():
             stamp = str(record.get("recorded_at") or "")[:10]
@@ -285,8 +292,13 @@ class SessionStore:
                 continue
             if first <= when <= last:
                 totals[key(when)] += float(record.get("cost_usd") or 0.0)
+                outcome = str(record.get("outcome") or "unknown")
+                seen = outcomes[key(when)]
+                seen[outcome] = seen.get(outcome, 0) + 1
         return {"by": by, "from": first.isoformat(), "to": last.isoformat(),
-                "periods": [{"period": k, "cost_usd": round(v, 6)}
+                "periods": [{"period": k, "cost_usd": round(v, 6),
+                             "runs": sum(outcomes[k].values()),
+                             "outcomes": outcomes[k]}
                             for k, v in totals.items()],
                 "total_usd": round(sum(totals.values()), 6)}
 

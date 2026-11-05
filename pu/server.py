@@ -458,7 +458,7 @@ TOOLS = [
     },
     {
         "name": "get_spend",
-        "description": "What sessions cost, totalled per day, ISO week (Monday start) or month, over any date range. Periods with no spend appear as zero. With no range: the last 14 days, 8 weeks or 6 months.",
+        "description": "What sessions cost and how many ran, per day, ISO week (Monday start) or month, over any date range: each period has cost_usd, runs, and outcomes counted by outcome. Use these counts rather than counting run rows. Periods with no spend appear as zero. With no range: the last 14 days, 8 weeks or 6 months.",
         "method": "GET",
         "path": "/spend",
         "input_schema": {
@@ -518,6 +518,8 @@ TOOLS = [
                 "limit": {"type": "integer", "description": "most recent first; default 50, capped at 500"},
                 "task": {"type": "string", "description": "only runs against this task uuid"},
                 "agent_role": {"type": "string", "description": "only runs under this agent role, e.g. system or finance"},
+                "session_type": {"type": "string", "description": "only runs of this session type, e.g. limit 1 for its latest run"},
+                "summary": {"type": "boolean", "description": "leave out each run's report, detail, tool calls and refusals. A full row can run to several thousand characters, so ask for this when reading many rows"},
             },
         },
     },
@@ -554,6 +556,12 @@ TOOLS = [
         },
     },
 ]
+
+
+# What `GET /sessions?summary=true` drops: the fields that make a row
+# thousands of characters. Twenty full rows overflow what a session can hold
+# in one tool result, and a session without a shell cannot read the spill.
+SUMMARY_LEAVES_OUT = ("report", "detail", "tool_calls", "permission_denials")
 
 
 # What a person may press on the dashboard (UNIT_STANDARDS.md, "GET
@@ -849,7 +857,11 @@ def make_handler(
                         limit=min(max(limit, 1), 500),
                         task=one("task") or None,
                         agent_role=one("agent_role") or None,
+                        session_type=one("session_type") or None,
                     )
+                    if (one("summary") or "").lower() in ("1", "true"):
+                        runs = [{k: v for k, v in r.items()
+                                 if k not in SUMMARY_LEAVES_OUT} for r in runs]
                     return self._json(200, {"sessions": runs})
 
                 if len(parts) == 3 and parts[0] == "sessions":

@@ -406,9 +406,12 @@ keeps the gates from latching shut -- see `pu/usage_gate.py`.
 
 ## `GET /sessions`
 
-Recorded runs, most recent first. `limit` (default 50, max 500) and
-`task` (a uuid) narrow it. Ordered on `recorded_at`, not on the directory
-name: the stamp is when the run started.
+Recorded runs, most recent first. `limit` (default 50, max 500), `task`
+(a uuid), `agent_role` and `session_type` narrow it. `summary=true` leaves
+out each run's `report`, `detail`, `tool_calls` and `permission_denials`:
+a full row can run to several thousand characters, and twenty of them are
+more than a session can read in one tool result. Ordered on `recorded_at`,
+not on the directory name: the stamp is when the run started.
 
 ## `GET /sessions/{task_uuid}/{run_id}`
 
@@ -421,6 +424,10 @@ whoever needs it reads the file.
 Daily cost, oldest first. `days` (default 14, max 90). Quiet days are
 present as zero rather than omitted: a series that skips them renders as
 continuous work.
+
+With `by` (day, week, month), `from` or `to`, each period is
+`{period, cost_usd, runs, outcomes}`: `outcomes` counts that period's runs
+by outcome. Read these rather than counting run rows.
 
 ## `POST /ask` → `202`
 

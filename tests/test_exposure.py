@@ -54,6 +54,29 @@ def test_needs_attention_keeps_human_work_and_faults_apart(store, tmp_path):
     assert [r["title"] for r in got["faults"]["mapless"]] == ["loose"]
 
 
+def test_spend_counts_each_period_so_no_session_counts_by_hand(tmp_path):
+    """Live 2026-11-05: the brief counted a day's runs from rows too large to
+    read and reported 10 where pu had 9. The count is pu's now."""
+    store = sessions.SessionStore(tmp_path)
+    for outcome in ("resolved", "resolved", "failed", "needs_human"):
+        store.record("t", "research", "", runner.SessionResult(0, cost_usd=1.0), outcome)
+    today = store.runs()[0]["recorded_at"][:10]
+    period = store.cost_by_period("day", today, today)["periods"][0]
+    assert period["runs"] == 4
+    assert period["outcomes"] == {"resolved": 2, "failed": 1, "needs_human": 1}
+    empty = store.cost_by_period("day", "2026-10-01", "2026-10-01")["periods"][0]
+    assert empty["runs"] == 0 and empty["outcomes"] == {}
+
+
+def test_runs_filter_by_session_type_before_the_limit(tmp_path):
+    store = sessions.SessionStore(tmp_path)
+    store.record("a", "ai-news", "", runner.SessionResult(0), "resolved")
+    for _ in range(3):
+        store.record("b", "other", "", runner.SessionResult(0), "resolved")
+    got = store.runs(limit=1, session_type="ai-news")
+    assert [r["session_type"] for r in got] == ["ai-news"]
+
+
 def test_spend_totals_by_week_with_empty_weeks_as_zero(tmp_path):
     store = sessions.SessionStore(tmp_path)
     store.record("t", "research", "", runner.SessionResult(0, cost_usd=2.5), "resolved")
@@ -65,3 +88,29 @@ def test_spend_totals_by_week_with_empty_weeks_as_zero(tmp_path):
     assert got["total_usd"] == 2.5
     assert len(store.cost_by_period("month", None, today)["periods"]) == 6
     assert len(store.cost_by_period("day", "2026-10-01", "2026-10-07")["periods"]) == 7
+
+
+def test_a_summary_row_leaves_out_what_makes_a_row_large(store, body_store, tmp_path):
+    import json
+    import threading
+    from pathlib import Path
+    from urllib.request import urlopen
+    from pu import server
+
+    runs = sessions.SessionStore(tmp_path / "s")
+    runs.record("t", "ai-news", "", runner.SessionResult(0, text="long report"), "resolved")
+    runs.record("u", "other", "", runner.SessionResult(0), "resolved")
+    httpd = server.build_server(
+        "127.0.0.1", 0, store, body_store,
+        Path(__file__).resolve().parent.parent / "prompts", session_store=runs)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        rows = json.load(urlopen(f"{base}/sessions?session_type=ai-news&summary=true"))["sessions"]
+        full = json.load(urlopen(f"{base}/sessions?session_type=ai-news"))["sessions"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert [r["session_type"] for r in rows] == ["ai-news"]
+    assert not set(server.SUMMARY_LEAVES_OUT) & set(rows[0])
+    assert "tool_calls" in full[0]
