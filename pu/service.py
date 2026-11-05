@@ -613,8 +613,6 @@ def write_trigger(trigger_store, payload: dict[str, Any],
     written = trigger_store.append(record)
 
     emits = written.get("emits") or {}
-    spends = " It emits agent-runnable work, so it will spend." \
-        if emits.get("afk") else ""
     if transition:
         logs_client.record_event(
             "trigger_activated" if transition == "activated"
@@ -638,15 +636,11 @@ def write_trigger(trigger_store, payload: dict[str, Any],
             source_unit="pu",
         )
     elif transition == "activated":
-        notify.notify_owner(
-            notify.bridge_url(),
-            f"pu activated a trigger, and nothing asked first.\n\n"
-            f"{written['name']} - {written['source'].get('kind')}\n"
-            f"{written.get('purpose', '')}\n\n"
-            f"It will now create work on every tick its condition holds."
-            f"{spends}",
-            source_unit="pu",
-        )
+        # One queued line, sent with any other flips of the same burst.
+        notify.queue_owner(
+            trigger_store.root,
+            f"trigger {written['name']} switched on ({written['source'].get('kind')}"
+            f"{'; creates agent-run work, so it spends' if emits.get('afk') else ''})")
     return written
 
 def _renamed(store, old: str, new: str, kind: str) -> dict[str, Any]:
@@ -1087,19 +1081,11 @@ def write_session_type(type_store, payload: dict[str, Any],
             source_unit="pu",
         )
     elif transition == "activated":
-        # A flip, not every save. A message per edit is noise that teaches
-        # its own reader to skip it -- the same reasoning the usage gate
-        # reports on transitions rather than per tick.
-        notify.notify_owner(
-            notify.bridge_url(),
-            f"pu activated a session type, and nothing asked first.\n\n"
-            f"{written['name']} - grant {written['grant']}\n"
-            f"{written.get('purpose', '')}\n\n"
-            f"It now claims {written.get('claims') or 'nothing'} and will "
-            f"run sessions. Switch it off by writing the record again with "
-            f"enabled false.",
-            source_unit="pu",
-        )
+        # A flip, not every save -- and one queued line, sent with any
+        # other flips of the same burst.
+        notify.queue_owner(
+            type_store.root,
+            f"session type {written['name']} switched on (grant {written['grant']})")
     return written
 
 

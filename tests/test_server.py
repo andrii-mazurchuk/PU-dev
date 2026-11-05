@@ -565,7 +565,7 @@ def test_an_unwritten_name_is_a_404(base_url):
 
 
 def test_the_enable_flip_tells_the_owner_and_a_re_save_does_not(
-        base_url, monkeypatch):
+        base_url, monkeypatch, tmp_path):
     """Nothing authenticates a caller, so notification is the only control
     that survives an agent reaching this unit on loopback. Both transitions
     that change what runs are told; an idempotent re-save is not, because a
@@ -582,10 +582,14 @@ def test_the_enable_flip_tells_the_owner_and_a_re_save_does_not(
     post(f"{base_url}/session-types", a_type(enabled=True))
     assert sent == []
 
+    # The flip is queued, not sent: switching several on in a row is one
+    # message once the burst is over (Andrey, 2026-11-04).
     post(f"{base_url}/session-types", a_type(enabled=True))
+    assert sent == []
+    import time
+    assert notify.flush_owner(tmp_path, "http://bridge", "pu", now=time.time() + 60)
     assert len(sent) == 1
-    assert "digest" in sent[0]
-    assert "nothing asked first" in sent[0]
+    assert "digest" in sent[0] and "switched on" in sent[0]
 
     # Re-writing the identical record changes nothing and says nothing.
     post(f"{base_url}/session-types", a_type(enabled=True))
@@ -682,7 +686,7 @@ def test_a_malformed_trigger_is_the_caller_s_mistake(base_url):
 
 
 def test_activating_a_trigger_tells_the_owner_that_it_will_spend(
-        base_url, monkeypatch):
+        base_url, monkeypatch, tmp_path):
     """The only control there is. A trigger that emits agent-runnable work
     spends unattended, and the message has to say so -- the person reading
     it is deciding whether that was intended."""
@@ -697,9 +701,13 @@ def test_activating_a_trigger_tells_the_owner_that_it_will_spend(
     post(f"{base_url}/triggers", a_watch())
     assert sent == []
 
+    # Queued with the burst, then sent as one message (2026-11-04).
     post(f"{base_url}/triggers", a_watch(enabled=True))
+    assert sent == []
+    import time
+    assert notify.flush_owner(tmp_path, "http://bridge", "pu", now=time.time() + 60)
     assert len(sent) == 1
-    assert "will spend" in sent[0]
+    assert "spends" in sent[0]
 
 
 def test_the_dry_run_route_previews_without_writing(base_url):
@@ -1040,3 +1048,20 @@ def test_the_daily_audit_tells_each_new_fault_once(store, tmp_path, monkeypatch)
     pipeline._daily_audit(store, state, t0 + timedelta(hours=1), None)
     pipeline._daily_audit(store, state, t0 + timedelta(days=1, hours=1), None)
     assert len(sent) == 1, "told once, not daily"
+
+
+def test_a_burst_of_flips_is_one_message_after_the_quiet_window(tmp_path):
+    """Several switches in a row: nothing while the burst is going on, then
+    one message listing them all, and the queue is kept if delivery fails."""
+    from pu import notify
+    notify.queue_owner(tmp_path, "session type a switched on (grant none)", at=100.0)
+    notify.queue_owner(tmp_path, "trigger b switched on (schedule)", at=102.0)
+    sent = []
+    assert not notify.flush_owner(tmp_path, "u", "pu", now=104.0,
+                                  send=lambda u, t, s: sent.append(t) or True)
+    assert not notify.flush_owner(tmp_path, "u", "pu", now=110.0, send=lambda u, t, s: False)
+    assert notify.flush_owner(tmp_path, "u", "pu", now=111.0,
+                              send=lambda u, t, s: sent.append(t) or True)
+    assert sent == ["pu: 2 changes\n- session type a switched on (grant none)\n- trigger b switched on (schedule)"]
+    assert not notify.flush_owner(tmp_path, "u", "pu", now=200.0,
+                                  send=lambda u, t, s: sent.append(t) or True)

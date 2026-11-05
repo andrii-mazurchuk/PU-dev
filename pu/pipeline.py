@@ -784,6 +784,10 @@ def _tick(
             f"time; schedules that came due fire late now, once each.",
             source_unit=UNIT_NAME)
 
+    # Switches flipped since the last tick go out as one message, once the
+    # burst is over. Before the gates: a paused unit still says what changed.
+    notify.flush_owner(tracker_path.parent, mcp_bridge_url, UNIT_NAME)
+
     _recover_lost_runs(store, session_store, tracker_path.parent, mcp_bridge_url,
                        peers_path)
     for stale in guards.newly_stale(

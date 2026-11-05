@@ -113,3 +113,60 @@ def notify_owner(
     except (urllib.error.URLError, OSError, ValueError):
         return False
     return bool(isinstance(parsed, dict) and parsed.get("delivered"))
+
+
+# -- batched notices --------------------------------------------------------
+#
+# Andrey, 2026-11-04: switching several types and triggers on in a row sent
+# one long message per flip, each rewritten by cu's agent. A flip is now one
+# queued line; the tick sends the queue as one message once nothing new has
+# arrived for QUIET_SECONDS, so a burst of switches is one message within a
+# tick or so of its end. Warnings (a live record switched off by an edit)
+# still go at once -- only routine news waits.
+
+PENDING_FILE = "pending_notices.jsonl"
+QUIET_SECONDS = 5.0
+
+
+def queue_owner(state_dir, line: str, at: float | None = None) -> None:
+    """Add one line to the next batched message. Best-effort: losing a
+    notice must never fail the write that caused it."""
+    import time
+    from pathlib import Path
+    try:
+        path = Path(state_dir) / PENDING_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps({"at": time.time() if at is None else at,
+                                     "line": line}) + "\n")
+    except OSError:
+        pass
+
+
+def flush_owner(state_dir, url: str | None, source_unit: str,
+                now: float | None = None, send=None) -> bool:
+    """Send the queued lines as one message once the burst is over. The
+    queue is cleared only when the message was delivered, so an unreachable
+    owner keeps it for the next tick. True when something was sent."""
+    import time
+    from pathlib import Path
+    path = Path(state_dir) / PENDING_FILE
+    try:
+        entries = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return False
+    if not entries:
+        return False
+    moment = time.time() if now is None else now
+    if moment - max(float(e.get("at") or 0) for e in entries) < QUIET_SECONDS:
+        return False
+    lines = [str(e.get("line") or "") for e in entries]
+    text = lines[0] if len(lines) == 1 else (
+        f"pu: {len(lines)} changes\n" + "\n".join(f"- {l}" for l in lines))
+    if not (send or notify_owner)(url, text, source_unit):
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    return True
