@@ -17,8 +17,14 @@ test("saved schedules open in the preset that reproduces them", () => {
 })
 
 test("a cron no preset writes back stays in Advanced exactly as typed", () => {
-  for (const cron of ["*/15 9-17 * * 1-5", "0 9 * * 1-5", "0 9 * * 1", "0 9 * * wed,mon", "05 7 * * *", "0 7 1 1 *", "0 7 1 * mon", "not a cron", "0 25 * * *"])
+  for (const cron of ["*/15 9-17 * * 1-5", "0 9 * * 1-5", "0 9 * * 7", "0 9 * * 3,1", "0 9 * * wed,mon", "05 7 * * *", "0 7 1 1 *", "0 7 1 * mon", "not a cron", "0 25 * * *"])
     expect(fromSource({ cron, tz: "UTC" })).toEqual({ mode: "advanced", cron, tz: "UTC" })
+})
+
+test("numeric weekdays open as the days they name", () => {
+  expect(fromSource({ cron: "0 8 * * 1" })).toEqual({ mode: "weekly", days: ["mon"], time: "08:00", tz: "UTC" })
+  expect(fromSource({ cron: "0 8 * * 0" })).toEqual({ mode: "weekly", days: ["sun"], time: "08:00", tz: "UTC" })
+  expect(fromSource({ cron: "0 8 * * 1,3" })).toEqual({ mode: "weekly", days: ["mon", "wed"], time: "08:00", tz: "UTC" })
 })
 
 test("every preset survives a save and reopen", () => {

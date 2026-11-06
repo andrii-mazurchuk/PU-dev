@@ -19,6 +19,7 @@ export const DEFAULT_TZ = "Europe/Warsaw"
 export const NEW_SCHEDULE = { cron: "0 9 * * *", tz: DEFAULT_TZ }
 export const ZONES = ["Europe/Warsaw", "UTC", "Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Asia/Tokyo"]
 
+const CRON_DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] // pu's cron: 0 is Sunday, 7 is not a day
 const hm = (time: string) => { const [h, m] = time.split(":").map(Number); return [m, h] }
 const validTime = (t: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t)
 const cronOf = (s: Exclude<Schedule, { mode: "every" | "advanced" }>) => {
@@ -37,11 +38,13 @@ export function fromSource(src: Source): Schedule {
   const advanced: Schedule = { mode: "advanced", cron: src.cron ?? "", tz }
   if (f.length !== 5 || !/^\d+$/.test(f[0]) || !/^\d+$/.test(f[1])) return advanced
   const time = `${pad(f[1])}:${pad(f[0])}`, tail = f.slice(2).join(" ")
+  const days = f[4].split(",").map(d => (/^[0-6]$/.test(d) ? CRON_DAYS[+d] : d))
   const preset: Schedule = tail === "* * *" ? { mode: "daily", time, tz }
-    : /^\* \* [a-z,]+$/.test(tail) ? { mode: "weekly", days: f[4].split(","), time, tz }
+    : /^\* \* [a-z0-9,]+$/.test(tail) ? { mode: "weekly", days, time, tz }
     : /^\d+ \* \*$/.test(tail) ? { mode: "monthly", day: f[2], time, tz } : advanced
   if (preset.mode === "advanced" || !validTime(time)) return advanced
-  return cronOf(preset) === cron ? preset : advanced
+  // Digits name the same days, so they compare as names: 0 8 * * 1 is Weekly, and stays as written until it's touched.
+  return cronOf(preset) === [...f.slice(0, 4), days.join(",")].join(" ") ? preset : advanced
 }
 
 /** What the form sends: one or the other, never both. Only call on a schedule with no error. */
